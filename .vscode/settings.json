@@ -1,0 +1,19 @@
+{
+    "sqltools.connections": [
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5432,
+            "sshOptions": {
+                "port": 22
+            },
+            "driver": "PostgreSQL",
+            "name": "Store_db",
+            "database": "store_db",
+            "username": "postgres",
+            "password": "0305",
+            "connectionTimeout": 30
+        }
+    ]
+}
