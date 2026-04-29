@@ -199,12 +199,12 @@ export default function FinishedGoodsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      {/* <PageHeader
         eyebrow="Catalog"
         title="Finished goods"
         description="Maintain customer-facing products with linked upper and sole codes, imagery, and stock readiness."
         icon="finishedGoods"
-      />
+      /> */}
 
       <NextStepCard
         description={nextStep?.description || "After a finished good is created, define its formula so the system knows which upper and sole should be consumed during production."}

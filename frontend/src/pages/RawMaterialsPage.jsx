@@ -129,12 +129,12 @@ export default function RawMaterialsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      {/* <PageHeader
         eyebrow="Inventory"
         title="Raw materials"
         description="Manage inbound materials, article codes, color variants, stock health, and media for your production catalog."
         icon="materials"
-      />
+      /> */}
 
       <NextStepCard
         description={nextStep?.description || "Start by creating the upper and sole raw materials you need for a product. Once both are ready, create the finished good that links those codes together."}

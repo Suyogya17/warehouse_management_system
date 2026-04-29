@@ -69,12 +69,12 @@ export default function ReceiveStockPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      {/* <PageHeader
         eyebrow="Inbound stock"
         title="Purchase and receive stock"
         description="Capture incoming batches with quantities, notes, and material context to preserve FIFO stock accuracy."
         icon="purchase"
-      />
+      /> */}
 
       <SectionCard title="Purchase and receive stock" subtitle="Record cartons of uppers, kg of sole compounds, finished soles, and packing materials." icon="purchase">
         <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" onSubmit={submit}>

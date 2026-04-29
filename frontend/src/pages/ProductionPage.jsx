@@ -126,12 +126,12 @@ export default function ProductionPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      {/* <PageHeader
         eyebrow="Execution"
         title="Production"
         description="Validate stock before production, execute conversion runs, and keep a clean operational history."
         icon="production"
-      />
+      /> */}
 
       <NextStepCard
         description={nextStep?.description || "Production is the final conversion step. First check stock, then run production, and finally verify that raw materials decreased while finished goods increased."}
@@ -164,7 +164,7 @@ export default function ProductionPage() {
                 ))}
               </SelectInput>
             </Field>
-            <Field label="Quantity to produce">
+            <Field label="Pairs to produce">
               <TextInput
                 type="number"
                 min="1"
@@ -259,7 +259,7 @@ export default function ProductionPage() {
             { key: "production_id", label: "ID" },
             { key: "formula_name", label: "Formula" },
             { key: "finished_good_name", label: "Finished Good" },
-            { key: "qty_produced", label: "Qty Produced", render: (row) => formatNumber(row.qty_produced) },
+            { key: "qty_produced", label: "Pairs Produced", render: (row) => formatNumber(row.qty_produced) },
             { key: "produced_by_name", label: "Produced By" },
             { key: "status", label: "Status" },
             { key: "produced_at", label: "Created", type: "date" },

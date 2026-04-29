@@ -55,12 +55,12 @@ export default function ConsumptionPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      {/* <PageHeader
         eyebrow="Usage tracking"
         title="Consumption"
         description="Record non-production deductions such as wastage, samples, and QC-related material losses."
         icon="consumption"
-      />
+      /> */}
 
       {canLog ? (
         <SectionCard title="Log material consumption" subtitle="Use this for damaged, sample, wastage, or manual consumption events." icon="consumption">

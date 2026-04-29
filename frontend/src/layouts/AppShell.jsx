@@ -24,7 +24,7 @@ const navByRole = {
   ],
   USER: [
     { to: "/finished-goods", label: "Finished Goods", icon: "finishedGoods" },
-    { to: "/orders", label: "Orders", icon: "orders" },
+    
   ],
 };
 
@@ -91,8 +91,8 @@ export default function AppShell() {
           <div className="flex h-full flex-col">
 
             {/* HEADER */}
-            <div className="rounded-2xl bg-slate-950 px-5 py-5 text-white">
-              <h1 className="text-lg font-semibold uppercase tracking-[0.2em]">
+            <div className="rounded-2xl bg-slate-950 px-5 py-5 text-black">
+              <h1 className="text-xl font-bold uppercase tracking-[0.2em]">
                 Store Management
               </h1>
             </div>

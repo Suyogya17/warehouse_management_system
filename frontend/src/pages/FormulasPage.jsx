@@ -267,12 +267,12 @@ export default function FormulasPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      {/* <PageHeader
         eyebrow="Production setup"
         title="Formulas"
         description="Define repeatable recipes that map finished goods to the right upper, sole, and supporting materials."
         icon="formulas"
-      />
+      /> */}
 
       <NextStepCard
         description={nextStep?.description || "A formula tells the system what materials to consume when production runs. For shoes, make sure the matching upper and sole are both included before saving."}

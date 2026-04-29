@@ -120,12 +120,12 @@ export default function OrdersPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      {/* <PageHeader
         eyebrow="Sales reservation"
         title="Orders"
         description="Reserve finished goods for customer orders, then release or deduct stock only when the order is cancelled or delivered."
         icon="orders"
-      />
+      /> */}
 
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard label="Physical Stock" value={formatNumber(totals.physical)} icon="finishedGoods" />

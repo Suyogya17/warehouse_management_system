@@ -87,12 +87,12 @@ export default function UsersPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      {/* <PageHeader
         eyebrow="Access control"
         title="Users"
         description="Create role-based access for administrators, store keepers, and read-only inventory viewers."
         icon="users"
-      />
+      /> */}
 
       <SectionCard
         title={editingId ? "Edit user" : "Create users"}

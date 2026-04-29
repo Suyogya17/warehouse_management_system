@@ -86,7 +86,7 @@ export default function DashboardPage() {
   value={<span className="text-green-600">{formatNumber(finishedTotal)}</span>}
   tone="bold"
 /> */}
-              <StatCard label="Finished Goods Stock" value={formatNumber(finishedTotal)} tone="calm" icon="finishedGoods" />  
+              <StatCard label="Finished Goods Stock In Pairs" value={formatNumber(finishedTotal)} tone="calm" icon="finishedGoods" />  
           <StatCard label="Low Stock Alerts" value={formatNumber(lowStock)} tone={lowStock ? "alert" : "default"} icon={lowStock ? "warning" : "check"} />
             <StatCard label="Production Runs" value={formatNumber(state.production.length)} tone="default" icon="production" />
             <StatCard label="Active Orders" value={formatNumber(state.orders.filter((item) => !["DELIVERED", "CANCELLED"].includes(item.status)).length)} tone="alert" icon="orders" />

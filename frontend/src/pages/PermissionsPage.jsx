@@ -107,12 +107,12 @@ export default function PermissionsPage() {
     <div className="space-y-6">
 
       {/* HEADER */}
-      <PageHeader
+      {/* <PageHeader
         eyebrow="Access Control"
         title="Permission Dashboard"
         description="Manage which finished goods each normal user can see, with product code, color, size, stock, and visibility details."
         icon="users"
-      />
+      /> */}
 
       {/* ================= USER SELECTION ================= */}
       <SectionCard
