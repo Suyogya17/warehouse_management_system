@@ -56,7 +56,7 @@ export default function App() {
         <Route
           path="finished-goods"
           element={
-            <ProtectedRoute roles={["ADMIN", "USER"]}>
+            <ProtectedRoute roles={["ADMIN","STORE_KEEPER", "USER"]}>
               {user?.role === "USER" ? (
                 <FinishedGoodsUserPage />
               ) : (

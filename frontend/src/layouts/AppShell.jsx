@@ -19,7 +19,8 @@ const navByRole = {
   ],
   STORE_KEEPER: [
     { to: "/raw-materials", label: "Raw Materials", icon: "materials" },
-    { to: "/consumption", label: "Consumption", icon: "consumption" },
+    { to: "/finished-goods", label: "Production House Calculation", icon: "production" },
+    // { to: "/consumption", label: "Consumption", icon: "consumption" },
   ],
   USER: [
     { to: "/finished-goods", label: "Finished Goods", icon: "finishedGoods" },
