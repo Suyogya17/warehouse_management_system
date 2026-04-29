@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Button from "../components/Button";
 import DataTable from "../components/DataTable";
 import EntitySummaryCard from "../components/EntitySummaryCard";
@@ -8,9 +8,10 @@ import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import StatusBadge from "../components/StatusBadge";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
+import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber } from "../utils/format";
-import { FaBeer } from "react-icons/fa";
 
 const initialForm = {
   name: "",
@@ -20,6 +21,8 @@ const initialForm = {
   size: "",
   unit: "pairs",
   min_quantity: 5,
+  inner_box_per_pair: 1,
+  inner_boxes_per_outer_box: 30,
   image: null,
 };
 
@@ -32,6 +35,8 @@ const buildFormData = (values, editingId) => {
   formData.append("unit", values.unit);
   formData.append("min_quantity", Number(values.min_quantity));
   formData.append("size", values.size || "");
+  formData.append("inner_box_per_pair", Number(values.inner_box_per_pair || 1));
+  formData.append("inner_boxes_per_outer_box", values.inner_boxes_per_outer_box ? Number(values.inner_boxes_per_outer_box) : "");
 
   if (values.image) {
     formData.append("image", values.image);
@@ -42,28 +47,30 @@ const buildFormData = (values, editingId) => {
 
 export default function FinishedGoodsPage() {
   const { token, user } = useAuth();
+  const { showToast } = useToast();
   const isAdmin = user.role === "ADMIN";
   const [items, setItems] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState(null);
-  const [message, setMessage] = useState("");
   const [nextStep, setNextStep] = useState(null);
   const [selectedUpperId, setSelectedUpperId] = useState("");
   const [selectedSoleId, setSelectedSoleId] = useState("");
 
-  const loadItems = async () => {
+  const loadItems = useCallback(async () => {
     const [goodsResult, materialsResult] = await Promise.all([
       api.getFinishedGoods(token),
       api.getRawMaterials(token),
     ]);
     setItems(goodsResult.data || []);
     setMaterials(materialsResult.data || []);
-  };
+  }, [token]);
 
   useEffect(() => {
     loadItems().catch(console.error);
-  }, [token]);
+  }, [loadItems]);
+
+  useDataRefresh(loadItems, "finished-goods");
 
   const upperMaterials = materials.filter((item) => item.category === "Upper");
   const soleMaterials = materials.filter((item) => item.category === "Sole");
@@ -75,7 +82,7 @@ export default function FinishedGoodsPage() {
     try {
       if (editingId) {
         await api.updateFinishedGood(editingId, buildFormData(form, true), token);
-        setMessage("Finished good updated and list refreshed immediately.");
+        showToast({ tone: "success", title: "Finished good updated", message: "The finished goods list was refreshed." });
         setNextStep({
           description: "The finished good is updated. Make sure its formula still matches the product's upper and sole codes.",
           steps: [
@@ -86,7 +93,7 @@ export default function FinishedGoodsPage() {
         });
       } else {
         await api.createFinishedGood(buildFormData(form, false), token);
-        setMessage("Finished good created.");
+        showToast({ tone: "success", title: "Finished good created", message: "The finished goods list was refreshed." });
         setNextStep({
           description: "The product is created. The next step is to define how it is made by creating a formula with the matching upper and sole.",
           steps: [
@@ -97,12 +104,13 @@ export default function FinishedGoodsPage() {
         });
       }
       await loadItems();
+      announceDataRefresh("finished-goods");
       setForm(initialForm);
       setEditingId(null);
       setSelectedUpperId("");
       setSelectedSoleId("");
     } catch (error) {
-      setMessage(error.message);
+      showToast({ tone: "error", title: "Finished good save failed", message: error.message });
     }
   };
 
@@ -116,6 +124,8 @@ export default function FinishedGoodsPage() {
       size: item.size || "",
       unit: item.unit || "pairs",
       min_quantity: item.min_quantity || 5,
+      inner_box_per_pair: item.inner_box_per_pair || 1,
+      inner_boxes_per_outer_box: item.inner_boxes_per_outer_box || 30,
       image: null,
     });
     setSelectedUpperId("");
@@ -125,18 +135,23 @@ export default function FinishedGoodsPage() {
   const remove = async (id) => {
     try {
       await api.deleteFinishedGood(id, token);
-      setMessage("Finished good deleted.");
       setNextStep(null);
       await loadItems();
+      announceDataRefresh("finished-goods");
+      showToast({ tone: "success", title: "Finished good deleted", message: "The finished goods list was refreshed." });
     } catch (error) {
-      setMessage(error.message);
+      showToast({ tone: "error", title: "Delete failed", message: error.message });
     }
   };
 
   const toggleVisibility = async (item) => {
     try {
       await api.setFinishedGoodVisibility(item.id, { is_visible: !item.is_visible }, token);
-      setMessage(`Finished good ${item.is_visible ? "hidden" : "displayed"} successfully.`);
+      showToast({
+        tone: "success",
+        title: item.is_visible ? "Product hidden" : "Product displayed",
+        message: "The finished goods list was refreshed.",
+      });
       setNextStep({
         description: item.is_visible
           ? "This product is now hidden from normal users."
@@ -152,8 +167,9 @@ export default function FinishedGoodsPage() {
             ],
       });
       await loadItems();
+      announceDataRefresh("finished-goods");
     } catch (error) {
-      setMessage(error.message);
+      showToast({ tone: "error", title: "Visibility update failed", message: error.message });
     }
   };
 
@@ -231,6 +247,13 @@ export default function FinishedGoodsPage() {
             { key: "size", label: "Size" },
             { key: "quantity", label: "Stock", render: (row) => `${formatNumber(row.quantity)} ${row.unit}` },
             ...(isAdmin ? [{ key: "min_quantity", label: "Min Qty" }] : []),
+            ...(isAdmin
+              ? [{
+                  key: "packaging",
+                  label: "Packaging",
+                  render: (row) => `${formatNumber(row.inner_box_per_pair || 1)} inner/pair | ${row.inner_boxes_per_outer_box || "-"} inner/outer`,
+                }]
+              : []),
             ...(isAdmin
               ? [{
                   key: "is_visible",
@@ -390,6 +413,24 @@ export default function FinishedGoodsPage() {
                 onChange={(event) => setForm((current) => ({ ...current, min_quantity: event.target.value }))}
               />
             </Field>
+            <Field label="Inner boxes per pair">
+              <TextInput
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.inner_box_per_pair}
+                onChange={(event) => setForm((current) => ({ ...current, inner_box_per_pair: event.target.value }))}
+              />
+            </Field>
+            <Field label="Inner boxes per outer box">
+              <TextInput
+                type="number"
+                min="1"
+                step="1"
+                value={form.inner_boxes_per_outer_box}
+                onChange={(event) => setForm((current) => ({ ...current, inner_boxes_per_outer_box: event.target.value }))}
+              />
+            </Field>
             <Field label="Image">
               <input
                 type="file"
@@ -417,7 +458,6 @@ export default function FinishedGoodsPage() {
               <Button type="submit">
                 {editingId ? "Save changes" : "Create finished good"}
               </Button>
-              {message ? <p className={`rounded-xl border px-4 py-3 text-sm ${message.toLowerCase().includes("cannot") ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>{message}</p> : null}
             </div>
           </form>
         </SectionCard>

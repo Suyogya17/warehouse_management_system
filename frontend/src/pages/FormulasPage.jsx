@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Button from "../components/Button";
 import EntitySummaryCard from "../components/EntitySummaryCard";
 import { Field, SelectInput, TextInput } from "../components/Field";
@@ -6,6 +6,8 @@ import NextStepCard from "../components/NextStepCard";
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
+import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber } from "../utils/format";
 
@@ -14,8 +16,10 @@ const initialForm = {
   finished_good_id: "",
   output_qty: 1,
   notes: "",
-  inputs: [{ raw_material_id: "", quantity_needed: 1 }],
+  inputs: [{ raw_material_id: "", quantity_needed: 1, consumption_basis: "PER_PAIR" }],
 };
+
+const soleMakingCategories = ["Sole", "Sole Powder", "Sole Foam", "TPR"];
 
 const buildMaterialOptionLabel = (item) =>
   `${item.name} (${item.article_code})${item.color ? ` - ${item.color}` : ""} [${item.category}]`;
@@ -55,14 +59,15 @@ const hasMatchingMaterialInput = (inputs, materials, { category, articleCode, co
 
 export default function FormulasPage() {
   const { token } = useAuth();
+  const { showToast } = useToast();
   const [materials, setMaterials] = useState([]);
   const [finishedGoods, setFinishedGoods] = useState([]);
   const [formulas, setFormulas] = useState([]);
   const [form, setForm] = useState(initialForm);
-  const [message, setMessage] = useState("");
+  const [editingId, setEditingId] = useState(null);
   const [nextStep, setNextStep] = useState(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const [materialsResult, goodsResult, formulasResult] = await Promise.all([
       api.getRawMaterials(token),
       api.getFinishedGoods(token),
@@ -71,11 +76,13 @@ export default function FormulasPage() {
     setMaterials(materialsResult.data || []);
     setFinishedGoods(goodsResult.data || []);
     setFormulas(formulasResult.data || []);
-  };
+  }, [token]);
 
   useEffect(() => {
     load().catch(console.error);
-  }, [token]);
+  }, [load]);
+
+  useDataRefresh(load, "formulas");
 
   const selectedFinishedGood = finishedGoods.find((item) => String(item.id) === String(form.finished_good_id));
   const selectedInputMaterials = form.inputs
@@ -117,11 +124,11 @@ export default function FormulasPage() {
     const nextInputs = [];
 
     if (upper) {
-      nextInputs.push({ raw_material_id: String(upper.id), quantity_needed: 1 });
+      nextInputs.push({ raw_material_id: String(upper.id), quantity_needed: 1, consumption_basis: "PER_PAIR" });
     }
 
     if (sole) {
-      nextInputs.push({ raw_material_id: String(sole.id), quantity_needed: 1 });
+      nextInputs.push({ raw_material_id: String(sole.id), quantity_needed: 1, consumption_basis: "PER_PAIR" });
     }
 
     setForm((current) => ({
@@ -161,7 +168,7 @@ export default function FormulasPage() {
     event.preventDefault();
 
     if (!selectedFinishedGood) {
-      setMessage("Please select a finished good.");
+      showToast({ tone: "error", title: "Formula incomplete", message: "Please select a finished good." });
       return;
     }
 
@@ -173,27 +180,36 @@ export default function FormulasPage() {
     const hasSole = hasMatchingMaterialInput(form.inputs, materials, {
       category: "Sole",
       articleCode: selectedFinishedGood.sole_code,
+    }) || form.inputs.some((input) => {
+      const material = materials.find((item) => String(item.id) === String(input.raw_material_id));
+      return material && soleMakingCategories.includes(material.category);
     });
 
     if (!hasUpper || !hasSole) {
-      setMessage("Formula must include both the matching upper and sole for the selected finished good.");
+      showToast({ tone: "error", title: "Formula incomplete", message: "Formula must include both the matching upper and sole for the selected finished good." });
       return;
     }
 
     try {
-      await api.createFormula(
-        {
-          ...form,
-          finished_good_id: Number(form.finished_good_id),
-          output_qty: Number(form.output_qty),
-          inputs: form.inputs.map((item) => ({
-            raw_material_id: Number(item.raw_material_id),
-            quantity_needed: Number(item.quantity_needed),
-          })),
-        },
-        token
-      );
-      setMessage("Formula created and list refreshed immediately.");
+      const payload = {
+        ...form,
+        finished_good_id: Number(form.finished_good_id),
+        output_qty: Number(form.output_qty),
+        inputs: form.inputs.map((item) => ({
+          raw_material_id: Number(item.raw_material_id),
+          quantity_needed: Number(item.quantity_needed),
+          consumption_basis: item.consumption_basis || "PER_PAIR",
+        })),
+      };
+
+      if (editingId) {
+        await api.updateFormula(editingId, payload, token);
+        showToast({ tone: "success", title: "Formula updated", message: "Saved formulas were refreshed." });
+      } else {
+        await api.createFormula(payload, token);
+        showToast({ tone: "success", title: "Formula created", message: "Saved formulas were refreshed." });
+      }
+
       setNextStep({
         description: "The recipe is ready. You can now use Production to check whether enough raw materials are available and then run the conversion.",
         steps: [
@@ -203,16 +219,18 @@ export default function FormulasPage() {
         ],
       });
       setForm(initialForm);
+      setEditingId(null);
       await load();
+      announceDataRefresh("formulas");
     } catch (error) {
-      setMessage(error.message);
+      showToast({ tone: "error", title: "Formula save failed", message: error.message });
     }
   };
 
   const remove = async (id) => {
     try {
       await api.deactivateFormula(id, token);
-      setMessage("Formula archived.");
+      showToast({ tone: "success", title: "Formula archived", message: "Saved formulas were refreshed." });
       setNextStep({
         description: "This formula is no longer available for new production runs.",
         steps: [
@@ -221,9 +239,30 @@ export default function FormulasPage() {
         ],
       });
       await load();
+      announceDataRefresh("formulas");
     } catch (error) {
-      setMessage(error.message);
+      showToast({ tone: "error", title: "Archive failed", message: error.message });
     }
+  };
+
+  const startEdit = (formula) => {
+    setEditingId(formula.id);
+    setForm({
+      name: formula.name || "",
+      finished_good_id: String(formula.finished_good_id || ""),
+      output_qty: formula.output_qty || 1,
+      notes: formula.notes || "",
+      inputs: (formula.inputs || []).map((input) => ({
+        raw_material_id: String(input.raw_material_id || ""),
+        quantity_needed: input.quantity_needed || 1,
+        consumption_basis: input.consumption_basis || "PER_PAIR",
+      })),
+    });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setForm(initialForm);
   };
 
   return (
@@ -246,7 +285,11 @@ export default function FormulasPage() {
         }
       />
 
-      <SectionCard title="Create production formula" subtitle="Define how uppers, soles, powder, foam, optional trims, and packing inputs become one finished shoe pair." icon="formulas">
+      <SectionCard
+        title={editingId ? "Edit production formula" : "Create production formula"}
+        subtitle="Define how uppers, soles, powder, foam, optional trims, and packing inputs become one finished shoe pair."
+        icon="formulas"
+      >
         <form className="space-y-5" onSubmit={submit}>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <Field label="Formula name">
@@ -297,8 +340,10 @@ export default function FormulasPage() {
                 { label: "Sole code", value: selectedFinishedGood.sole_code || "-" },
                 { label: "Color", value: selectedFinishedGood.color || "-" },
                 { label: "Size", value: selectedFinishedGood.size || "-" },
+                { label: "Inner boxes/pair", value: formatNumber(selectedFinishedGood.inner_box_per_pair || 1) },
+                { label: "Inner boxes/outer", value: selectedFinishedGood.inner_boxes_per_outer_box || "-" },
               ]}
-              description="Use the suggestions below, then confirm both upper and sole are present before saving."
+              description="Use the suggestions below, then add powder, foam, TPR, laces, inner boxes, and outer boxes as needed."
               action={
                   <Button type="button" variant="secondary" size="sm" icon="spark" onClick={() => useSuggestedInputs(selectedFinishedGood)}>
                     Use suggested materials
@@ -330,7 +375,7 @@ export default function FormulasPage() {
                       if (nextInputs[targetIndex]) {
                         nextInputs[targetIndex] = { ...nextInputs[targetIndex], raw_material_id: String(suggestedSole.id) };
                       } else {
-                        nextInputs.push({ raw_material_id: String(suggestedSole.id), quantity_needed: 1 });
+                        nextInputs.push({ raw_material_id: String(suggestedSole.id), quantity_needed: 1, consumption_basis: "PER_PAIR" });
                       }
                       return { ...current, inputs: nextInputs };
                     })
@@ -347,7 +392,7 @@ export default function FormulasPage() {
 
           <div className="space-y-3">
             {form.inputs.map((input, index) => (
-              <div key={index} className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 md:grid-cols-[2fr_1fr_auto]">
+              <div key={index} className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 md:grid-cols-[2fr_1fr_1fr_auto]">
                 <SelectInput
                   value={input.raw_material_id}
                   onChange={(event) => updateInput(index, "raw_material_id", event.target.value)}
@@ -369,6 +414,13 @@ export default function FormulasPage() {
                   placeholder="Qty needed"
                   required
                 />
+                <SelectInput
+                  value={input.consumption_basis || "PER_PAIR"}
+                  onChange={(event) => updateInput(index, "consumption_basis", event.target.value)}
+                >
+                  <option value="PER_PAIR">Per pair</option>
+                  <option value="PER_OUTER_BOX">Per outer box</option>
+                </SelectInput>
                 <Button
                   type="button"
                   variant="danger"
@@ -406,16 +458,20 @@ export default function FormulasPage() {
               onClick={() =>
                 setForm((current) => ({
                   ...current,
-                  inputs: [...current.inputs, { raw_material_id: "", quantity_needed: 1 }],
+                  inputs: [...current.inputs, { raw_material_id: "", quantity_needed: 1, consumption_basis: "PER_PAIR" }],
                 }))
               }
             >
               Add material input
             </Button>
             <Button type="submit" icon="check">
-              Save formula
+              {editingId ? "Save changes" : "Save formula"}
             </Button>
-            {message ? <p className={`rounded-xl border px-4 py-3 text-sm ${message.toLowerCase().includes("cannot") ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>{message}</p> : null}
+            {editingId ? (
+              <Button type="button" variant="secondary" onClick={cancelEdit}>
+                Cancel
+              </Button>
+            ) : null}
           </div>
         </form>
       </SectionCard>
@@ -431,9 +487,14 @@ export default function FormulasPage() {
                     {formula.finished_good_name} • output {formatNumber(formula.output_qty)}
                   </p>
                 </div>
-                <Button type="button" variant="secondary" size="sm" icon="eyeOff" onClick={() => remove(formula.id)}>
-                  Archive
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="secondary" size="sm" icon="edit" onClick={() => startEdit(formula)}>
+                    Edit
+                  </Button>
+                  <Button type="button" variant="secondary" size="sm" icon="eyeOff" onClick={() => remove(formula.id)}>
+                    Archive
+                  </Button>
+                </div>
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {formula.inputs.map((input) => (
@@ -441,6 +502,7 @@ export default function FormulasPage() {
                     <p className="font-semibold">{input.material_name}</p>
                     <p className="text-sm text-slate/70">
                       {formatNumber(input.quantity_needed)} {input.unit} needed
+                      {input.consumption_basis === "PER_OUTER_BOX" ? " per outer box" : " per pair"}
                     </p>
                   </div>
                 ))}

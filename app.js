@@ -8,6 +8,8 @@ const rawmaterialRoutes = require("./routes/rawmaterialRoutes");
 const { fgRouter, consumptionRouter, auditRouter } = require("./routes/miscRoutes");
 const formulaRoutes = require("./routes/formulaRoutes");
 const productionRoutes = require("./routes/productionRoutes");
+const permissionRoutes = require('./routes/permissionRoutes');
+const orderRoutes = require('./routes/orderRoutes');
 const path = require("path");
 const app = express();
 
@@ -59,6 +61,8 @@ app.use("/api/consumption", consumptionRouter);
 app.use("/api/audit-logs", auditRouter);
 app.use("/api/formulas", formulaRoutes);
 app.use("/api/productions", productionRoutes);
+app.use('/api/permissions', permissionRoutes);
+app.use('/api/orders', orderRoutes);
 
 // ERROR HANDLER
 app.use((err, req, res, next) => {

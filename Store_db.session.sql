@@ -161,3 +161,38 @@ ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
 
 ALTER TABLE finished_goods
 ADD COLUMN IF NOT EXISTS is_visible BOOLEAN NOT NULL DEFAULT FALSE;
+
+SELECT * FROM finished_goods;
+-- DELETE FROM formulas WHERE finished_good_id = ;
+-- DELETE FROM production WHERE finished_good_id = ?
+-- DELETE FROM finished_goods WHERE id = ?
+
+-- New table: user_product_permissions
+CREATE TABLE user_product_permissions (
+  id SERIAL PRIMARY KEY,
+  user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  finished_good_id INT NOT NULL REFERENCES finished_goods(id) ON DELETE CASCADE,
+  can_view BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(user_id, finished_good_id)
+);
+
+SELECT * FROM production_items;
+
+-- Index for fast lookups
+CREATE INDEX idx_user_product_perms ON user_product_permissions(user_id, finished_good_id);
+
+TRUNCATE TABLE 
+  production_items,
+  production,
+  formula_inputs,
+  formulas,
+  finished_goods,
+  stock,
+  consumption_logs,
+  raw_materials,
+  user_product_permissions,
+  audit_logs,
+  orders,
+  order_items
+RESTART IDENTITY CASCADE;

@@ -91,4 +91,76 @@ const listUsers = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, getProfile, listUsers };
+const updateUser = async (req, res, next) => {
+  try {
+    const { name, email, password, role } = req.body;
+    const userId = req.params.id;
+
+    const existing = await query('SELECT id, email FROM users WHERE id = $1', [userId]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (email && email !== existing.rows[0].email) {
+      const duplicate = await query('SELECT id FROM users WHERE email = $1 AND id <> $2', [email, userId]);
+      if (duplicate.rows.length > 0) {
+        return res.status(409).json({ success: false, message: 'Email already registered' });
+      }
+    }
+
+    const hashed = password ? await bcrypt.hash(password, 10) : null;
+    const result = await query(
+      `UPDATE users
+       SET name = COALESCE($1, name),
+           email = COALESCE($2, email),
+           password = COALESCE($3, password),
+           role = COALESCE($4, role)
+       WHERE id = $5
+       RETURNING id, name, email, role, created_at`,
+      [name || null, email || null, hashed, role ? role.toUpperCase() : null, userId]
+    );
+
+    await auditLog({
+      userId: req.user.id,
+      action: 'UPDATED',
+      tableName: 'users',
+      recordId: result.rows[0].id,
+      detail: `Updated user: ${result.rows[0].email}`,
+    });
+
+    return res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const deleteUser = async (req, res, next) => {
+  try {
+    if (Number(req.params.id) === Number(req.user.id)) {
+      return res.status(400).json({ success: false, message: 'You cannot delete your own account' });
+    }
+
+    const result = await query(
+      'DELETE FROM users WHERE id = $1 RETURNING id, email',
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    await auditLog({
+      userId: req.user.id,
+      action: 'DELETED',
+      tableName: 'users',
+      recordId: result.rows[0].id,
+      detail: `Deleted user: ${result.rows[0].email}`,
+    });
+
+    return res.json({ success: true, message: 'User deleted' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { register, login, getProfile, listUsers, updateUser, deleteUser };

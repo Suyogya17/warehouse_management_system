@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Button from "../components/Button";
 import SectionCard from "../components/SectionCard";
 import DataTable from "../components/DataTable";
@@ -7,36 +7,44 @@ import { Field, SelectInput, TextInput } from "../components/Field";
 import NextStepCard from "../components/NextStepCard";
 import PageHeader from "../components/PageHeader";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
+import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
 import { formatNumber } from "../utils/format";
 
 export default function ProductionPage() {
   const { token, user } = useAuth();
+  const { showToast } = useToast();
   const canRun = ["ADMIN", "STORE_KEEPER"].includes(user.role);
   const [formulas, setFormulas] = useState([]);
   const [history, setHistory] = useState([]);
   const [checkResult, setCheckResult] = useState(null);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
   const [nextStep, setNextStep] = useState(null);
   const [form, setForm] = useState({ formula_id: "", qty_to_produce: "", notes: "" });
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const [formulasResult, historyResult] = await Promise.all([api.getFormulas(token), api.getProductionHistory(token)]);
     setFormulas(formulasResult.data || []);
     setHistory(historyResult.data || []);
-  };
+  }, [token]);
 
   useEffect(() => {
     load().catch(console.error);
-  }, [token]);
+  }, [load]);
+
+  useDataRefresh(load, "production");
 
   const hasValidProductionInput = Number(form.formula_id) > 0 && Number(form.qty_to_produce) > 0;
   const selectedFormula = formulas.find((item) => String(item.id) === String(form.formula_id));
+  const canSubmitProduction =
+    hasValidProductionInput &&
+    checkResult?.can_produce &&
+    Number(checkResult?.qty_to_produce) === Number(form.qty_to_produce) &&
+    String(form.formula_id) === String(checkResult?.formula_id || form.formula_id);
 
   const checkStock = async () => {
     if (!hasValidProductionInput) {
-      setError("Please select a formula and enter a quantity greater than 0.");
+      showToast({ tone: "error", title: "Stock check needed", message: "Please select a formula and enter a quantity greater than 0." });
       setCheckResult(null);
       return;
     }
@@ -49,9 +57,12 @@ export default function ProductionPage() {
         },
         token
       );
-      setCheckResult(result);
-      setMessage("");
-      setError("");
+      setCheckResult({ ...result, formula_id: Number(form.formula_id) });
+      showToast({
+        tone: result.can_produce ? "success" : "error",
+        title: result.can_produce ? "Stock is sufficient" : "Stock is short",
+        message: result.can_produce ? "Stock is sufficient. You can run production now." : "Stock is short. Review the required materials below.",
+      });
       setNextStep({
         description: result.can_produce
           ? "Stock is ready for this production run."
@@ -70,14 +81,19 @@ export default function ProductionPage() {
       });
     } catch (err) {
       setCheckResult(null);
-      setError(err.message);
+      showToast({ tone: "error", title: "Stock check failed", message: err.message });
     }
   };
 
   const runProduction = async (event) => {
     event.preventDefault();
     if (!hasValidProductionInput) {
-      setError("Please select a formula and enter a quantity greater than 0.");
+      showToast({ tone: "error", title: "Production not ready", message: "Please select a formula and enter a quantity greater than 0." });
+      return;
+    }
+
+    if (!canSubmitProduction) {
+      showToast({ tone: "error", title: "Check stock first", message: "Run Check stock first, then run production while the checked quantity is still selected." });
       return;
     }
 
@@ -90,8 +106,7 @@ export default function ProductionPage() {
         },
         token
       );
-      setMessage(result.message);
-      setError("");
+      showToast({ tone: "success", title: "Production complete", message: result.message });
       setCheckResult(null);
       setNextStep({
         description: "Production is complete and stock has been updated.",
@@ -103,8 +118,9 @@ export default function ProductionPage() {
       });
       setForm({ formula_id: "", qty_to_produce: "", notes: "" });
       await load();
+      announceDataRefresh("production");
     } catch (err) {
-      setError(err.message);
+      showToast({ tone: "error", title: "Production failed", message: err.message });
     }
   };
 
@@ -136,7 +152,7 @@ export default function ProductionPage() {
                 value={form.formula_id}
                 onChange={(event) => {
                   setForm((current) => ({ ...current, formula_id: event.target.value }));
-                  setError("");
+                  setCheckResult(null);
                 }}
                 required
               >
@@ -155,7 +171,7 @@ export default function ProductionPage() {
                 value={form.qty_to_produce}
                 onChange={(event) => {
                   setForm((current) => ({ ...current, qty_to_produce: event.target.value }));
-                  setError("");
+                  setCheckResult(null);
                 }}
                 required
               />
@@ -172,11 +188,9 @@ export default function ProductionPage() {
               <Button type="button" variant="secondary" icon="stock" onClick={checkStock} disabled={!hasValidProductionInput}>
                 Check stock
               </Button>
-              <Button type="submit" icon="check" disabled={!hasValidProductionInput}>
+              <Button type="submit" icon="check" disabled={!canSubmitProduction}>
                 Run production
               </Button>
-              {message ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</p> : null}
-              {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
             </div>
           </form>
 
@@ -190,8 +204,10 @@ export default function ProductionPage() {
                   { label: "Output qty", value: formatNumber(selectedFormula.output_qty) },
                   { label: "Upper code", value: selectedFormula.article_code || "-" },
                   { label: "Sole code", value: selectedFormula.sole_code || "-" },
+                  { label: "Inner boxes/pair", value: formatNumber(selectedFormula.inner_box_per_pair || 1) },
+                  { label: "Inner boxes/outer", value: selectedFormula.inner_boxes_per_outer_box || "-" },
                 ]}
-                description="Check this summary before running stock check so you know exactly which product and recipe you are using."
+                description="Check this summary before running stock check so you know the recipe and packaging rule being used."
               />
             </div>
           ) : null}
@@ -201,12 +217,33 @@ export default function ProductionPage() {
               <p className="font-semibold text-ink">
                 {checkResult.can_produce ? "Stock is sufficient for this run." : "Stock is not sufficient for this run."}
               </p>
+              {checkResult.packaging ? (
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <div className="rounded-2xl bg-white px-4 py-3">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Inner boxes</p>
+                    <p className="mt-1 font-semibold">{formatNumber(checkResult.packaging.inner_boxes_needed)}</p>
+                  </div>
+                  <div className="rounded-2xl bg-white px-4 py-3">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Outer boxes</p>
+                    <p className="mt-1 font-semibold">{formatNumber(checkResult.packaging.outer_boxes_needed)}</p>
+                  </div>
+                  <div className="rounded-2xl bg-white px-4 py-3">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Pack size</p>
+                    <p className="mt-1 font-semibold">{checkResult.packaging.inner_boxes_per_outer_box || "-"} inner/outer</p>
+                  </div>
+                </div>
+              ) : null}
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 {checkResult.stock_check.map((item) => (
-                  <div key={item.raw_material_id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                    <p className="font-semibold">{item.name}</p>
+                  <div key={item.raw_material_id} className={`rounded-2xl border bg-white px-4 py-3 ${item.sufficient ? "border-emerald-200" : "border-red-200"}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-semibold">{item.name}</p>
+                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${item.sufficient ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>
+                        {!item.sufficient ? "Short" : item.consumption_basis === "PER_OUTER_BOX" ? "Per outer box" : "Ready"}
+                      </span>
+                    </div>
                     <p className="text-sm text-slate/70">
-                      Need {formatNumber(item.needed)} {item.unit} • Available {formatNumber(item.available)} {item.unit}
+                      Need {formatNumber(item.needed)} {item.unit} | Available {formatNumber(item.available)} {item.unit} | After {formatNumber(item.after_production)} {item.unit}
                     </p>
                   </div>
                 ))}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Button from "../components/Button";
 import EntitySummaryCard from "../components/EntitySummaryCard";
 import SectionCard from "../components/SectionCard";
@@ -6,28 +6,32 @@ import DataTable from "../components/DataTable";
 import { Field, SelectInput, TextInput } from "../components/Field";
 import PageHeader from "../components/PageHeader";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
+import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber } from "../utils/format";
 
 export default function ConsumptionPage() {
   const { token, user } = useAuth();
+  const { showToast } = useToast();
   const canLog = user.role === "ADMIN";
   const [materials, setMaterials] = useState([]);
   const [logs, setLogs] = useState([]);
-  const [message, setMessage] = useState("");
   const [form, setForm] = useState({ raw_material_id: "", qty_used: "", reason: "" });
   const selectedMaterial = materials.find((item) => String(item.id) === String(form.raw_material_id));
   const commonReasons = ["Damaged", "Sample", "Wastage", "QC Reject"];
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const [materialsResult, logsResult] = await Promise.all([api.getRawMaterials(token), api.getConsumptionLogs(token)]);
     setMaterials(materialsResult.data || []);
     setLogs(logsResult.data || []);
-  };
+  }, [token]);
 
   useEffect(() => {
     load().catch(console.error);
-  }, [token]);
+  }, [load]);
+
+  useDataRefresh(load, "consumption");
 
   const submit = async (event) => {
     event.preventDefault();
@@ -40,11 +44,12 @@ export default function ConsumptionPage() {
         },
         token
       );
-      setMessage("Consumption logged and stock updated immediately.");
       setForm({ raw_material_id: "", qty_used: "", reason: "" });
       await load();
+      announceDataRefresh("consumption");
+      showToast({ tone: "success", title: "Consumption logged", message: "Stock and consumption history were refreshed." });
     } catch (error) {
-      setMessage(error.message);
+      showToast({ tone: "error", title: "Consumption failed", message: error.message });
     }
   };
 
@@ -125,7 +130,6 @@ export default function ConsumptionPage() {
               <Button type="submit" icon="check">
                 Save consumption
               </Button>
-              {message ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</p> : null}
             </div>
           </form>
         </SectionCard>

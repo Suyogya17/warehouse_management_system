@@ -15,6 +15,15 @@ export const AuthProvider = ({ children }) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(auth));
   }, [auth]);
 
+  useEffect(() => {
+    const handleExpiredAuth = () => {
+      setAuth({ token: "", user: null });
+    };
+
+    window.addEventListener("store-management:auth-expired", handleExpiredAuth);
+    return () => window.removeEventListener("store-management:auth-expired", handleExpiredAuth);
+  }, []);
+
   const login = async (email, password, expectedRole) => {
     setLoading(true);
     try {

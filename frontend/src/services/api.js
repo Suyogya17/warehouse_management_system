@@ -11,6 +11,10 @@ const buildHeaders = (token, isJson = true) => {
 const parseResponse = async (response) => {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem("store-management-auth");
+      window.dispatchEvent(new Event("store-management:auth-expired"));
+    }
     throw new Error(data.message || "Request failed");
   }
   return data;
@@ -35,6 +39,10 @@ export const api = {
   registerUser: (payload, token) =>
     apiRequest("/auth/register", { method: "POST", body: JSON.stringify(payload) }, token),
   getUsers: (token) => apiRequest("/auth/users", {}, token),
+  updateUser: (id, payload, token) =>
+    apiRequest(`/auth/users/${id}`, { method: "PUT", body: JSON.stringify(payload) }, token),
+  deleteUser: (id, token) =>
+    apiRequest(`/auth/users/${id}`, { method: "DELETE" }, token),
   getProfile: (token) => apiRequest("/auth/profile", {}, token),
   getStockSummary: (token) => apiRequest("/stock/summary", {}, token),
   getBatches: (id, token) => apiRequest(`/stock/batches/${id}`, {}, token),
@@ -59,6 +67,8 @@ export const api = {
   getFormulas: (token) => apiRequest("/formulas", {}, token),
   createFormula: (payload, token) =>
     apiRequest("/formulas", { method: "POST", body: JSON.stringify(payload) }, token),
+  updateFormula: (id, payload, token) =>
+    apiRequest(`/formulas/${id}`, { method: "PUT", body: JSON.stringify(payload) }, token),
   deactivateFormula: (id, token) =>
     apiRequest(`/formulas/${id}/deactivate`, { method: "PUT" }, token),
   deleteFormula: (id, token) =>
@@ -71,4 +81,16 @@ export const api = {
   getConsumptionLogs: (token) => apiRequest("/consumption", {}, token),
   logConsumption: (payload, token) =>
     apiRequest("/consumption", { method: "POST", body: JSON.stringify(payload) }, token),
+  grantPermission: (payload, token) =>
+    apiRequest("/permissions/grant", { method: "POST", body: JSON.stringify(payload) }, token),
+  revokePermission: (payload, token) =>
+    apiRequest("/permissions/revoke", { method: "POST", body: JSON.stringify(payload) }, token),
+  getPermissions: (token) =>
+  apiRequest("/permissions", {}, token),
+  getOrders: (token) => apiRequest("/orders", {}, token),
+  getOrderAvailability: (token) => apiRequest("/orders/availability", {}, token),
+  createOrder: (payload, token) =>
+    apiRequest("/orders", { method: "POST", body: JSON.stringify(payload) }, token),
+  updateOrderStatus: (id, payload, token) =>
+    apiRequest(`/orders/${id}/status`, { method: "PUT", body: JSON.stringify(payload) }, token),
 };

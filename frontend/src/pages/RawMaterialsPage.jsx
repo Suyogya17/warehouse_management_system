@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Button from "../components/Button";
 import DataTable from "../components/DataTable";
 import { Field, TextInput } from "../components/Field";
@@ -7,6 +7,8 @@ import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import StatusBadge from "../components/StatusBadge";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
+import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber } from "../utils/format";
 import { materialBlueprints } from "../utils/manufacturing";
@@ -16,7 +18,7 @@ const initialForm = {
   article_code: "",
   category: "",
   color: "",
-  unit: "pcs",
+  unit: "",
   quantity: 0,
   min_quantity: 10,
   image: null,
@@ -44,29 +46,31 @@ const buildFormData = (values, editingId) => {
 
 export default function RawMaterialsPage() {
   const { token, user } = useAuth();
+  const { showToast } = useToast();
   const canManage = user.role === "ADMIN";
   const [items, setItems] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState(null);
-  const [message, setMessage] = useState("");
   const [nextStep, setNextStep] = useState(null);
   const selectedBlueprint = materialBlueprints.find((item) => item.name.toLowerCase() === form.name.toLowerCase());
 
-  const loadItems = async () => {
+  const loadItems = useCallback(async () => {
     const result = await api.getRawMaterials(token);
     setItems(result.data || []);
-  };
+  }, [token]);
 
   useEffect(() => {
     loadItems().catch(console.error);
-  }, [token]);
+  }, [loadItems]);
+
+  useDataRefresh(loadItems, "raw-materials");
 
   const submit = async (event) => {
     event.preventDefault();
     try {
       if (editingId) {
         await api.updateRawMaterial(editingId, buildFormData(form, true), token);
-        setMessage("Raw material updated instantly.");
+        showToast({ tone: "success", title: "Raw material updated", message: "The raw materials list was refreshed." });
         setNextStep({
           description: "Raw material details are updated. Stock quantity still stays controlled by purchase, production, and consumption records.",
           steps: [
@@ -77,7 +81,7 @@ export default function RawMaterialsPage() {
         });
       } else {
         await api.createRawMaterial(buildFormData(form, false), token);
-        setMessage("Raw material created.");
+        showToast({ tone: "success", title: "Raw material created", message: "The raw materials list was refreshed." });
         setNextStep({
           description: "Your material is ready. The usual next step is to create a finished good that uses this upper or sole, then build a formula for production.",
           steps: [
@@ -89,10 +93,11 @@ export default function RawMaterialsPage() {
       }
 
       await loadItems();
+      announceDataRefresh("raw-materials");
       setForm(initialForm);
       setEditingId(null);
     } catch (error) {
-      setMessage(error.message);
+      showToast({ tone: "error", title: "Raw material save failed", message: error.message });
     }
   };
 
@@ -113,11 +118,12 @@ export default function RawMaterialsPage() {
   const remove = async (id) => {
     try {
       await api.deleteRawMaterial(id, token);
-      setMessage("Raw material deleted.");
       setNextStep(null);
       await loadItems();
+      announceDataRefresh("raw-materials");
+      showToast({ tone: "success", title: "Raw material deleted", message: "The raw materials list was refreshed." });
     } catch (error) {
-      setMessage(error.message);
+      showToast({ tone: "error", title: "Delete failed", message: error.message });
     }
   };
 
@@ -146,6 +152,8 @@ export default function RawMaterialsPage() {
         subtitle="Manage uppers, soles, powder, foam, optional trims, and packing materials."
         icon="materials"
       >
+        
+
         <DataTable
           columns={[
             {
@@ -214,12 +222,7 @@ export default function RawMaterialsPage() {
                     ...current,
                     name: item.name,
                     unit: item.unit,
-                    category:
-                      item.name === "Upper"
-                        ? "Upper"
-                        : item.name.includes("Sole")
-                          ? "Sole"
-                          : current.category || "Other",
+                    category: item.category || current.category || "Other",
                   }))
                 }
                 className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left hover:border-indigo-200 hover:bg-indigo-50/60"
@@ -297,7 +300,6 @@ export default function RawMaterialsPage() {
                   Cancel
                 </Button>
               ) : null}
-              {message ? <p className={`rounded-xl border px-4 py-3 text-sm ${message.toLowerCase().includes("cannot") ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>{message}</p> : null}
             </div>
           </form>
         </SectionCard>

@@ -1,48 +1,56 @@
 export const materialBlueprints = [
   {
     name: "Upper",
+    category: "Upper",
     unit: "pcs",
     stage: "Cutting",
     notes: "Usually received inside cartons. One pair of shoes uses 2 upper pieces.",
   },
   {
     name: "Sole",
+    category: "Sole",
     unit: "pcs",
     stage: "Bottoming",
     notes: "Finished sole pieces. One pair of shoes uses 2 soles.",
   },
   {
     name: "Sole Powder",
+    category: "Sole Powder",
     unit: "kg",
     stage: "Compounding",
     notes: "Measured in kg, but consumed in grams per pair such as 100gm or 200gm.",
   },
   {
     name: "Sole Foam",
+    category: "Sole Foam",
     unit: "kg",
     stage: "Compounding",
     notes: "Measured in kg and consumed by weight per pair.",
   },
   {
     name: "Lace",
+    category: "Lace",
     unit: "pairs",
     stage: "Optional",
     notes: "Optional trim depending on the shoe style.",
   },
   {
     name: "TPR",
-    unit: "pairs",
+    category: "TPR",
+    unit: "kg",
     stage: "Optional",
     notes: "Optional component depending on the shoe style.",
   },
   {
     name: "Inner Box",
+    category: "Inner Box",
     unit: "pcs",
     stage: "Packing",
     notes: "Each pair takes 1 inner box.",
   },
   {
     name: "Outer Box",
+    category: "Outer Box",
     unit: "pcs",
     stage: "Packing",
     notes: "30 inner boxes are packed into 1 outer box carton.",
@@ -88,6 +96,12 @@ export const manufacturingFlowByRole = {
       getProgress: ({ productionCount, finishedGoodsCount }) =>
         productionCount > 0 && finishedGoodsCount > 0 ? 100 : 30,
     },
+    {
+      title: "Reserve orders",
+      route: "/orders",
+      description: "Reserve available finished-goods stock before delivery.",
+      getProgress: ({ ordersCount }) => (ordersCount > 0 ? 100 : 30),
+    },
   ],
   STORE_KEEPER: [
     {
@@ -115,6 +129,12 @@ export const manufacturingFlowByRole = {
       route: "/finished-goods",
       description: "See the available finished-goods stock.",
       getProgress: ({ finishedGoodsCount }) => (finishedGoodsCount > 0 ? 100 : 25),
+    },
+    {
+      title: "Place reserved orders",
+      route: "/orders",
+      description: "Reserve visible products without reducing stock until delivery.",
+      getProgress: ({ ordersCount }) => (ordersCount > 0 ? 100 : 25),
     },
   ],
 };

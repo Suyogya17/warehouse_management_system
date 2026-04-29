@@ -20,43 +20,188 @@ const baseSelect = (supportsImage, supportsVisibility) =>
   ].join(", ");
 
 // ─── LIST ALL ─────────────────────────────────────────────────────────────────
+// const getAll = async (req, res, next) => {
+//   try {
+//     const { article_code } = req.query;
+//     const supportsImage = await hasColumn("finished_goods", "image_url");
+//     const supportsVisibility = await hasColumn("finished_goods", "is_visible");
+//     let sql = `SELECT ${baseSelect(supportsImage, supportsVisibility)} FROM finished_goods WHERE 1=1`;
+//     const params = [];
+
+//     if (article_code) {
+//       params.push(article_code);
+//       sql += ` AND article_code ILIKE $${params.length}`;
+//     }
+
+//     if (req.user?.role === "USER" && supportsVisibility) {
+//       sql += ` AND is_visible = TRUE`;
+//     }
+
+//     sql += ' ORDER BY article_code, color';
+//     const result = await query(sql, params);
+//     return res.json({ success: true, count: result.rows.length, data: result.rows });
+//   } catch (err) {
+//     next(err);
+//   }
+// };
+
+// const getAll = async (req, res, next) => {
+//   try {
+//     const { article_code } = req.query;
+//     const userId = req.user.id;      // ← Get from JWT token
+//     const userRole = req.user.role;  // ← Get from JWT token
+
+//     let sql;
+//     const params = [];
+
+//     // ────────────────────────────────────────────────────────────────────────
+//     // ADMIN & STORE_KEEPER: See ALL products
+//     // ────────────────────────────────────────────────────────────────────────
+//     if (userRole === 'ADMIN' || userRole === 'STORE_KEEPER') {
+//       sql = 'SELECT * FROM finished_goods WHERE 1=1';
+      
+//       if (article_code) {
+//         params.push(article_code);
+//         sql += ` AND article_code ILIKE $${params.length}`;
+//       }
+
+//     // ────────────────────────────────────────────────────────────────────────
+//     // USER: Only see products they have permission for
+//     // ────────────────────────────────────────────────────────────────────────
+//     } else if (userRole === 'USER') {
+//       sql = `
+//         SELECT fg.* 
+//         FROM finished_goods fg
+//         INNER JOIN user_product_permissions upp 
+//           ON upp.finished_good_id = fg.id
+//         WHERE upp.user_id = $1 
+//           AND upp.can_view = TRUE
+//       `;
+//       params.push(userId);
+
+//       if (article_code) {
+//         params.push(article_code);
+//         sql += ` AND fg.article_code ILIKE $${params.length}`;
+//       }
+//     } else {
+//       // Fallback: unknown role sees nothing
+//       return res.json({ success: true, count: 0, data: [] });
+//     }
+
+//     sql += ' ORDER BY fg.article_code, fg.color';
+//     const result = await query(sql, params);
+    
+//     return res.json({ success: true, count: result.rows.length, data: result.rows });
+//   } catch (err) {
+//     next(err);
+//   }
+// };
 const getAll = async (req, res, next) => {
   try {
     const { article_code } = req.query;
-    const supportsImage = await hasColumn("finished_goods", "image_url");
-    const supportsVisibility = await hasColumn("finished_goods", "is_visible");
-    let sql = `SELECT ${baseSelect(supportsImage, supportsVisibility)} FROM finished_goods WHERE 1=1`;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    let sql;
     const params = [];
 
-    if (article_code) {
-      params.push(article_code);
-      sql += ` AND article_code ILIKE $${params.length}`;
+    // ────────────────────────────────────────────────────────────────────────
+    // ADMIN & STORE_KEEPER: See ALL products
+    // ────────────────────────────────────────────────────────────────────────
+    if (userRole === 'ADMIN' || userRole === 'STORE_KEEPER') {
+      sql = 'SELECT * FROM finished_goods WHERE 1=1';
+      
+      if (article_code) {
+        params.push(article_code);
+        sql += ` AND article_code ILIKE $${params.length}`;
+      }
+
+      sql += ' ORDER BY article_code, color';  // ← NO alias here
+
+    // ────────────────────────────────────────────────────────────────────────
+    // USER: Only see products they have permission for
+    // ────────────────────────────────────────────────────────────────────────
+    } else if (userRole === 'USER') {
+      sql = `
+        SELECT fg.* 
+        FROM finished_goods fg
+        INNER JOIN user_product_permissions upp 
+          ON upp.finished_good_id = fg.id
+        WHERE upp.user_id = $1 
+          AND upp.can_view = TRUE
+      `;
+      params.push(userId);
+
+      if (article_code) {
+        params.push(article_code);
+        sql += ` AND fg.article_code ILIKE $${params.length}`;
+      }
+
+      sql += ' ORDER BY fg.article_code, fg.color';  // ← WITH alias here
+
+    } else {
+      // Unknown role sees nothing
+      return res.json({ success: true, count: 0, data: [] });
     }
 
-    if (req.user?.role === "USER" && supportsVisibility) {
-      sql += ` AND is_visible = TRUE`;
-    }
-
-    sql += ' ORDER BY article_code, color';
     const result = await query(sql, params);
+    
     return res.json({ success: true, count: result.rows.length, data: result.rows });
   } catch (err) {
     next(err);
   }
 };
 
+
 // ─── GET ONE ──────────────────────────────────────────────────────────────────
+// const getOne = async (req, res, next) => {
+//   try {
+//     const supportsImage = await hasColumn("finished_goods", "image_url");
+//     const supportsVisibility = await hasColumn("finished_goods", "is_visible");
+//     const result = await query(
+//       `SELECT ${baseSelect(supportsImage, supportsVisibility)} FROM finished_goods WHERE id=$1`,
+//       [req.params.id]
+//     );
+//     if (result.rows.length === 0) {
+//       return res.status(404).json({ success: false, message: 'Finished good not found' });
+//     }
+//     return res.json({ success: true, data: result.rows[0] });
+//   } catch (err) {
+//     next(err);
+//   }
+// };
+
 const getOne = async (req, res, next) => {
   try {
-    const supportsImage = await hasColumn("finished_goods", "image_url");
-    const supportsVisibility = await hasColumn("finished_goods", "is_visible");
-    const result = await query(
-      `SELECT ${baseSelect(supportsImage, supportsVisibility)} FROM finished_goods WHERE id=$1`,
-      [req.params.id]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Finished good not found' });
+    const userId = req.user.id;
+    const userRole = req.user.role;
+    const productId = req.params.id;
+
+    let result;
+
+    if (userRole === 'ADMIN' || userRole === 'STORE_KEEPER') {
+      // Admin/Store Keeper can see any product
+      result = await query('SELECT * FROM finished_goods WHERE id = $1', [productId]);
+    } else if (userRole === 'USER') {
+      // User can only see if they have permission
+      result = await query(
+        `SELECT fg.* 
+         FROM finished_goods fg
+         INNER JOIN user_product_permissions upp 
+           ON upp.finished_good_id = fg.id
+         WHERE fg.id = $1 
+           AND upp.user_id = $2 
+           AND upp.can_view = TRUE`,
+        [productId, userId]
+      );
+    } else {
+      return res.status(403).json({ success: false, message: 'Access denied' });
     }
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Product not found or access denied' });
+    }
+
     return res.json({ success: true, data: result.rows[0] });
   } catch (err) {
     next(err);
@@ -66,28 +211,52 @@ const getOne = async (req, res, next) => {
 // ─── CREATE ───────────────────────────────────────────────────────────────────
 const create = async (req, res, next) => {
   try {
-    const { name, article_code, sole_code, color, size, unit, min_quantity } = req.body;
+    const {
+      name,
+      article_code,
+      sole_code,
+      color,
+      size,
+      unit,
+      min_quantity,
+      inner_box_per_pair,
+      inner_boxes_per_outer_box,
+    } = req.body;
     const image_url = getImagePath(req);
     const supportsImage = await hasColumn("finished_goods", "image_url");
     const supportsVisibility = await hasColumn("finished_goods", "is_visible");
+    const supportsInnerBoxPerPair = await hasColumn("finished_goods", "inner_box_per_pair");
+    const supportsInnerBoxesPerOuterBox = await hasColumn("finished_goods", "inner_boxes_per_outer_box");
 
-    const result = supportsImage && supportsVisibility
-      ? await query(
-          `INSERT INTO finished_goods (name, article_code, sole_code, color, size, unit, quantity, min_quantity, image_url, is_visible)
-           VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,FALSE) RETURNING *`,
-          [name, article_code, sole_code || null, color || null, size || null, unit || 'pairs', min_quantity || 5, image_url]
-        )
-      : supportsImage
-      ? await query(
-          `INSERT INTO finished_goods (name, article_code, sole_code, color, size, unit, quantity, min_quantity, image_url)
-           VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8) RETURNING *`,
-          [name, article_code, sole_code || null, color || null, size || null, unit || 'pairs', min_quantity || 5, image_url]
-        )
-      : await query(
-          `INSERT INTO finished_goods (name, article_code, sole_code, color, size, unit, quantity, min_quantity)
-           VALUES ($1,$2,$3,$4,$5,$6,0,$7) RETURNING *`,
-          [name, article_code, sole_code || null, color || null, size || null, unit || 'pairs', min_quantity || 5]
-        );
+    const columns = ["name", "article_code", "sole_code", "color", "size", "unit", "quantity", "min_quantity"];
+    const values = [name, article_code, sole_code || null, color || null, size || null, unit || 'pairs', 0, min_quantity || 5];
+
+    if (supportsImage) {
+      columns.push("image_url");
+      values.push(image_url);
+    }
+
+    if (supportsVisibility) {
+      columns.push("is_visible");
+      values.push(false);
+    }
+
+    if (supportsInnerBoxPerPair) {
+      columns.push("inner_box_per_pair");
+      values.push(inner_box_per_pair || 1);
+    }
+
+    if (supportsInnerBoxesPerOuterBox) {
+      columns.push("inner_boxes_per_outer_box");
+      values.push(inner_boxes_per_outer_box || null);
+    }
+
+    const placeholders = values.map((_, index) => `$${index + 1}`).join(",");
+    const result = await query(
+      `INSERT INTO finished_goods (${columns.join(",")})
+       VALUES (${placeholders}) RETURNING *`,
+      values
+    );
 
     await auditLog({
       userId: req.user.id, action: 'CREATED', tableName: 'finished_goods',
@@ -103,24 +272,56 @@ const create = async (req, res, next) => {
 // ─── UPDATE ───────────────────────────────────────────────────────────────────
 const update = async (req, res, next) => {
   try {
-    const { name, article_code, sole_code, color, size, unit, min_quantity } = req.body;
+    const {
+      name,
+      article_code,
+      sole_code,
+      color,
+      size,
+      unit,
+      min_quantity,
+      inner_box_per_pair,
+      inner_boxes_per_outer_box,
+    } = req.body;
     const image_url = getImagePath(req);
     const supportsImage = await hasColumn("finished_goods", "image_url");
-    const result = supportsImage && image_url
-      ? await query(
-          `UPDATE finished_goods
-           SET name=$1, article_code=$2, sole_code=$3, color=$4, size=$5, unit=$6, min_quantity=$7, image_url=$8
-           WHERE id=$9
-           RETURNING *`,
-          [name, article_code, sole_code || null, color || null, size || null, unit || 'pairs', min_quantity, image_url, req.params.id]
-        )
-      : await query(
-          `UPDATE finished_goods
-           SET name=$1, article_code=$2, sole_code=$3, color=$4, size=$5, unit=$6, min_quantity=$7
-           WHERE id=$8
-           RETURNING *`,
-          [name, article_code, sole_code || null, color || null, size || null, unit || 'pairs', min_quantity, req.params.id]
-        );
+    const supportsInnerBoxPerPair = await hasColumn("finished_goods", "inner_box_per_pair");
+    const supportsInnerBoxesPerOuterBox = await hasColumn("finished_goods", "inner_boxes_per_outer_box");
+
+    const updates = [
+      "name=$1",
+      "article_code=$2",
+      "sole_code=$3",
+      "color=$4",
+      "size=$5",
+      "unit=$6",
+      "min_quantity=$7",
+    ];
+    const values = [name, article_code, sole_code || null, color || null, size || null, unit || 'pairs', min_quantity];
+
+    if (supportsImage && image_url) {
+      values.push(image_url);
+      updates.push(`image_url=$${values.length}`);
+    }
+
+    if (supportsInnerBoxPerPair) {
+      values.push(inner_box_per_pair || 1);
+      updates.push(`inner_box_per_pair=$${values.length}`);
+    }
+
+    if (supportsInnerBoxesPerOuterBox) {
+      values.push(inner_boxes_per_outer_box || null);
+      updates.push(`inner_boxes_per_outer_box=$${values.length}`);
+    }
+
+    values.push(req.params.id);
+    const result = await query(
+      `UPDATE finished_goods
+       SET ${updates.join(", ")}
+       WHERE id=$${values.length}
+       RETURNING *`,
+      values
+    );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Finished good not found' });
     }

@@ -1,28 +1,30 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Button from "../components/Button";
 import SectionCard from "../components/SectionCard";
 import DataTable from "../components/DataTable";
 import { Field, SelectInput, TextInput } from "../components/Field";
 import PageHeader from "../components/PageHeader";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
+import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatDate, formatNumber } from "../utils/format";
 
 export default function ReceiveStockPage() {
   const { token } = useAuth();
+  const { showToast } = useToast();
   const [materials, setMaterials] = useState([]);
   const [selectedId, setSelectedId] = useState("");
   const [batches, setBatches] = useState([]);
-  const [message, setMessage] = useState("");
   const [form, setForm] = useState({ raw_material_id: "", qty_added: "", notes: "" });
   const selectedMaterial = materials.find((item) => String(item.id) === String(form.raw_material_id));
 
-  const loadMaterials = async () => {
+  const loadMaterials = useCallback(async () => {
     const result = await api.getRawMaterials(token);
     setMaterials(result.data || []);
-  };
+  }, [token]);
 
-  const loadBatches = async (materialId) => {
+  const loadBatches = useCallback(async (materialId) => {
     if (!materialId) {
       setBatches([]);
       return;
@@ -30,15 +32,17 @@ export default function ReceiveStockPage() {
 
     const result = await api.getBatches(materialId, token);
     setBatches(result.data || []);
-  };
-
-  useEffect(() => {
-    loadMaterials().catch(console.error);
   }, [token]);
 
   useEffect(() => {
+    loadMaterials().catch(console.error);
+  }, [loadMaterials]);
+
+  useEffect(() => {
     loadBatches(selectedId).catch(console.error);
-  }, [selectedId, token]);
+  }, [loadBatches, selectedId]);
+
+  useDataRefresh(loadMaterials, "receive-stock");
 
   const submit = async (event) => {
     event.preventDefault();
@@ -52,13 +56,14 @@ export default function ReceiveStockPage() {
         token
       );
       const materialId = form.raw_material_id;
-      setMessage("Purchase stock received successfully and stock updated immediately.");
       setSelectedId(materialId);
       await loadMaterials();
       await loadBatches(materialId);
+      announceDataRefresh("receive-stock");
+      showToast({ tone: "success", title: "Stock received", message: "Material stock and batch history were refreshed." });
       setForm({ raw_material_id: "", qty_added: "", notes: "" });
     } catch (error) {
-      setMessage(error.message);
+      showToast({ tone: "error", title: "Receive stock failed", message: error.message });
     }
   };
 
@@ -164,7 +169,6 @@ export default function ReceiveStockPage() {
             <Button type="submit" icon="plus">
               Receive stock
             </Button>
-            {message ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</p> : null}
           </div>
         </form>
       </SectionCard>

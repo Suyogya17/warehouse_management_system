@@ -1,6 +1,50 @@
 const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { productionHistorySelect } = require('../utils/queryBuilders');
+const { hasColumn } = require('../utils/schemaSupport');
+
+const packagingSelect = (supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox) => `
+  ${supportsInnerBoxPerPair ? 'fg.inner_box_per_pair' : '1::NUMERIC AS inner_box_per_pair'},
+  ${supportsInnerBoxesPerOuterBox ? 'fg.inner_boxes_per_outer_box' : 'NULL::NUMERIC AS inner_boxes_per_outer_box'}
+`;
+
+const inputSelect = (supportsConsumptionBasis) => `
+  SELECT fi.*,
+         ${supportsConsumptionBasis ? 'fi.consumption_basis' : "'PER_PAIR' AS consumption_basis"},
+         rm.name, rm.article_code, rm.color, rm.unit, rm.quantity AS current_stock
+   FROM formula_inputs fi
+   JOIN raw_materials rm ON rm.id = fi.raw_material_id
+`;
+
+const getPackagingSummary = (formula, qtyToProduce) => {
+  const innerBoxPerPair = Number(formula.inner_box_per_pair || 1);
+  const innerBoxesNeeded = Number(qtyToProduce) * innerBoxPerPair;
+  const innerBoxesPerOuterBox = Number(formula.inner_boxes_per_outer_box || 0);
+  const outerBoxesNeeded = innerBoxesPerOuterBox > 0
+    ? Math.ceil(innerBoxesNeeded / innerBoxesPerOuterBox)
+    : 0;
+
+  return {
+    inner_box_per_pair: innerBoxPerPair,
+    inner_boxes_needed: innerBoxesNeeded,
+    inner_boxes_per_outer_box: innerBoxesPerOuterBox || null,
+    outer_boxes_needed: outerBoxesNeeded,
+    loose_inner_boxes: innerBoxesPerOuterBox > 0 ? innerBoxesNeeded % innerBoxesPerOuterBox : innerBoxesNeeded,
+  };
+};
+
+const calculateNeeded = (input, formula, qtyToProduce, packaging) => {
+  if (input.consumption_basis === 'PER_OUTER_BOX') {
+    if (!packaging.inner_boxes_per_outer_box) {
+      const error = new Error('This formula has an outer-box material, but the finished good does not define inner boxes per outer box.');
+      error.statusCode = 400;
+      throw error;
+    }
+    return Number(input.quantity_needed) * packaging.outer_boxes_needed;
+  }
+
+  return Number(input.quantity_needed) * Number(qtyToProduce) / Number(formula.output_qty);
+};
 
 // ─── STEP 1: CHECK STOCK (dry run — does NOT deduct anything) ─────────────────
 /**
@@ -13,23 +57,31 @@ const { productionHistorySelect } = require('../utils/queryBuilders');
 const checkStock = async (req, res, next) => {
   try {
     const { formula_id, qty_to_produce } = req.body;
+    const supportsConsumptionBasis = await hasColumn('formula_inputs', 'consumption_basis');
+    const supportsInnerBoxPerPair = await hasColumn('finished_goods', 'inner_box_per_pair');
+    const supportsInnerBoxesPerOuterBox = await hasColumn('finished_goods', 'inner_boxes_per_outer_box');
 
     if (!formula_id || !qty_to_produce || qty_to_produce <= 0) {
       return res.status(400).json({ success: false, message: 'formula_id and qty_to_produce (>0) are required' });
     }
 
     // Load formula
-    const formulaRes = await query('SELECT * FROM formulas WHERE id=$1', [formula_id]);
+    const formulaRes = await query(
+      `SELECT f.*, fg.id AS fg_id, fg.name AS fg_name, ${packagingSelect(supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox)}
+       FROM formulas f
+       JOIN finished_goods fg ON fg.id = f.finished_good_id
+       WHERE f.id=$1`,
+      [formula_id]
+    );
     if (formulaRes.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Formula not found' });
     }
     const formula = formulaRes.rows[0];
+    const packaging = getPackagingSummary(formula, qty_to_produce);
 
     // Load formula inputs
     const inputsRes = await query(
-      `SELECT fi.*, rm.name, rm.article_code, rm.color, rm.unit, rm.quantity AS current_stock
-       FROM formula_inputs fi
-       JOIN raw_materials rm ON rm.id = fi.raw_material_id
+      `${inputSelect(supportsConsumptionBasis)}
        WHERE fi.formula_id = $1`,
       [formula_id]
     );
@@ -38,7 +90,7 @@ const checkStock = async (req, res, next) => {
     let canProduce = true;
 
     for (const inp of inputsRes.rows) {
-      const needed = parseFloat(inp.quantity_needed) * parseFloat(qty_to_produce) / parseFloat(formula.output_qty);
+      const needed = calculateNeeded(inp, formula, qty_to_produce, packaging);
       const available = parseFloat(inp.current_stock);
       const sufficient = available >= needed;
 
@@ -50,6 +102,7 @@ const checkStock = async (req, res, next) => {
         article_code:    inp.article_code,
         color:           inp.color,
         unit:            inp.unit,
+        consumption_basis: inp.consumption_basis,
         needed,
         available,
         after_production: available - needed,
@@ -62,9 +115,13 @@ const checkStock = async (req, res, next) => {
       can_produce: canProduce,
       formula_name: formula.name,
       qty_to_produce,
+      packaging,
       stock_check: report,
     });
   } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({ success: false, message: err.message });
+    }
     next(err);
   }
 };
@@ -88,6 +145,9 @@ const runProduction = async (req, res, next) => {
     await client.query('BEGIN');
 
     const { formula_id, qty_to_produce, notes } = req.body;
+    const supportsConsumptionBasis = await hasColumn('formula_inputs', 'consumption_basis');
+    const supportsInnerBoxPerPair = await hasColumn('finished_goods', 'inner_box_per_pair');
+    const supportsInnerBoxesPerOuterBox = await hasColumn('finished_goods', 'inner_boxes_per_outer_box');
 
     if (!formula_id || !qty_to_produce || qty_to_produce <= 0) {
       await client.query('ROLLBACK');
@@ -96,7 +156,8 @@ const runProduction = async (req, res, next) => {
 
     // ── Load formula ──────────────────────────────────────────────────────────
     const formulaRes = await client.query(
-      `SELECT f.*, fg.id AS fg_id, fg.name AS fg_name, fg.color AS fg_color
+      `SELECT f.*, fg.id AS fg_id, fg.name AS fg_name, fg.color AS fg_color,
+              ${packagingSelect(supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox)}
        FROM formulas f
        JOIN finished_goods fg ON fg.id = f.finished_good_id
        WHERE f.id = $1`,
@@ -107,12 +168,11 @@ const runProduction = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Formula not found' });
     }
     const formula = formulaRes.rows[0];
+    const packaging = getPackagingSummary(formula, qty_to_produce);
 
     // ── Load formula inputs ───────────────────────────────────────────────────
     const inputsRes = await client.query(
-      `SELECT fi.*, rm.name, rm.article_code, rm.color, rm.unit, rm.quantity AS current_stock
-       FROM formula_inputs fi
-       JOIN raw_materials rm ON rm.id = fi.raw_material_id
+      `${inputSelect(supportsConsumptionBasis)}
        WHERE fi.formula_id = $1
        ORDER BY fi.id`,
       [formula_id]
@@ -122,7 +182,7 @@ const runProduction = async (req, res, next) => {
     // ── STEP 1: Stock sufficiency check ──────────────────────────────────────
     const shortfalls = [];
     for (const inp of inputs) {
-      const needed = parseFloat(inp.quantity_needed) * parseFloat(qty_to_produce) / parseFloat(formula.output_qty);
+      const needed = calculateNeeded(inp, formula, qty_to_produce, packaging);
       const available = parseFloat(inp.current_stock);
       if (available < needed) {
         shortfalls.push({
@@ -166,7 +226,7 @@ const runProduction = async (req, res, next) => {
 
     // ── STEP 3: FIFO deduction per input ──────────────────────────────────────
     for (const inp of inputs) {
-      const totalNeeded = parseFloat(inp.quantity_needed) * parseFloat(qty_to_produce) / parseFloat(formula.output_qty);
+      const totalNeeded = calculateNeeded(inp, formula, qty_to_produce, packaging);
       let remaining = totalNeeded;
 
       // Fetch FIFO batches (oldest first, only those with stock left)
@@ -210,6 +270,7 @@ const runProduction = async (req, res, next) => {
       consumptionSummary.push({
         material:    `${inp.name} (${inp.article_code}${inp.color ? ' - ' + inp.color : ''})`,
         unit:        inp.unit,
+        consumption_basis: inp.consumption_basis,
         consumed:    totalNeeded,
         before:      prevQty,
         after:       newQty,
@@ -251,9 +312,13 @@ const runProduction = async (req, res, next) => {
         qty_after:  fgNewQty,
       },
       materials_consumed: consumptionSummary,
+      packaging,
     });
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({ success: false, message: err.message });
+    }
     next(err);
   } finally {
     client.release();

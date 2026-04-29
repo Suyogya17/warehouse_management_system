@@ -1,13 +1,52 @@
 const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
+const { hasColumn } = require('../utils/schemaSupport');
+
+const soleMakingCategories = ['Sole', 'Sole Powder', 'Sole Foam', 'TPR'];
+
+const formulaInputSelect = (supportsConsumptionBasis) => `
+  SELECT fi.*,
+         ${supportsConsumptionBasis ? 'fi.consumption_basis' : "'PER_PAIR' AS consumption_basis"},
+         rm.name AS material_name, rm.article_code, rm.color, rm.unit, rm.category
+   FROM formula_inputs fi
+   JOIN raw_materials rm ON rm.id = fi.raw_material_id
+`;
+
+const formulaPackagingSelect = (supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox) => `
+  ${supportsInnerBoxPerPair ? 'fg.inner_box_per_pair' : '1::NUMERIC AS inner_box_per_pair'},
+  ${supportsInnerBoxesPerOuterBox ? 'fg.inner_boxes_per_outer_box' : 'NULL::NUMERIC AS inner_boxes_per_outer_box'}
+`;
+
+const hasRequiredShoeMaterials = (materials, finishedGood) => {
+  const hasUpper = materials.some(
+    (item) =>
+      item.category === 'Upper' &&
+      item.article_code === finishedGood.article_code &&
+      (!finishedGood.color || item.color === finishedGood.color)
+  );
+
+  const hasSoleInput = materials.some(
+    (item) =>
+      soleMakingCategories.includes(item.category) &&
+      (!finishedGood.sole_code || item.article_code === finishedGood.sole_code || item.category !== 'Sole')
+  );
+
+  return { hasUpper, hasSoleInput };
+};
 
 // ─── LIST ALL FORMULAS ────────────────────────────────────────────────────────
 const getAll = async (req, res, next) => {
   try {
+    const supportsActive = await hasColumn('formulas', 'is_active');
+    const supportsConsumptionBasis = await hasColumn('formula_inputs', 'consumption_basis');
+    const supportsInnerBoxPerPair = await hasColumn('finished_goods', 'inner_box_per_pair');
+    const supportsInnerBoxesPerOuterBox = await hasColumn('finished_goods', 'inner_boxes_per_outer_box');
     const formulas = await query(
-      `SELECT f.*, fg.name AS finished_good_name, fg.article_code, fg.sole_code, fg.color
+      `SELECT f.*, fg.name AS finished_good_name, fg.article_code, fg.sole_code, fg.color,
+              ${formulaPackagingSelect(supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox)}
        FROM formulas f
        JOIN finished_goods fg ON fg.id = f.finished_good_id
+       ${supportsActive ? 'WHERE f.is_active = TRUE' : ''}
        ORDER BY f.id`
     );
 
@@ -15,9 +54,7 @@ const getAll = async (req, res, next) => {
     const withInputs = await Promise.all(
       formulas.rows.map(async (formula) => {
         const inputs = await query(
-          `SELECT fi.*, rm.name AS material_name, rm.article_code, rm.color, rm.unit, rm.category
-           FROM formula_inputs fi
-           JOIN raw_materials rm ON rm.id = fi.raw_material_id
+          `${formulaInputSelect(supportsConsumptionBasis)}
            WHERE fi.formula_id = $1
            ORDER BY fi.id`,
           [formula.id]
@@ -35,11 +72,16 @@ const getAll = async (req, res, next) => {
 // ─── GET ONE FORMULA ──────────────────────────────────────────────────────────
 const getOne = async (req, res, next) => {
   try {
+    const supportsActive = await hasColumn('formulas', 'is_active');
+    const supportsConsumptionBasis = await hasColumn('formula_inputs', 'consumption_basis');
+    const supportsInnerBoxPerPair = await hasColumn('finished_goods', 'inner_box_per_pair');
+    const supportsInnerBoxesPerOuterBox = await hasColumn('finished_goods', 'inner_boxes_per_outer_box');
     const formulaRes = await query(
-      `SELECT f.*, fg.name AS finished_good_name, fg.article_code, fg.sole_code, fg.color
+      `SELECT f.*, fg.name AS finished_good_name, fg.article_code, fg.sole_code, fg.color,
+              ${formulaPackagingSelect(supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox)}
        FROM formulas f
        JOIN finished_goods fg ON fg.id = f.finished_good_id
-       WHERE f.id = $1`,
+       WHERE f.id = $1 ${supportsActive ? 'AND f.is_active = TRUE' : ''}`,
       [req.params.id]
     );
 
@@ -48,9 +90,7 @@ const getOne = async (req, res, next) => {
     }
 
     const inputs = await query(
-      `SELECT fi.*, rm.name AS material_name, rm.article_code, rm.color, rm.unit, rm.category
-       FROM formula_inputs fi
-       JOIN raw_materials rm ON rm.id = fi.raw_material_id
+      `${formulaInputSelect(supportsConsumptionBasis)}
        WHERE fi.formula_id = $1`,
       [req.params.id]
     );
@@ -59,6 +99,149 @@ const getOne = async (req, res, next) => {
       success: true,
       data: { ...formulaRes.rows[0], inputs: inputs.rows },
     });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const update = async (req, res, next) => {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    const { name, finished_good_id, output_qty = 1, notes, inputs = [] } = req.body;
+
+    if (!inputs.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'At least one formula input is required' });
+    }
+
+    const formulaRes = await client.query('SELECT id FROM formulas WHERE id = $1', [req.params.id]);
+    if (formulaRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Formula not found' });
+    }
+
+    const finishedGoodRes = await client.query(
+      `SELECT id, name, article_code, sole_code, color
+       FROM finished_goods
+       WHERE id = $1`,
+      [finished_good_id]
+    );
+
+    if (finishedGoodRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Finished good not found' });
+    }
+
+    const finishedGood = finishedGoodRes.rows[0];
+    const materialIds = [...new Set(inputs.map((item) => Number(item.raw_material_id)).filter(Boolean))];
+
+    if (!materialIds.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Formula inputs must include valid raw materials' });
+    }
+
+    const materialsRes = await client.query(
+      `SELECT id, article_code, color, category
+       FROM raw_materials
+       WHERE id = ANY($1::int[])`,
+      [materialIds]
+    );
+
+    const materials = materialsRes.rows;
+    const { hasUpper, hasSoleInput } = hasRequiredShoeMaterials(materials, finishedGood);
+
+    if (!hasUpper || !hasSoleInput) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Formula must include the matching Upper and at least one sole-making input such as Sole, Sole Powder, Sole Foam, or TPR',
+      });
+    }
+
+    const result = await client.query(
+      `UPDATE formulas
+       SET name = $1, finished_good_id = $2, output_qty = $3, notes = $4
+       WHERE id = $5
+       RETURNING *`,
+      [name, finished_good_id, output_qty, notes || null, req.params.id]
+    );
+
+    const supportsConsumptionBasis = await hasColumn('formula_inputs', 'consumption_basis');
+
+    await client.query('DELETE FROM formula_inputs WHERE formula_id = $1', [req.params.id]);
+
+    for (const inp of inputs) {
+      if (supportsConsumptionBasis) {
+        await client.query(
+          `INSERT INTO formula_inputs (formula_id, raw_material_id, quantity_needed, use_color_from_production, consumption_basis)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [
+            req.params.id,
+            inp.raw_material_id,
+            inp.quantity_needed,
+            inp.use_color_from_production || false,
+            inp.consumption_basis || 'PER_PAIR',
+          ]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO formula_inputs (formula_id, raw_material_id, quantity_needed, use_color_from_production)
+           VALUES ($1,$2,$3,$4)`,
+          [req.params.id, inp.raw_material_id, inp.quantity_needed, inp.use_color_from_production || false]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+
+    await auditLog({
+      userId: req.user.id,
+      action: 'UPDATED',
+      tableName: 'formulas',
+      recordId: result.rows[0].id,
+      detail: `Updated formula: ${result.rows[0].name}`,
+    });
+
+    return res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+const deactivate = async (req, res, next) => {
+  try {
+    const supportsActive = await hasColumn('formulas', 'is_active');
+
+    if (!supportsActive) {
+      return res.status(400).json({
+        success: false,
+        message: 'Formula archive is not enabled in the database yet. Run sql/add-soft-delete-and-visibility.sql first.',
+      });
+    }
+
+    const result = await query(
+      'UPDATE formulas SET is_active = FALSE WHERE id = $1 RETURNING id, name',
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Formula not found' });
+    }
+
+    await auditLog({
+      userId: req.user.id,
+      action: 'ARCHIVED',
+      tableName: 'formulas',
+      recordId: result.rows[0].id,
+      detail: `Archived formula: ${result.rows[0].name}`,
+    });
+
+    return res.json({ success: true, message: 'Formula archived' });
   } catch (err) {
     next(err);
   }
@@ -119,23 +302,13 @@ const create = async (req, res, next) => {
     );
 
     const materials = materialsRes.rows;
-    const hasUpper = materials.some(
-      (item) =>
-        item.category === 'Upper' &&
-        item.article_code === finishedGood.article_code &&
-        (!finishedGood.color || item.color === finishedGood.color)
-    );
-    const hasSole = materials.some(
-      (item) =>
-        item.category === 'Sole' &&
-        item.article_code === finishedGood.sole_code
-    );
+    const { hasUpper, hasSoleInput } = hasRequiredShoeMaterials(materials, finishedGood);
 
-    if (!hasUpper || !hasSole) {
+    if (!hasUpper || !hasSoleInput) {
       await client.query('ROLLBACK');
       return res.status(400).json({
         success: false,
-        message: 'Formula must include both the matching Upper and Sole for the selected finished good',
+        message: 'Formula must include the matching Upper and at least one sole-making input such as Sole, Sole Powder, Sole Foam, or TPR',
       });
     }
 
@@ -146,12 +319,28 @@ const create = async (req, res, next) => {
     );
     const formula = formulaRes.rows[0];
 
+    const supportsConsumptionBasis = await hasColumn('formula_inputs', 'consumption_basis');
+
     for (const inp of inputs) {
-      await client.query(
-        `INSERT INTO formula_inputs (formula_id, raw_material_id, quantity_needed, use_color_from_production)
-         VALUES ($1,$2,$3,$4)`,
-        [formula.id, inp.raw_material_id, inp.quantity_needed, inp.use_color_from_production || false]
-      );
+      if (supportsConsumptionBasis) {
+        await client.query(
+          `INSERT INTO formula_inputs (formula_id, raw_material_id, quantity_needed, use_color_from_production, consumption_basis)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [
+            formula.id,
+            inp.raw_material_id,
+            inp.quantity_needed,
+            inp.use_color_from_production || false,
+            inp.consumption_basis || 'PER_PAIR',
+          ]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO formula_inputs (formula_id, raw_material_id, quantity_needed, use_color_from_production)
+           VALUES ($1,$2,$3,$4)`,
+          [formula.id, inp.raw_material_id, inp.quantity_needed, inp.use_color_from_production || false]
+        );
+      }
     }
 
     await client.query('COMMIT');
@@ -210,4 +399,4 @@ const remove = async (req, res, next) => {
   }
 };
 
-module.exports = { getAll, getOne, create, remove };
+module.exports = { getAll, getOne, create, update, deactivate, remove };

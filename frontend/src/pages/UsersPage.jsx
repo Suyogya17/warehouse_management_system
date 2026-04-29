@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Button from "../components/Button";
 import DataTable from "../components/DataTable";
 import { Field, SelectInput, TextInput } from "../components/Field";
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
+import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
 
 const initialForm = {
@@ -15,29 +17,71 @@ const initialForm = {
 };
 
 export default function UsersPage() {
-  const { token } = useAuth();
+  const { token, user: currentUser } = useAuth();
+  const { showToast } = useToast();
   const [users, setUsers] = useState([]);
   const [form, setForm] = useState(initialForm);
-  const [message, setMessage] = useState("");
+  const [editingId, setEditingId] = useState(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const result = await api.getUsers(token);
     setUsers(result.data || []);
-  };
+  }, [token]);
 
   useEffect(() => {
     load().catch(console.error);
-  }, [token]);
+  }, [load]);
+
+  useDataRefresh(load, "users");
 
   const submit = async (event) => {
     event.preventDefault();
     try {
-      await api.registerUser(form, token);
-      setMessage("User created and list updated immediately.");
+      const payload = {
+        ...form,
+        password: form.password || undefined,
+      };
+
+      if (editingId) {
+        await api.updateUser(editingId, payload, token);
+        showToast({ tone: "success", title: "User updated", message: "The users list was refreshed." });
+      } else {
+        await api.registerUser(form, token);
+        showToast({ tone: "success", title: "User created", message: "The users list was refreshed." });
+      }
+
       setForm(initialForm);
+      setEditingId(null);
       await load();
+      announceDataRefresh("users");
     } catch (error) {
-      setMessage(error.message);
+      showToast({ tone: "error", title: "User action failed", message: error.message });
+    }
+  };
+
+  const startEdit = (row) => {
+    setEditingId(row.id);
+    setForm({
+      name: row.name || "",
+      email: row.email || "",
+      password: "",
+      role: row.role || "USER",
+    });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setForm(initialForm);
+  };
+
+  const remove = async (id) => {
+    try {
+      await api.deleteUser(id, token);
+      await load();
+      announceDataRefresh("users");
+      showToast({ tone: "success", title: "User deleted", message: "The users list was refreshed." });
+    } catch (error) {
+      showToast({ tone: "error", title: "Delete failed", message: error.message });
     }
   };
 
@@ -50,7 +94,11 @@ export default function UsersPage() {
         icon="users"
       />
 
-      <SectionCard title="Create users" subtitle="Admin can register admin, store keeper, or user accounts." icon="users">
+      <SectionCard
+        title={editingId ? "Edit user" : "Create users"}
+        subtitle={editingId ? "Update account details. Leave password blank to keep the current password." : "Admin can register admin, store keeper, or user accounts."}
+        icon="users"
+      >
         <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" onSubmit={submit}>
           {[
             ["name", "Name"],
@@ -62,7 +110,7 @@ export default function UsersPage() {
                 type={type}
                 value={form[key]}
                 onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))}
-                required
+                required={key !== "password" || !editingId}
               />
             </Field>
           ))}
@@ -78,9 +126,13 @@ export default function UsersPage() {
           </Field>
           <div className="md:col-span-2 xl:col-span-4 flex items-center gap-3">
             <Button type="submit" icon="plus">
-              Create account
+              {editingId ? "Save changes" : "Create account"}
             </Button>
-            {message ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</p> : null}
+            {editingId ? (
+              <Button type="button" variant="secondary" onClick={cancelEdit}>
+                Cancel
+              </Button>
+            ) : null}
           </div>
         </form>
       </SectionCard>
@@ -92,6 +144,27 @@ export default function UsersPage() {
             { key: "email", label: "Email" },
             { key: "role", label: "Role" },
             { key: "created_at", label: "Created", type: "date" },
+            {
+              key: "actions",
+              label: "Actions",
+              render: (row) => (
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" size="sm" variant="secondary" icon="edit" onClick={() => startEdit(row)}>
+                    Edit
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="danger"
+                    icon="delete"
+                    disabled={Number(row.id) === Number(currentUser?.id)}
+                    onClick={() => remove(row.id)}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              ),
+            },
           ]}
           rows={users}
         />
