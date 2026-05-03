@@ -424,7 +424,7 @@ export default function FinishedGoodsUserPage() {
     <div className="space-y-6">
       
       {/* HEADER + FILTER BUTTON */}
-      <div className="flex items-center justify-between">
+      <div >
         <PageHeader
           eyebrow="Catalog"
           title="Available finished goods"

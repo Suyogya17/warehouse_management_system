@@ -1,64 +1,95 @@
 import { formatDate } from "../utils/format";
 import EmptyState from "./EmptyState";
 
-export default function DataTable({ columns, rows, emptyTitle, emptyDescription }) {
+export default function DataTable({
+  columns,
+  rows,
+  emptyTitle,
+  emptyDescription,
+}) {
   if (!rows.length) {
-    return <EmptyState title={emptyTitle} description={emptyDescription} />;
+    return (
+      <EmptyState title={emptyTitle} description={emptyDescription} />
+    );
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-      <div className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs font-medium text-slate-500 sm:hidden">
-        Swipe horizontally to see every column, or use the card layout below for quick scanning.
+    <div className="w-full rounded-2xl border border-slate-200 bg-white shadow-sm">
+      
+      {/* Mobile hint */}
+      <div className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs text-slate-500 sm:hidden">
+        Tap cards to view details. Scroll for more data.
       </div>
+
+      {/* MOBILE CARD VIEW */}
       <div className="sm:hidden">
         <div className="divide-y divide-slate-100">
           {rows.map((row, index) => (
-            <article key={row.id || index} className="space-y-3 px-4 py-4">
-              {columns.map((column) => (
-                <div key={column.key} className="space-y-1">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                    {column.label}
-                  </p>
-                  <div className="text-sm text-slate-700">
-                    {column.render
-                      ? column.render(row)
-                      : column.type === "date"
-                        ? formatDate(row[column.key])
-                        : row[column.key] ?? "-"}
+            <div
+              key={row.id || index}
+              className="p-4 active:bg-slate-50 transition"
+            >
+              <div className="space-y-3">
+                {columns.map((col) => (
+                  <div key={col.key} className="flex justify-between gap-4">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                      {col.label}
+                    </span>
+
+                    <span className="text-sm text-slate-700 text-right break-words">
+                      {col.render
+                        ? col.render(row)
+                        : col.type === "date"
+                        ? formatDate(row[col.key])
+                        : row[col.key] ?? "-"}
+                    </span>
                   </div>
-                </div>
-              ))}
-            </article>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       </div>
-      <div className="hidden overflow-x-auto sm:block">
-        <table className="min-w-full divide-y divide-slate-200 text-sm">
-          <thead className="bg-slate-50/80">
+
+      {/* DESKTOP TABLE VIEW */}
+      <div className="hidden sm:block overflow-x-auto">
+        <table className="w-full text-sm">
+          
+          {/* Sticky Header */}
+          <thead className="sticky top-0 z-10 bg-slate-50 border-b border-slate-200">
             <tr>
-              {columns.map((column) => (
-                <th key={column.key} className="px-4 py-3.5 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                  {column.label}
+              {columns.map((col) => (
+                <th
+                  key={col.key}
+                  className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500"
+                >
+                  {col.label}
                 </th>
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100 bg-white">
+
+          <tbody className="divide-y divide-slate-100">
             {rows.map((row, index) => (
-              <tr key={row.id || index} className="align-top hover:bg-slate-50/60">
-                {columns.map((column) => (
-                  <td key={column.key} className="px-4 py-4 text-slate-700">
-                    {column.render
-                      ? column.render(row)
-                      : column.type === "date"
-                        ? formatDate(row[column.key])
-                        : row[column.key] ?? "-"}
+              <tr
+                key={row.id || index}
+                className="hover:bg-slate-50 transition"
+              >
+                {columns.map((col) => (
+                  <td key={col.key} className="px-5 py-4 text-slate-700">
+                    <div className="max-w-[220px] truncate">
+                      {col.render
+                        ? col.render(row)
+                        : col.type === "date"
+                        ? formatDate(row[col.key])
+                        : row[col.key] ?? "-"}
+                    </div>
                   </td>
                 ))}
               </tr>
             ))}
           </tbody>
+
         </table>
       </div>
     </div>

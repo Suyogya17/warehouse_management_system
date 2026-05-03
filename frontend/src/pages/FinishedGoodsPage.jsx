@@ -450,16 +450,18 @@ export default function FinishedGoodsPage() {
                   key: "actions",
                   label: "Actions",
                   render: (row) => (
-                    <div className="flex gap-2">
+                    <div className="flex justify-end gap-2">
                       <Button type="button" variant={row.is_visible ? "ghost" : "primary"} size="sm" icon={row.is_visible ? "eye" : "eyeOff"} onClick={() => toggleVisibility(row)}>
                         {/* {row.is_visible ? "Hide product" : "Display product"} */}
                       </Button>
-                      <Button type="button" variant="secondary" size="sm" icon="edit" onClick={() => startEdit(row)}>
+                      <div >
+                        <Button type="button" variant="secondary" size="sm" icon="edit" onClick={() => startEdit(row)}>
                         Edit
                       </Button>
                       <Button type="button" variant="danger" size="sm" icon="delete" onClick={() => remove(row.id)}>
                         Delete
                       </Button>
+                      </div>
                     </div>
                   ),
                 }
