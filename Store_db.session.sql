@@ -182,17 +182,19 @@ SELECT * FROM production_items;
 -- Index for fast lookups
 CREATE INDEX idx_user_product_perms ON user_product_permissions(user_id, finished_good_id);
 
-TRUNCATE TABLE 
-  production_items,
-  production,
-  formula_inputs,
-  formulas,
-  finished_goods,
-  stock,
-  consumption_logs,
-  raw_materials,
-  user_product_permissions,
-  audit_logs,
-  orders,
-  order_items
-RESTART IDENTITY CASCADE;
+-- TRUNCATE TABLE 
+--   production_items,
+--   production,
+--   formula_inputs,
+--   formulas,
+--   finished_goods,
+--   stock,
+--   consumption_logs,
+--   raw_materials,
+--   user_product_permissions,
+--   audit_logs,
+--   orders,
+--   order_items
+-- RESTART IDENTITY CASCADE;
+
+SELECT version();

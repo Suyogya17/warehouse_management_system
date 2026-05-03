@@ -217,78 +217,6 @@ export default function FinishedGoodsPage() {
         }
       />
 
-      <SectionCard
-        title="Finished goods"
-        subtitle={isAdmin ? "Admin can create, manage, and control user visibility for finished goods." : "Visible product catalog for users."}
-        icon="finishedGoods"
-      >
-        <DataTable
-          columns={[
-            {
-              key: "image_url",
-              label: "Image",
-              render: (row) =>
-                row.image_url ? (
-                  <img
-                    src={`${APP_BASE_URL}${row.image_url}`}
-                    alt={row.name}
-                    className="h-14 w-14 rounded-2xl object-cover"
-                  />
-                ) : (
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate/10 text-xs text-slate/50">
-                    No image
-                  </div>
-                ),
-            },
-            { key: "name", label: "Name" },
-            ...(isAdmin ? [{ key: "article_code", label: "Article Code" }] : []),
-            ...(isAdmin ? [{ key: "sole_code", label: "Sole Code" }] : []),
-            { key: "color", label: "Color" },
-            { key: "size", label: "Size" },
-            { key: "quantity", label: "Stock", render: (row) => `${formatNumber(row.quantity)} ${row.unit}` },
-            ...(isAdmin ? [{ key: "min_quantity", label: "Min Qty" }] : []),
-            ...(isAdmin
-              ? [{
-                  key: "packaging",
-                  label: "Packaging",
-                  render: (row) => `${formatNumber(row.inner_box_per_pair || 1)} inner/pair | ${row.inner_boxes_per_outer_box || "-"} inner/outer`,
-                }]
-              : []),
-            ...(isAdmin
-              ? [{
-                  key: "is_visible",
-                  label: "Visibility",
-                  render: (row) => (
-                    <StatusBadge tone={row.is_visible ? "success" : "neutral"}>
-                      {row.is_visible ? "Displayed" : "Hidden"}
-                    </StatusBadge>
-                  ),
-                }]
-              : []),
-            isAdmin
-              ? {
-                  key: "actions",
-                  label: "Actions",
-                  render: (row) => (
-                    <div className="flex gap-2">
-                      <Button type="button" variant={row.is_visible ? "ghost" : "primary"} size="sm" icon={row.is_visible ? "eye" : "eyeOff"} onClick={() => toggleVisibility(row)}>
-                        {/* {row.is_visible ? "Hide product" : "Display product"} */}
-                      </Button>
-                      <Button type="button" variant="secondary" size="sm" icon="edit" onClick={() => startEdit(row)}>
-                        Edit
-                      </Button>
-                      <Button type="button" variant="danger" size="sm" icon="delete" onClick={() => remove(row.id)}>
-                        Delete
-                      </Button>
-                    </div>
-                  ),
-                }
-              : { key: "empty", label: "" },
-          ]}
-          rows={items}
-        />
-      </SectionCard>
-
       {isAdmin ? (
         <SectionCard
           title={editingId ? "Update finished good" : "Add finished good"}
@@ -407,17 +335,23 @@ export default function FinishedGoodsPage() {
             </Field>
 
             <Field label="Minimum Quantity">
-              <TextInput
-                type="number"
-                value={form.min_quantity}
-                onChange={(event) => setForm((current) => ({ ...current, min_quantity: event.target.value }))}
-              />
-            </Field>
+  <TextInput
+    type="number"
+    min={0}
+    value={form.min_quantity}
+    onChange={(event) =>
+      setForm((current) => ({
+        ...current,
+        min_quantity: Math.max(0, Number(event.target.value)),
+      }))
+    }
+  />
+</Field>
             <Field label="Inner boxes per pair">
               <TextInput
                 type="number"
-                min="0"
-                step="0.01"
+                min={0}
+                step="1"
                 value={form.inner_box_per_pair}
                 onChange={(event) => setForm((current) => ({ ...current, inner_box_per_pair: event.target.value }))}
               />
@@ -425,7 +359,7 @@ export default function FinishedGoodsPage() {
             <Field label="Inner boxes per outer box">
               <TextInput
                 type="number"
-                min="1"
+                min={0}
                 step="1"
                 value={form.inner_boxes_per_outer_box}
                 onChange={(event) => setForm((current) => ({ ...current, inner_boxes_per_outer_box: event.target.value }))}
@@ -462,6 +396,78 @@ export default function FinishedGoodsPage() {
           </form>
         </SectionCard>
       ) : null}
+
+          <SectionCard
+        title="Finished goods"
+        subtitle={isAdmin ? "Admin can create, manage, and control user visibility for finished goods." : "Visible product catalog for users."}
+        icon="finishedGoods"
+      >
+        <DataTable
+          columns={[
+            {
+              key: "image_url",
+              label: "Image",
+              render: (row) =>
+                row.image_url ? (
+                  <img
+                    src={`${APP_BASE_URL}${row.image_url}`}
+                    alt={row.name}
+                    className="h-14 w-14 rounded-2xl object-cover"
+                  />
+                ) : (
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate/10 text-xs text-slate/50">
+                    No image
+                  </div>
+                ),
+            },
+            { key: "name", label: "Name" },
+            ...(isAdmin ? [{ key: "article_code", label: "Article Code" }] : []),
+            ...(isAdmin ? [{ key: "sole_code", label: "Sole Code" }] : []),
+            { key: "color", label: "Color" },
+            { key: "size", label: "Size" },
+            { key: "quantity", label: "Stock", render: (row) => `${formatNumber(row.quantity)} ${row.unit}` },
+            ...(isAdmin ? [{ key: "min_quantity", label: "Min Qty" }] : []),
+            ...(isAdmin
+              ? [{
+                  key: "packaging",
+                  label: "Packaging",
+                  render: (row) => `${formatNumber(row.inner_box_per_pair || 1)} inner/pair | ${row.inner_boxes_per_outer_box || "-"} inner/outer`,
+                }]
+              : []),
+            ...(isAdmin
+              ? [{
+                  key: "is_visible",
+                  label: "Visibility",
+                  render: (row) => (
+                    <StatusBadge tone={row.is_visible ? "success" : "neutral"}>
+                      {row.is_visible ? "Displayed" : "Hidden"}
+                    </StatusBadge>
+                  ),
+                }]
+              : []),
+            isAdmin
+              ? {
+                  key: "actions",
+                  label: "Actions",
+                  render: (row) => (
+                    <div className="flex gap-2">
+                      <Button type="button" variant={row.is_visible ? "ghost" : "primary"} size="sm" icon={row.is_visible ? "eye" : "eyeOff"} onClick={() => toggleVisibility(row)}>
+                        {/* {row.is_visible ? "Hide product" : "Display product"} */}
+                      </Button>
+                      <Button type="button" variant="secondary" size="sm" icon="edit" onClick={() => startEdit(row)}>
+                        Edit
+                      </Button>
+                      <Button type="button" variant="danger" size="sm" icon="delete" onClick={() => remove(row.id)}>
+                        Delete
+                      </Button>
+                    </div>
+                  ),
+                }
+              : { key: "empty", label: "" },
+          ]}
+          rows={items}
+        />
+      </SectionCard>
     </div>
   );
 }

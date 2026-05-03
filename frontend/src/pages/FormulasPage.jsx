@@ -407,8 +407,8 @@ export default function FormulasPage() {
                 </SelectInput>
                 <TextInput
                   type="number"
-                  min="0.01"
-                  step="0.01"
+                  min={0}
+                  step="1"
                   value={input.quantity_needed}
                   onChange={(event) => updateInput(index, "quantity_needed", event.target.value)}
                   placeholder="Qty needed"

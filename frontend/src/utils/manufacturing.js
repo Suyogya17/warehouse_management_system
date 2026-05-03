@@ -61,7 +61,7 @@ export const manufacturingFlowByRole = {
   ADMIN: [
     {
       title: "Register raw materials",
-      route: "/raw-materials",
+      route: "/raw-materials/add",
       description: "Create uppers, soles, powder, foam, packaging, and optional trims.",
       getProgress: ({ materialsCount }) => (materialsCount > 0 ? 100 : 20),
     },

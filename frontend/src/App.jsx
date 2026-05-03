@@ -51,7 +51,7 @@ export default function App() {
               <RawMaterialsPage />
             </ProtectedRoute>
           }
-        />
+        />        
 
         <Route
           path="finished-goods"
