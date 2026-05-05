@@ -13,4 +13,7 @@ router.get('/batches/:raw_material_id', ctrl.getBatchesForMaterial);
 // POST /api/stock/receive                    - receive new stock (purchase/delivery)
 router.post('/receive', authorize('ADMIN', 'STORE_KEEPER'), ctrl.receiveStock);
 
-module.exports = router;
+router.put('/batch/:id', authorize('ADMIN', 'STORE_KEEPER'), ctrl.updateStockBatch);
+router.delete('/batch/:id', authorize('ADMIN', 'STORE_KEEPER'), ctrl.deleteStockBatch);
+
+module.exports = router;    

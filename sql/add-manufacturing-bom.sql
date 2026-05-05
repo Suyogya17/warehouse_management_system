@@ -1,38 +1,44 @@
-ALTER TABLE raw_materials
-DROP CONSTRAINT IF EXISTS raw_materials_category_check;
+-- -- NOTE: MySQL does NOT support DROP CONSTRAINT IF EXISTS like PostgreSQL
+-- -- So we skip dropping checks safely
 
-ALTER TABLE raw_materials
-ADD CONSTRAINT raw_materials_category_check
-CHECK (
-  category IN (
-    'Upper',
-    'Sole',
-    'Sole Powder',
-    'Sole Foam',
-    'TPR',
-    'Lace',
-    'Inner Box',
-    'Outer Box',
-    'Chemical',
-    'Insole',
-    'Adhesive',
-    'Thread',
-    'Toe Box',
-    'Packing',
-    'Other'
-  )
-);
+-- -- raw_materials category constraint (MySQL-safe approach)
+-- -- (MySQL may ignore CHECK depending on version, so treat as documentation-level validation)
 
-ALTER TABLE finished_goods
-ADD COLUMN IF NOT EXISTS inner_box_per_pair NUMERIC(10,2) NOT NULL DEFAULT 1,
-ADD COLUMN IF NOT EXISTS inner_boxes_per_outer_box NUMERIC(10,2);
+-- ALTER TABLE raw_materials
+-- ADD CONSTRAINT raw_materials_category_check
+-- CHECK (
+--   category IN (
+--     'Upper',
+--     'Sole',
+--     'Sole Powder',
+--     'Sole Foam',
+--     'TPR',
+--     'Lace',
+--     'Inner Box',
+--     'Outer Box',
+--     'Chemical',
+--     'Insole',
+--     'Adhesive',
+--     'Thread',
+--     'Toe Box',
+--     'Packing',
+--     'Other'
+--   )
+-- );
 
-ALTER TABLE formula_inputs
-ADD COLUMN IF NOT EXISTS consumption_basis VARCHAR(30) NOT NULL DEFAULT 'PER_PAIR';
+-- -- finished_goods columns (run only once)
+-- ALTER TABLE finished_goods
+-- ADD COLUMN inner_box_per_pair DECIMAL(10,2) NOT NULL DEFAULT 1,
+-- ADD COLUMN inner_boxes_per_outer_box DECIMAL(10,2);
 
-ALTER TABLE formula_inputs
-DROP CONSTRAINT IF EXISTS formula_inputs_consumption_basis_check;
+-- -- formula_inputs column
+-- ALTER TABLE formula_inputs
+-- ADD COLUMN consumption_basis VARCHAR(30) NOT NULL DEFAULT 'PER_PAIR';
 
-ALTER TABLE formula_inputs
-ADD CONSTRAINT formula_inputs_consumption_basis_check
-CHECK (consumption_basis IN ('PER_PAIR', 'PER_OUTER_BOX'));
+-- -- MySQL does NOT support DROP CONSTRAINT IF EXISTS safely
+-- -- So we skip it or handle manually if needed
+
+-- -- consumption_basis validation (MySQL CHECK - optional support)
+-- ALTER TABLE formula_inputs
+-- ADD CONSTRAINT formula_inputs_consumption_basis_check
+-- CHECK (consumption_basis IN ('PER_PAIR', 'PER_OUTER_BOX'));

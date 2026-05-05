@@ -37,7 +37,7 @@ const logConsumption = async (req, res, next) => {
 
     // Check material + current stock
     const matRes = await client.query(
-      'SELECT id, name, article_code, quantity FROM raw_materials WHERE id=$1',
+      'SELECT id, name, article_code, quantity FROM raw_materials WHERE id=?',
       [raw_material_id]
     );
     if (matRes.rows.length === 0) {
@@ -59,26 +59,27 @@ const logConsumption = async (req, res, next) => {
     // 1. Log the consumption
     const logRes = await client.query(
       `INSERT INTO consumption_logs (raw_material_id, qty_used, reason, logged_by)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
+       VALUES (?,?,?,?)`,
       [raw_material_id, qty_used, reason || null, req.user.id]
     );
+    const logId = logRes.insertId;
 
     // 2. Deduct from raw_materials (simple — not FIFO, as this is manual)
     const newQty = prevQty - parseFloat(qty_used);
-    await client.query('UPDATE raw_materials SET quantity=$1 WHERE id=$2', [newQty, raw_material_id]);
+    await client.query('UPDATE raw_materials SET quantity=? WHERE id=?', [newQty, raw_material_id]);
 
     await client.query('COMMIT');
 
     await auditLog({
       userId: req.user.id, action: 'CONSUMPTION', tableName: 'consumption_logs',
-      recordId: logRes.rows[0].id,
+      recordId: logId,
       detail: `${mat.name} (${mat.article_code}): -${qty_used} [${reason}]. ${prevQty} → ${newQty}`,
     });
 
     return res.status(201).json({
       success: true,
       message: `Consumption logged. ${mat.name}: ${prevQty} → ${newQty}`,
-      data: logRes.rows[0],
+      data: { id: logId, raw_material_id, qty_used, reason: reason || null, logged_by: req.user.id },
     });
   } catch (err) {
     await client.query('ROLLBACK');

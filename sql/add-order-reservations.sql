@@ -1,21 +1,23 @@
-CREATE TABLE IF NOT EXISTS orders (
-  id SERIAL PRIMARY KEY,
-  customer_name VARCHAR(150) NOT NULL,
-  customer_phone VARCHAR(50),
-  status VARCHAR(30) NOT NULL DEFAULT 'PENDING'
-    CHECK (status IN ('PENDING', 'CONFIRMED', 'PACKED', 'DELIVERED', 'CANCELLED')),
-  notes TEXT,
-  created_by INT REFERENCES users(id) ON DELETE SET NULL,
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
-);
+-- CREATE TABLE orders (
+--   id INT AUTO_INCREMENT PRIMARY KEY,
+--   customer_name VARCHAR(150) NOT NULL,
+--   customer_phone VARCHAR(50),
+--   status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+--   notes TEXT,
+--   created_by INT,
+--   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+--   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+-- );
 
-CREATE TABLE IF NOT EXISTS order_items (
-  id SERIAL PRIMARY KEY,
-  order_id INT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-  finished_good_id INT NOT NULL REFERENCES finished_goods(id),
-  qty_ordered NUMERIC(10,2) NOT NULL CHECK (qty_ordered > 0)
-);
+-- CREATE TABLE order_items (
+--   id INT AUTO_INCREMENT PRIMARY KEY,
+--   order_id INT NOT NULL,
+--   finished_good_id INT NOT NULL,
+--   qty_ordered DECIMAL(10,2) NOT NULL,
+--   FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+--   FOREIGN KEY (finished_good_id) REFERENCES finished_goods(id)
+-- );
 
-CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-CREATE INDEX IF NOT EXISTS idx_order_items_finished_good ON order_items(finished_good_id);
+-- CREATE INDEX idx_orders_status ON orders(status);
+-- CREATE INDEX idx_order_items_finished_good ON order_items(finished_good_id);

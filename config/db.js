@@ -1,37 +1,40 @@
-// const { Pool } = require("pg");
+require("dotenv").config();
+const mysql = require("mysql2/promise");
 
-// const pool = new Pool({
-//   user: "postgres",
-//   host: "localhost",
-//   database: "store_db",
-//   password: "0305",
-//   port: 5432,
-// });
-
-// module.exports = pool;
-require('dotenv').config();
-const { Pool } = require('pg');
-require('dotenv').config();
-
-const pool = new Pool({
-  host:     process.env.DB_HOST     || 'localhost',
-  port:     parseInt(process.env.DB_PORT) || 5432,
-  database: process.env.DB_NAME     || 'store_db',
-  user:     process.env.DB_USER     || 'postgres',
-  password: process.env.DB_PASSWORD || '0305',
-  max: 20,                 // max pool connections
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+const pool = mysql.createPool({
+  host: process.env.DB_HOST || "localhost",
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
 });
 
-pool.on('error', (err) => {
-  console.error('Unexpected DB pool error:', err);
-});
+const normalizeResult = (result) => {
+  if (Array.isArray(result)) {
+    result.rows = result;
+    return result;
+  }
 
-// Helper: run a query
-const query = (text, params) => pool.query(text, params);
+  result.rows = [];
+  return result;
+};
 
-// Helper: get a client for transactions
-const getClient = () => pool.connect();
+const query = async (sql, params = []) => {
+  const [result] = await pool.query(sql, params);
+  return normalizeResult(result);
+};
+
+const getClient = async () => {
+  const connection = await pool.getConnection();
+  return {
+    query: async (sql, params = []) => {
+      const [result] = await connection.query(sql, params);
+      return normalizeResult(result);
+    },
+    release: () => connection.release(),
+  };
+};
 
 module.exports = { query, getClient, pool };

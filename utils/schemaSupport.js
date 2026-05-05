@@ -11,12 +11,12 @@ const hasColumn = async (tableName, columnName) => {
   const result = await query(
     `SELECT 1
      FROM information_schema.columns
-     WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+     WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
      LIMIT 1`,
     [tableName, columnName]
   );
 
-  const exists = result.rows.length > 0;
+  const exists = result.length > 0;
   cache.set(key, exists);
   return exists;
 };

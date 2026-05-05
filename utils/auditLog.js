@@ -15,7 +15,7 @@ const auditLog = async ({ userId = null, action, tableName, recordId = null, det
   try {
     await query(
       `INSERT INTO audit_logs (user_id, action, table_name, record_id, detail)
-       VALUES ($1, $2, $3, $4, $5)`,
+       VALUES (?, ?, ?, ?, ?)`,
       [userId, action, tableName, recordId, detail]
     );
   } catch (err) {

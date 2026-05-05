@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000/api";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "https://back.nepchawarehouse.com/api";
 export const APP_BASE_URL = API_BASE_URL.replace(/\/api$/, "");
 
 const buildHeaders = (token, isJson = true) => {
@@ -93,4 +93,18 @@ export const api = {
     apiRequest("/orders", { method: "POST", body: JSON.stringify(payload) }, token),
   updateOrderStatus: (id, payload, token) =>
     apiRequest(`/orders/${id}/status`, { method: "PUT", body: JSON.stringify(payload) }, token),
+updateStockBatch: (id, data, token) =>
+  request(`/stock/batch/${id}`, {
+    method: "PUT",
+    body: data,
+    token,
+  }),
+
+deleteStockBatch: (id, token) =>
+  request(`/stock/batch/${id}`, {
+    method: "DELETE",
+    token,
+  }),
+
 };
+ 

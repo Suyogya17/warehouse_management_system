@@ -13,8 +13,8 @@ const formulaInputSelect = (supportsConsumptionBasis) => `
 `;
 
 const formulaPackagingSelect = (supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox) => `
-  ${supportsInnerBoxPerPair ? 'fg.inner_box_per_pair' : '1::NUMERIC AS inner_box_per_pair'},
-  ${supportsInnerBoxesPerOuterBox ? 'fg.inner_boxes_per_outer_box' : 'NULL::NUMERIC AS inner_boxes_per_outer_box'}
+  ${supportsInnerBoxPerPair ? 'fg.inner_box_per_pair' : 'CAST(1 AS DECIMAL(10,2)) AS inner_box_per_pair'},
+  ${supportsInnerBoxesPerOuterBox ? 'fg.inner_boxes_per_outer_box' : 'CAST(NULL AS DECIMAL(10,2)) AS inner_boxes_per_outer_box'}
 `;
 
 const hasRequiredShoeMaterials = (materials, finishedGood) => {
@@ -46,7 +46,7 @@ const getAll = async (req, res, next) => {
               ${formulaPackagingSelect(supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox)}
        FROM formulas f
        JOIN finished_goods fg ON fg.id = f.finished_good_id
-       ${supportsActive ? 'WHERE f.is_active = TRUE' : ''}
+       ${supportsActive ? 'WHERE f.is_active = 1' : ''}
        ORDER BY f.id`
     );
 
@@ -55,7 +55,7 @@ const getAll = async (req, res, next) => {
       formulas.rows.map(async (formula) => {
         const inputs = await query(
           `${formulaInputSelect(supportsConsumptionBasis)}
-           WHERE fi.formula_id = $1
+           WHERE fi.formula_id = ?
            ORDER BY fi.id`,
           [formula.id]
         );
@@ -81,7 +81,7 @@ const getOne = async (req, res, next) => {
               ${formulaPackagingSelect(supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox)}
        FROM formulas f
        JOIN finished_goods fg ON fg.id = f.finished_good_id
-       WHERE f.id = $1 ${supportsActive ? 'AND f.is_active = TRUE' : ''}`,
+       WHERE f.id = ? ${supportsActive ? 'AND f.is_active = 1' : ''}`,
       [req.params.id]
     );
 
@@ -91,7 +91,7 @@ const getOne = async (req, res, next) => {
 
     const inputs = await query(
       `${formulaInputSelect(supportsConsumptionBasis)}
-       WHERE fi.formula_id = $1`,
+       WHERE fi.formula_id = ?`,
       [req.params.id]
     );
 
@@ -116,7 +116,7 @@ const update = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'At least one formula input is required' });
     }
 
-    const formulaRes = await client.query('SELECT id FROM formulas WHERE id = $1', [req.params.id]);
+    const formulaRes = await client.query('SELECT id FROM formulas WHERE id = ?', [req.params.id]);
     if (formulaRes.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ success: false, message: 'Formula not found' });
@@ -125,7 +125,7 @@ const update = async (req, res, next) => {
     const finishedGoodRes = await client.query(
       `SELECT id, name, article_code, sole_code, color
        FROM finished_goods
-       WHERE id = $1`,
+       WHERE id = ?`,
       [finished_good_id]
     );
 
@@ -145,7 +145,7 @@ const update = async (req, res, next) => {
     const materialsRes = await client.query(
       `SELECT id, article_code, color, category
        FROM raw_materials
-       WHERE id = ANY($1::int[])`,
+       WHERE id IN (?)`,
       [materialIds]
     );
 
@@ -160,23 +160,23 @@ const update = async (req, res, next) => {
       });
     }
 
-    const result = await client.query(
+    await client.query(
       `UPDATE formulas
-       SET name = $1, finished_good_id = $2, output_qty = $3, notes = $4
-       WHERE id = $5
-       RETURNING *`,
+       SET name = ?, finished_good_id = ?, output_qty = ?, notes = ?
+       WHERE id = ?`,
       [name, finished_good_id, output_qty, notes || null, req.params.id]
     );
+    const result = await client.query('SELECT * FROM formulas WHERE id = ?', [req.params.id]);
 
     const supportsConsumptionBasis = await hasColumn('formula_inputs', 'consumption_basis');
 
-    await client.query('DELETE FROM formula_inputs WHERE formula_id = $1', [req.params.id]);
+    await client.query('DELETE FROM formula_inputs WHERE formula_id = ?', [req.params.id]);
 
     for (const inp of inputs) {
       if (supportsConsumptionBasis) {
         await client.query(
           `INSERT INTO formula_inputs (formula_id, raw_material_id, quantity_needed, use_color_from_production, consumption_basis)
-           VALUES ($1,$2,$3,$4,$5)`,
+           VALUES (?,?,?,?,?)`,
           [
             req.params.id,
             inp.raw_material_id,
@@ -188,7 +188,7 @@ const update = async (req, res, next) => {
       } else {
         await client.query(
           `INSERT INTO formula_inputs (formula_id, raw_material_id, quantity_needed, use_color_from_production)
-           VALUES ($1,$2,$3,$4)`,
+           VALUES (?,?,?,?)`,
           [req.params.id, inp.raw_material_id, inp.quantity_needed, inp.use_color_from_production || false]
         );
       }
@@ -224,10 +224,8 @@ const deactivate = async (req, res, next) => {
       });
     }
 
-    const result = await query(
-      'UPDATE formulas SET is_active = FALSE WHERE id = $1 RETURNING id, name',
-      [req.params.id]
-    );
+    await query('UPDATE formulas SET is_active = 0 WHERE id = ?', [req.params.id]);
+    const result = await query('SELECT id, name FROM formulas WHERE id = ?', [req.params.id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Formula not found' });
@@ -277,7 +275,7 @@ const create = async (req, res, next) => {
     const finishedGoodRes = await client.query(
       `SELECT id, name, article_code, sole_code, color
        FROM finished_goods
-       WHERE id = $1`,
+       WHERE id = ?`,
       [finished_good_id]
     );
 
@@ -297,7 +295,7 @@ const create = async (req, res, next) => {
     const materialsRes = await client.query(
       `SELECT id, name, article_code, color, category
        FROM raw_materials
-       WHERE id = ANY($1::int[])`,
+       WHERE id IN (?)`,
       [materialIds]
     );
 
@@ -314,10 +312,10 @@ const create = async (req, res, next) => {
 
     const formulaRes = await client.query(
       `INSERT INTO formulas (name, finished_good_id, output_qty, notes)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
+       VALUES (?,?,?,?)`,
       [name, finished_good_id, output_qty, notes || null]
     );
-    const formula = formulaRes.rows[0];
+    const formula = { id: formulaRes.insertId, name, finished_good_id, output_qty, notes: notes || null };
 
     const supportsConsumptionBasis = await hasColumn('formula_inputs', 'consumption_basis');
 
@@ -325,7 +323,7 @@ const create = async (req, res, next) => {
       if (supportsConsumptionBasis) {
         await client.query(
           `INSERT INTO formula_inputs (formula_id, raw_material_id, quantity_needed, use_color_from_production, consumption_basis)
-           VALUES ($1,$2,$3,$4,$5)`,
+           VALUES (?,?,?,?,?)`,
           [
             formula.id,
             inp.raw_material_id,
@@ -337,7 +335,7 @@ const create = async (req, res, next) => {
       } else {
         await client.query(
           `INSERT INTO formula_inputs (formula_id, raw_material_id, quantity_needed, use_color_from_production)
-           VALUES ($1,$2,$3,$4)`,
+           VALUES (?,?,?,?)`,
           [formula.id, inp.raw_material_id, inp.quantity_needed, inp.use_color_from_production || false]
         );
       }
@@ -363,7 +361,7 @@ const create = async (req, res, next) => {
 const remove = async (req, res, next) => {
   try {
     const usageCheck = await query(
-      'SELECT COUNT(*) FROM production WHERE formula_id = $1',
+      'SELECT COUNT(*) AS count FROM production WHERE formula_id = ?',
       [req.params.id]
     );
 
@@ -379,13 +377,14 @@ const remove = async (req, res, next) => {
       });
     }
 
-    const result = await query('DELETE FROM formulas WHERE id=$1 RETURNING id, name', [req.params.id]);
-    if (result.rows.length === 0) {
+    const existing = await query('SELECT id, name FROM formulas WHERE id=?', [req.params.id]);
+    if (existing.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Formula not found' });
     }
+    await query('DELETE FROM formulas WHERE id=?', [req.params.id]);
     await auditLog({
       userId: req.user.id, action: 'DELETED', tableName: 'formulas',
-      recordId: req.params.id, detail: `Deleted formula: ${result.rows[0].name}`,
+      recordId: req.params.id, detail: `Deleted formula: ${existing.rows[0].name}`,
     });
     return res.json({ success: true, message: 'Formula deleted' });
   } catch (err) {

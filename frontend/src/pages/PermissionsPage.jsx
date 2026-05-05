@@ -21,6 +21,16 @@ export default function PermissionsPage() {
   const [productSearch, setProductSearch] = useState("");
   const [showSelectedOnly, setShowSelectedOnly] = useState(false);
 
+  // PAGINATION STATES
+  const [assignProductsPage, setAssignProductsPage] = useState(1);
+  const [currentAccessPage, setCurrentAccessPage] = useState(1);
+  const [systemOverviewPage, setSystemOverviewPage] = useState(1);
+  const rowsPerPage = 10;
+
+  // FILTER STATES
+  const [currentAccessSearch, setCurrentAccessSearch] = useState("");
+  const [systemOverviewSearch, setSystemOverviewSearch] = useState("");
+
   // LOAD DATA
   const load = useCallback(async () => {
     const [usersRes, productsRes, permsRes] = await Promise.all([
@@ -86,6 +96,34 @@ export default function PermissionsPage() {
     (p) => p.user_id === Number(selectedUser)
   );
 
+  // FILTERED USER PERMISSIONS (CURRENT ACCESS)
+  const filteredUserPermissions = useMemo(() => {
+    return userPermissions.filter((p) => {
+      const matchSearch =
+        (p.product_name || "").toLowerCase().includes(currentAccessSearch.toLowerCase()) ||
+        (p.article_code || "").toLowerCase().includes(currentAccessSearch.toLowerCase()) ||
+        (p.sole_code || "").toLowerCase().includes(currentAccessSearch.toLowerCase()) ||
+        (p.color || "").toLowerCase().includes(currentAccessSearch.toLowerCase());
+
+      return matchSearch;
+    });
+  }, [userPermissions, currentAccessSearch]);
+
+  // FILTERED SYSTEM OVERVIEW
+  const filteredSystemOverview = useMemo(() => {
+    return permissions.filter((p) => {
+      const matchSearch =
+        (p.user_name || "").toLowerCase().includes(systemOverviewSearch.toLowerCase()) ||
+        (p.email || "").toLowerCase().includes(systemOverviewSearch.toLowerCase()) ||
+        (p.product_name || "").toLowerCase().includes(systemOverviewSearch.toLowerCase()) ||
+        (p.article_code || "").toLowerCase().includes(systemOverviewSearch.toLowerCase()) ||
+        (p.sole_code || "").toLowerCase().includes(systemOverviewSearch.toLowerCase()) ||
+        (p.color || "").toLowerCase().includes(systemOverviewSearch.toLowerCase());
+
+      return matchSearch;
+    });
+  }, [permissions, systemOverviewSearch]);
+
   // FILTERED PRODUCTS (SEARCH + SELECTED FILTER)
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
@@ -102,6 +140,62 @@ export default function PermissionsPage() {
       return matchSearch && matchSelected;
     });
   }, [products, productSearch, showSelectedOnly, selectedProducts]);
+
+  // PAGINATED ASSIGN PRODUCTS
+  const paginatedAssignProducts = useMemo(() => {
+    const startIndex = (assignProductsPage - 1) * rowsPerPage;
+    const endIndex = startIndex + rowsPerPage;
+    return filteredProducts.slice(startIndex, endIndex);
+  }, [filteredProducts, assignProductsPage]);
+
+  const totalAssignPages = Math.ceil(filteredProducts.length / rowsPerPage);
+
+  // PAGINATED CURRENT ACCESS
+  const paginatedCurrentAccess = useMemo(() => {
+    const startIndex = (currentAccessPage - 1) * rowsPerPage;
+    const endIndex = startIndex + rowsPerPage;
+    return filteredUserPermissions.slice(startIndex, endIndex);
+  }, [filteredUserPermissions, currentAccessPage]);
+
+  const totalCurrentAccessPages = Math.ceil(filteredUserPermissions.length / rowsPerPage);
+
+  // PAGINATED SYSTEM OVERVIEW
+  const paginatedSystemOverview = useMemo(() => {
+    const startIndex = (systemOverviewPage - 1) * rowsPerPage;
+    const endIndex = startIndex + rowsPerPage;
+    return filteredSystemOverview.slice(startIndex, endIndex);
+  }, [filteredSystemOverview, systemOverviewPage]);
+
+  const totalSystemOverviewPages = Math.ceil(filteredSystemOverview.length / rowsPerPage);
+
+  // PAGINATION COMPONENT
+  const Pagination = ({ currentPage, totalPages, onPageChange }) => {
+    if (totalPages <= 1) return null;
+
+    return (
+      <div className="flex items-center justify-between mt-4 px-2">
+        <div className="text-sm text-gray-500">
+          Page {currentPage} of {totalPages}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => onPageChange(currentPage - 1)}
+            disabled={currentPage === 1}
+            className="px-3 py-1 border rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+          >
+            Previous
+          </button>
+          <button
+            onClick={() => onPageChange(currentPage + 1)}
+            disabled={currentPage === totalPages}
+            className="px-3 py-1 border rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+          >
+            Next
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -187,7 +281,7 @@ export default function PermissionsPage() {
               </thead>
 
               <tbody>
-                {filteredProducts.map((p) => {
+                {paginatedAssignProducts.map((p) => {
                   const checked = selectedProducts.includes(p.id);
 
                   return (
@@ -247,6 +341,13 @@ export default function PermissionsPage() {
             </table>
           </div>
 
+          {/* PAGINATION */}
+          <Pagination
+            currentPage={assignProductsPage}
+            totalPages={totalAssignPages}
+            onPageChange={setAssignProductsPage}
+          />
+
           {/* ACTION BAR */}
           <div className="mt-4 flex items-center justify-between">
             <p className="text-sm text-gray-500">
@@ -273,62 +374,82 @@ export default function PermissionsPage() {
     {userPermissions.length === 0 ? (
       <p className="text-gray-500">No permissions yet.</p>
     ) : (
-      <div className="overflow-auto border rounded-xl">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="text-left p-3">Image</th>
-              <th className="text-left p-3">Article Name</th>
-              <th className="text-left p-3">Details</th>
-              <th className="text-left p-3">Stock</th>
-              <th className="text-right p-3">Action</th>
-            </tr>
-          </thead>
+      <>
+        {/* SEARCH FILTER */}
+        <div className="mb-4">
+          <input
+            type="text"
+            placeholder="Search product name, article, sole, or color..."
+            value={currentAccessSearch}
+            onChange={(e) => setCurrentAccessSearch(e.target.value)}
+            className="w-full border rounded px-3 py-2"
+          />
+        </div>
 
-          <tbody>
-            {userPermissions.map((p) => (
-              <tr key={p.id} className="border-t hover:bg-gray-50">
-                <td className="p-3">
-                        {p.image_url ? (
-                          <img
-                            src={`${APP_BASE_URL}${p.image_url}`}
-                            alt={p.name}
-                            className="w-12 h-12 object-cover rounded-lg border"
-                          />
-                        ) : (
-                          <div className="w-12 h-12 bg-gray-200 rounded-lg border flex items-center justify-center text-xl">
-                            📦
-                          </div>
-                        )}
-                      </td>
-                
-                <td className="p-3 font-medium">
-                {p.product_name}
-                </td>
-
-                <td className="p-3 text-gray-500">
-                  <div>Article: {p.article_code || "-"}</div>
-                  <div>Sole: {p.sole_code || "-"}</div>
-                  <div>Color/Size: {p.color || "-"} / {p.size || "-"}</div>
-                </td>
-
-                <td className="p-3 text-gray-500">
-                {p.quantity}
-                </td>
-
-                <td className="p-3 text-right">
-                  <button
-                    onClick={() => revoke(p.user_id, p.finished_good_id)}
-                    className="text-red-600 text-sm hover:underline"
-                  >
-                    Revoke
-                  </button>
-                </td>
+        <div className="overflow-auto border rounded-xl">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left p-3">Image</th>
+                <th className="text-left p-3">Article Name</th>
+                <th className="text-left p-3">Details</th>
+                <th className="text-left p-3">Stock</th>
+                <th className="text-right p-3">Action</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+
+            <tbody>
+              {paginatedCurrentAccess.map((p) => (
+                <tr key={p.id} className="border-t hover:bg-gray-50">
+                  <td className="p-3">
+                          {p.image_url ? (
+                            <img
+                              src={`${APP_BASE_URL}${p.image_url}`}
+                              alt={p.name}
+                              className="w-12 h-12 object-cover rounded-lg border"
+                            />
+                          ) : (
+                            <div className="w-12 h-12 bg-gray-200 rounded-lg border flex items-center justify-center text-xl">
+                              📦
+                            </div>
+                          )}
+                        </td>
+                  
+                  <td className="p-3 font-medium">
+                  {p.product_name}
+                  </td>
+
+                  <td className="p-3 text-gray-500">
+                    <div>Article: {p.article_code || "-"}</div>
+                    <div>Sole: {p.sole_code || "-"}</div>
+                    <div>Color/Size: {p.color || "-"} / {p.size || "-"}</div>
+                  </td>
+
+                  <td className="p-3 text-gray-500">
+                  {p.quantity}
+                  </td>
+
+                  <td className="p-3 text-right">
+                    <button
+                      onClick={() => revoke(p.user_id, p.finished_good_id)}
+                      className="text-red-600 text-sm hover:underline"
+                    >
+                      Revoke
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* PAGINATION */}
+        <Pagination
+          currentPage={currentAccessPage}
+          totalPages={totalCurrentAccessPages}
+          onPageChange={setCurrentAccessPage}
+        />
+      </>
     )}
   </SectionCard>
 )}
@@ -342,62 +463,82 @@ export default function PermissionsPage() {
   {permissions.length === 0 ? (
     <p className="text-gray-500">No permissions assigned yet.</p>
   ) : (
-    <div className="overflow-auto border rounded-xl">
-      <table className="w-full text-sm">
-        <thead className="bg-gray-50">
-          <tr>
-            <th className="text-left p-3">User</th>
-            <th className="text-left p-3">Email</th>
-            <th className="text-left p-3">Article Name</th>
-            <th className="text-left p-3">Details</th>
-            <th className="text-left p-3">Stock</th>
-            <th className="text-left p-3">Visible</th>
-            <th className="text-right p-3">Action</th>
-          </tr>
-        </thead>
+    <>
+      {/* SEARCH FILTER */}
+      <div className="mb-4">
+        <input
+          type="text"
+          placeholder="Search user, email, product name, article, sole, or color..."
+          value={systemOverviewSearch}
+          onChange={(e) => setSystemOverviewSearch(e.target.value)}
+          className="w-full border rounded px-3 py-2"
+        />
+      </div>
 
-        <tbody>
-          {permissions.map((p) => (
-            <tr key={p.id} className="border-t hover:bg-gray-50">
-              <td className="p-3 font-medium">
-                {p.user_name}
-              </td>
-
-              <td className="p-3 text-gray-500">
-                {p.email}
-              </td>
-
-              <td className="p-3">
-              {p.product_name}
-              </td>
-
-              <td className="p-3 text-gray-500">
-                <div>Article: {p.article_code || "-"}</div>
-                <div>Sole: {p.sole_code || "-"}</div>
-                <div>Color/Size: {p.color || "-"} / {p.size || "-"}</div>
-              </td>
-
-              <td className="p-3 text-gray-500">
-              {p.quantity}
-              </td>
-
-              <td className="p-3 text-gray-500">
-                {p.is_visible === false ? "Hidden" : "Visible"}
-              </td>
-
-              <td className="p-3 text-right">
-                <button
-                  onClick={() => revoke(p.user_id, p.finished_good_id)}
-                  className="text-red-600 text-sm hover:underline"
-                >
-                Revoke
-                </button>
-              </td>
+      <div className="overflow-auto border rounded-xl">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="text-left p-3">User</th>
+              <th className="text-left p-3">Email</th>
+              <th className="text-left p-3">Article Name</th>
+              <th className="text-left p-3">Details</th>
+              <th className="text-left p-3">Stock</th>
+              <th className="text-left p-3">Visible</th>
+              <th className="text-right p-3">Action</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+
+          <tbody>
+            {paginatedSystemOverview.map((p) => (
+              <tr key={p.id} className="border-t hover:bg-gray-50">
+                <td className="p-3 font-medium">
+                  {p.user_name}
+                </td>
+
+                <td className="p-3 text-gray-500">
+                  {p.email}
+                </td>
+
+                <td className="p-3">
+                {p.product_name}
+                </td>
+
+                <td className="p-3 text-gray-500">
+                  <div>Article: {p.article_code || "-"}</div>
+                  <div>Sole: {p.sole_code || "-"}</div>
+                  <div>Color/Size: {p.color || "-"} / {p.size || "-"}</div>
+                </td>
+
+                <td className="p-3 text-gray-500">
+                {p.quantity}
+                </td>
+
+                <td className="p-3 text-gray-500">
+                  {p.is_visible === false ? "Hidden" : "Visible"}
+                </td>
+
+                <td className="p-3 text-right">
+                  <button
+                    onClick={() => revoke(p.user_id, p.finished_good_id)}
+                    className="text-red-600 text-sm hover:underline"
+                  >
+                  Revoke
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* PAGINATION */}
+      <Pagination
+        currentPage={systemOverviewPage}
+        totalPages={totalSystemOverviewPages}
+        onPageChange={setSystemOverviewPage}
+      />
+    </>
   )}
 </SectionCard>
     </div>

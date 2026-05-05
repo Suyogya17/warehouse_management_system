@@ -1,63 +1,49 @@
 const jwt = require('jsonwebtoken');
 const { query } = require('../config/db');
 
-/**
- * Verifies JWT token on every protected route.
- * Attaches decoded user payload to req.user.
- */
-// const authenticate = (req, res, next) => {
-//   const authHeader = req.headers.authorization;
-
-//   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-//     return res.status(401).json({ success: false, message: 'No token provided' });
-//   }
-
-//   const token = authHeader.split(' ')[1];
-
-//   try {
-//     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-//     req.user = decoded;
-//     next();
-//   } catch (err) {
-//     return res.status(401).json({ success: false, message: 'Invalid or expired token' });
-//   }
-// };
 const authenticate = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, message: 'No token provided' });
+    return res.status(401).json({
+      success: false,
+      message: 'No token provided',
+    });
   }
 
   const token = authHeader.split(' ')[1];
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
     const result = await query(
-      'SELECT id, name, email, role FROM users WHERE id = $1',
+      'SELECT id, name, email, role FROM users WHERE id = ?',
       [decoded.id]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(401).json({ success: false, message: 'User no longer exists. Please log in again.' });
+    if (!result.length) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found',
+      });
     }
 
-    req.user = result.rows[0];
+    req.user = result[0];
     next();
   } catch (err) {
-    return res.status(401).json({ success: false, message: 'Invalid or expired token' });
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid token',
+    });
   }
 };
-/**
- * Role-based access guard.
- * Usage: authorize('ADMIN', 'STORE_KEEPER')
- */
+
 const authorize = (...roles) => {
   return (req, res, next) => {
     if (!req.user || !roles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
-        message: `Access denied. Required roles: ${roles.join(', ')}`,
+        message: 'Forbidden',
       });
     }
     next();

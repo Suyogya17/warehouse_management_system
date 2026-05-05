@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, useCallback } from "react";
 import { api } from "../services/api";
 
 const AuthContext = createContext(null);
@@ -24,7 +24,8 @@ export const AuthProvider = ({ children }) => {
     return () => window.removeEventListener("store-management:auth-expired", handleExpiredAuth);
   }, []);
 
-  const login = async (email, password, expectedRole) => {
+  // ✅ Wrap functions in useCallback to stabilize references
+  const login = useCallback(async (email, password, expectedRole) => {
     setLoading(true);
     try {
       const result = await api.login({ email, password });
@@ -36,20 +37,21 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     setAuth({ token: "", user: null });
     localStorage.removeItem(STORAGE_KEY);
-  };
+  }, []);
 
-  const refreshProfile = async () => {
+  const refreshProfile = useCallback(async () => {
     if (!auth.token) return null;
     const result = await api.getProfile(auth.token);
     setAuth((current) => ({ ...current, user: result.data }));
     return result.data;
-  };
+  }, [auth.token]);
 
+  // ✅ Now include all dependencies
   const value = useMemo(
     () => ({
       token: auth.token,
@@ -60,10 +62,17 @@ export const AuthProvider = ({ children }) => {
       logout,
       refreshProfile,
     }),
-    [auth, loading]
+    [auth.token, auth.user, loading, login, logout, refreshProfile]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
-export const useAuth = () => useContext(AuthContext);
+// ✅ Move useAuth to a separate export to ensure it's not conflicting
+export function useAuth() {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error("useAuth must be used within AuthProvider");
+  }
+  return context;
+}

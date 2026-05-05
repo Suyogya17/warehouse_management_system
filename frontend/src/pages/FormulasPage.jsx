@@ -60,6 +60,11 @@ const hasMatchingMaterialInput = (inputs, materials, { category, articleCode, co
 export default function FormulasPage() {
   const { token } = useAuth();
   const { showToast } = useToast();
+  const [search, setSearch] = useState("");
+const [filterFinishedGood, setFilterFinishedGood] = useState("");
+const [currentPage, setCurrentPage] = useState(1);
+
+const ITEMS_PER_PAGE = 10;
   const [materials, setMaterials] = useState([]);
   const [finishedGoods, setFinishedGoods] = useState([]);
   const [formulas, setFormulas] = useState([]);
@@ -265,14 +270,29 @@ export default function FormulasPage() {
     setForm(initialForm);
   };
 
+  const filteredFormulas = formulas.filter((formula) => {
+  const matchSearch =
+    !search ||
+    formula.name?.toLowerCase().includes(search.toLowerCase()) ||
+    formula.finished_good_name?.toLowerCase().includes(search.toLowerCase());
+
+  const matchFinishedGood =
+    !filterFinishedGood ||
+    String(formula.finished_good_id) === filterFinishedGood;
+
+  return matchSearch && matchFinishedGood;
+});
+
+const totalPages = Math.ceil(filteredFormulas.length / ITEMS_PER_PAGE) || 1;
+
+const paginatedFormulas = filteredFormulas.slice(
+  (currentPage - 1) * ITEMS_PER_PAGE,
+  currentPage * ITEMS_PER_PAGE
+);
+
+
   return (
     <div className="space-y-6">
-      {/* <PageHeader
-        eyebrow="Production setup"
-        title="Formulas"
-        description="Define repeatable recipes that map finished goods to the right upper, sole, and supporting materials."
-        icon="formulas"
-      /> */}
 
       <NextStepCard
         description={nextStep?.description || "A formula tells the system what materials to consume when production runs. For shoes, make sure the matching upper and sole are both included before saving."}
@@ -475,10 +495,17 @@ export default function FormulasPage() {
           </div>
         </form>
       </SectionCard>
-
-      <SectionCard title="Saved formulas" subtitle="Recipes currently available for production runs." icon="box">
+<div>
+   <SectionCard title="Saved formulas" subtitle="Recipes currently available for production runs." icon="box">
+        <input
+          type="text"
+          placeholder="Search by formula or finished good..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="flex justify-end border rounded-lg px-3 py-2 text-sm w-full max-w-xs mb-4"
+        />
         <div className="space-y-4">
-          {formulas.map((formula) => (
+          {paginatedFormulas.map((formula) => (
             <div key={formula.id} className="rounded-3xl border border-slate-200/80 bg-slate-50/50 p-5">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
@@ -510,7 +537,36 @@ export default function FormulasPage() {
             </div>
           ))}
         </div>
+        <div className="flex items-center justify-between mt-6">
+
+  <p className="text-sm text-slate-500">
+    Page {currentPage} of {totalPages}
+  </p>
+
+  <div className="flex gap-2">
+    <Button
+      type="button"
+      variant="secondary"
+      disabled={currentPage === 1}
+      onClick={() => setCurrentPage((p) => p - 1)}
+    >
+      Prev
+    </Button>
+
+    <Button
+      type="button"
+      variant="secondary"
+      disabled={currentPage === totalPages}
+      onClick={() => setCurrentPage((p) => p + 1)}
+    >
+      Next
+    </Button>
+  </div>
+
+</div>
       </SectionCard>
+</div>
+     
     </div>
   );
 }

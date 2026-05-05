@@ -237,6 +237,10 @@ function ProductCard({ variants }) {
   
   const isLowStock = selectedVariant.quantity < 10;
 
+  const cartons = selectedVariant.inner_boxes_per_outer_box
+  ? Math.floor(selectedVariant.quantity / selectedVariant.inner_boxes_per_outer_box)
+  : 0;
+
   return (
     <div className="group rounded-2xl border border-slate-200 bg-white hover:shadow-xl transition-all duration-300 overflow-hidden">
       
@@ -325,6 +329,14 @@ function ProductCard({ variants }) {
                 {formatNumber(selectedVariant.quantity)} {selectedVariant.unit}
               </p>
             </div>
+            {selectedVariant.inner_boxes_per_outer_box && (
+      <div className="text-right">
+        <p className="text-xs text-slate-400">Cartons</p>
+        <p className="text-sm font-semibold text-indigo-600">
+          {formatNumber(cartons)}
+        </p>
+      </div>
+    )}
             {/* {variants.length > 1 && (
               <div className="text-right">
                 <p className="text-xs text-slate-400">Total Stock</p>

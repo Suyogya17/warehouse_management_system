@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { formatDate } from "../utils/format";
 import EmptyState from "./EmptyState";
 
@@ -7,11 +8,21 @@ export default function DataTable({
   emptyTitle,
   emptyDescription,
 }) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const rowsPerPage = 10;
+
   if (!rows.length) {
     return (
       <EmptyState title={emptyTitle} description={emptyDescription} />
     );
   }
+
+  const totalPages = Math.ceil(rows.length / rowsPerPage);
+
+  const paginatedRows = rows.slice(
+    (currentPage - 1) * rowsPerPage,
+    currentPage * rowsPerPage
+  );
 
   return (
     <div className="w-full rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -24,7 +35,7 @@ export default function DataTable({
       {/* MOBILE CARD VIEW */}
       <div className="sm:hidden">
         <div className="divide-y divide-slate-100">
-          {rows.map((row, index) => (
+          {paginatedRows.map((row, index) => (
             <div
               key={row.id || index}
               className="p-4 active:bg-slate-50 transition"
@@ -70,7 +81,7 @@ export default function DataTable({
           </thead>
 
           <tbody className="divide-y divide-slate-100">
-            {rows.map((row, index) => (
+            {paginatedRows.map((row, index) => (
               <tr
                 key={row.id || index}
                 className="hover:bg-slate-50 transition"
@@ -92,6 +103,58 @@ export default function DataTable({
 
         </table>
       </div>
+
+      {/* PAGINATION */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-slate-200 bg-white">
+        
+        {/* Showing info */}
+        <div className="text-sm text-slate-500">
+          Showing{" "}
+          {(currentPage - 1) * rowsPerPage + 1}–
+          {Math.min(currentPage * rowsPerPage, rows.length)} of {rows.length}
+        </div>
+
+        {/* Controls */}
+        <div className="flex items-center gap-2">
+          
+          {/* Prev */}
+          <button
+            onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+            disabled={currentPage === 1}
+            className="px-3 py-1.5 rounded-lg border text-sm hover:bg-slate-100 disabled:opacity-50"
+          >
+            Prev
+          </button>
+
+          {/* Page Numbers */}
+          {[...Array(totalPages)].map((_, i) => (
+            <button
+              key={i}
+              onClick={() => setCurrentPage(i + 1)}
+              className={`px-3 py-1.5 rounded-lg text-sm ${
+                currentPage === i + 1
+                  ? "bg-slate-900 text-white"
+                  : "border hover:bg-slate-100"
+              }`}
+            >
+              {i + 1}
+            </button>
+          ))}
+
+          {/* Next */}
+          <button
+            onClick={() =>
+              setCurrentPage((p) => Math.min(p + 1, totalPages))
+            }
+            disabled={currentPage === totalPages}
+            className="px-3 py-1.5 rounded-lg border text-sm hover:bg-slate-100 disabled:opacity-50"
+          >
+            Next
+          </button>
+
+        </div>
+      </div>
+
     </div>
   );
 }

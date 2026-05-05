@@ -12,12 +12,11 @@ const grantAccess = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'user_id and finished_good_ids[] required' });
     }
 
-    // Insert permissions (ON CONFLICT DO NOTHING to avoid duplicates)
     for (const fg_id of finished_good_ids) {
       await query(
         `INSERT INTO user_product_permissions (user_id, finished_good_id, can_view)
-         VALUES ($1, $2, TRUE)
-         ON CONFLICT (user_id, finished_good_id) DO UPDATE SET can_view = TRUE`,
+         VALUES (?, ?, 1)
+         ON DUPLICATE KEY UPDATE can_view = 1`,
         [user_id, fg_id]
       );
     }
@@ -42,7 +41,7 @@ const revokeAccess = async (req, res, next) => {
     const { user_id, finished_good_id } = req.body;
 
     await query(
-      'DELETE FROM user_product_permissions WHERE user_id = $1 AND finished_good_id = $2',
+      'DELETE FROM user_product_permissions WHERE user_id = ? AND finished_good_id = ?',
       [user_id, finished_good_id]
     );
 
@@ -69,7 +68,7 @@ const getUserProducts = async (req, res, next) => {
       `SELECT fg.*
        FROM finished_goods fg
        JOIN user_product_permissions upp ON upp.finished_good_id = fg.id
-       WHERE upp.user_id = $1 AND upp.can_view = TRUE
+       WHERE upp.user_id = ? AND upp.can_view = 1
        ORDER BY fg.name`,
       [user_id]
     );
@@ -89,8 +88,8 @@ const getAllPermissions = async (req, res, next) => {
       `SELECT upp.*, u.name AS user_name, u.email,
               fg.name AS product_name, fg.article_code, fg.sole_code, fg.color,
               fg.size, fg.quantity, fg.min_quantity,
-              ${supportsImage ? 'fg.image_url' : 'NULL::VARCHAR AS image_url'},
-              ${supportsVisibility ? 'fg.is_visible' : 'TRUE::BOOLEAN AS is_visible'}
+              ${supportsImage ? 'fg.image_url' : 'CAST(NULL AS CHAR) AS image_url'},
+              ${supportsVisibility ? 'fg.is_visible' : '1 AS is_visible'}
        FROM user_product_permissions upp
        JOIN users u ON u.id = upp.user_id
        JOIN finished_goods fg ON fg.id = upp.finished_good_id

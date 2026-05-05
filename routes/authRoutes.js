@@ -5,7 +5,7 @@ const { query } = require('../config/db');
 
 const allowFirstUserOrAdmin = async (req, res, next) => {
   try {
-    const result = await query('SELECT COUNT(*) FROM users');
+    const result = await query('SELECT COUNT(*) AS count FROM users');
     if (Number(result.rows[0].count) === 0) {
       req.body.role = 'ADMIN';
       return register(req, res, next);

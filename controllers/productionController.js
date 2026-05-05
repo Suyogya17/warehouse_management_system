@@ -4,8 +4,8 @@ const { productionHistorySelect } = require('../utils/queryBuilders');
 const { hasColumn } = require('../utils/schemaSupport');
 
 const packagingSelect = (supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox) => `
-  ${supportsInnerBoxPerPair ? 'fg.inner_box_per_pair' : '1::NUMERIC AS inner_box_per_pair'},
-  ${supportsInnerBoxesPerOuterBox ? 'fg.inner_boxes_per_outer_box' : 'NULL::NUMERIC AS inner_boxes_per_outer_box'}
+  ${supportsInnerBoxPerPair ? 'fg.inner_box_per_pair' : 'CAST(1 AS DECIMAL(10,2)) AS inner_box_per_pair'},
+  ${supportsInnerBoxesPerOuterBox ? 'fg.inner_boxes_per_outer_box' : 'CAST(NULL AS DECIMAL(10,2)) AS inner_boxes_per_outer_box'}
 `;
 
 const inputSelect = (supportsConsumptionBasis) => `
@@ -70,7 +70,7 @@ const checkStock = async (req, res, next) => {
       `SELECT f.*, fg.id AS fg_id, fg.name AS fg_name, ${packagingSelect(supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox)}
        FROM formulas f
        JOIN finished_goods fg ON fg.id = f.finished_good_id
-       WHERE f.id=$1`,
+       WHERE f.id=?`,
       [formula_id]
     );
     if (formulaRes.rows.length === 0) {
@@ -82,7 +82,7 @@ const checkStock = async (req, res, next) => {
     // Load formula inputs
     const inputsRes = await query(
       `${inputSelect(supportsConsumptionBasis)}
-       WHERE fi.formula_id = $1`,
+       WHERE fi.formula_id = ?`,
       [formula_id]
     );
 
@@ -160,7 +160,7 @@ const runProduction = async (req, res, next) => {
               ${packagingSelect(supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox)}
        FROM formulas f
        JOIN finished_goods fg ON fg.id = f.finished_good_id
-       WHERE f.id = $1`,
+       WHERE f.id = ?`,
       [formula_id]
     );
     if (formulaRes.rows.length === 0) {
@@ -173,7 +173,7 @@ const runProduction = async (req, res, next) => {
     // ── Load formula inputs ───────────────────────────────────────────────────
     const inputsRes = await client.query(
       `${inputSelect(supportsConsumptionBasis)}
-       WHERE fi.formula_id = $1
+       WHERE fi.formula_id = ?
        ORDER BY fi.id`,
       [formula_id]
     );
@@ -208,8 +208,7 @@ const runProduction = async (req, res, next) => {
     const prodRes = await client.query(
       `INSERT INTO production
          (formula_id, finished_good_id, qty_produced, color, batches, notes, produced_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       RETURNING *`,
+       VALUES (?,?,?,?,?,?,?)`,
       [
         formula_id,
         formula.fg_id,
@@ -220,7 +219,7 @@ const runProduction = async (req, res, next) => {
         req.user.id,
       ]
     );
-    const production = prodRes.rows[0];
+    const production = { id: prodRes.insertId };
 
     const consumptionSummary = [];
 
@@ -232,7 +231,7 @@ const runProduction = async (req, res, next) => {
       // Fetch FIFO batches (oldest first, only those with stock left)
       const batches = await client.query(
         `SELECT id, qty_remaining FROM stock
-         WHERE raw_material_id=$1 AND qty_remaining > 0
+         WHERE raw_material_id=? AND qty_remaining > 0
          ORDER BY purchased_at ASC`,
         [inp.raw_material_id]
       );
@@ -244,7 +243,7 @@ const runProduction = async (req, res, next) => {
         const deduct = Math.min(batchRemaining, remaining);
 
         await client.query(
-          'UPDATE stock SET qty_remaining = qty_remaining - $1 WHERE id=$2',
+          'UPDATE stock SET qty_remaining = qty_remaining - ? WHERE id=?',
           [deduct, batch.id]
         );
 
@@ -256,14 +255,14 @@ const runProduction = async (req, res, next) => {
       const newQty  = prevQty - totalNeeded;
 
       await client.query(
-        'UPDATE raw_materials SET quantity=$1 WHERE id=$2',
+        'UPDATE raw_materials SET quantity=? WHERE id=?',
         [newQty, inp.raw_material_id]
       );
 
       // Record production_items
       await client.query(
         `INSERT INTO production_items (production_id, raw_material_id, qty_consumed)
-         VALUES ($1,$2,$3)`,
+         VALUES (?,?,?)`,
         [production.id, inp.raw_material_id, totalNeeded]
       );
 
@@ -279,14 +278,14 @@ const runProduction = async (req, res, next) => {
 
     // ── STEP 4: Add finished goods ────────────────────────────────────────────
     const fgBefore = await client.query(
-      'SELECT quantity FROM finished_goods WHERE id=$1',
+      'SELECT quantity FROM finished_goods WHERE id=?',
       [formula.fg_id]
     );
     const fgPrevQty = parseFloat(fgBefore.rows[0].quantity);
     const fgNewQty  = fgPrevQty + parseFloat(qty_to_produce);
 
     await client.query(
-      'UPDATE finished_goods SET quantity=$1 WHERE id=$2',
+      'UPDATE finished_goods SET quantity=? WHERE id=?',
       [fgNewQty, formula.fg_id]
     );
 
@@ -333,11 +332,11 @@ const getHistory = async (req, res, next) => {
     const result = await query(
       `${productionHistorySelect}
        ORDER BY p.created_at DESC
-       LIMIT $1 OFFSET $2`,
+       LIMIT ? OFFSET ?`,
       [limit, offset]
     );
 
-    const total = await query('SELECT COUNT(*) FROM production');
+    const total = await query('SELECT COUNT(*) AS count FROM production');
 
     return res.json({
       success: true,
@@ -354,7 +353,7 @@ const getHistory = async (req, res, next) => {
 const getOne = async (req, res, next) => {
   try {
     const prodRes = await query(
-      `${productionHistorySelect} WHERE p.id = $1`,
+      `${productionHistorySelect} WHERE p.id = ?`,
       [req.params.id]
     );
     if (prodRes.rows.length === 0) {
@@ -365,7 +364,7 @@ const getOne = async (req, res, next) => {
       `SELECT pi.*, rm.name, rm.article_code, rm.color, rm.unit
        FROM production_items pi
        JOIN raw_materials rm ON rm.id = pi.raw_material_id
-       WHERE pi.production_id = $1`,
+       WHERE pi.production_id = ?`,
       [req.params.id]
     );
 

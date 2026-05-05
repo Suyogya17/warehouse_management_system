@@ -8,7 +8,7 @@ const buildStockSummarySelect = (hasImageUrl) => `
     rm.unit,
     rm.quantity,
     rm.min_quantity,
-    ${hasImageUrl ? "rm.image_url" : "NULL::VARCHAR AS image_url"},
+    ${hasImageUrl ? "rm.image_url" : "CAST(NULL AS CHAR) AS image_url"},
     rm.created_at,
     (rm.quantity <= rm.min_quantity) AS is_low_stock
   FROM raw_materials rm

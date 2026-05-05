@@ -24,7 +24,7 @@ export default function LoginPage() {
     try {
       await login(form.email, form.password);
       showToast({ tone: "success", title: "Logged in", message: "Dashboard data will load automatically." });
-      navigate("/");
+      navigate("/dashboard");
     } catch (err) {
       const message = err.message || "Login failed";
       setError(message);
