@@ -141,7 +141,7 @@ export default function RawMaterialsPage() {
       article_code: item.article_code || "",
       category: item.category || "",
       color: item.color || "",
-      unit: item.unit || "pcs",
+      unit: item.unit || "pair",
       quantity: item.quantity || 0,
       min_quantity: item.min_quantity || 10,
       image: null,
