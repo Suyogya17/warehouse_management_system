@@ -2,14 +2,14 @@ export const materialBlueprints = [
   {
     name: "Upper",
     category: "Upper",
-    unit: "pcs",
+    unit: "pair",
     stage: "Cutting",
     notes: "Usually received inside cartons. One pair of shoes uses 2 upper pieces.",
   },
   {
     name: "Sole",
     category: "Sole",
-    unit: "pcs",
+    unit: "pair",
     stage: "Bottoming",
     notes: "Finished sole pieces. One pair of shoes uses 2 soles.",
   },
@@ -30,7 +30,7 @@ export const materialBlueprints = [
   {
     name: "Lace",
     category: "Lace",
-    unit: "pairs",
+    unit: "pair",
     stage: "Optional",
     notes: "Optional trim depending on the shoe style.",
   },
