@@ -10,6 +10,7 @@
   import { useToast } from "../context/ToastContext";
   import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
   import { api } from "../services/api";
+  import Select from "react-select";
   import { formatNumber } from "../utils/format";
 
   export default function ProductionPage() {
@@ -36,6 +37,8 @@
     useDataRefresh(load, "production");
 
     const hasValidProductionInput = Number(form.formula_id) > 0 && Number(form.qty_to_produce) > 0;
+
+
     const selectedFormula = formulas.find((item) => String(item.id) === String(form.formula_id));
     const canSubmitProduction =
       hasValidProductionInput &&
@@ -85,6 +88,7 @@
         showToast({ tone: "error", title: "Stock check failed", message: err.message });
       }
     };
+    
 
     const runProduction = async (event) => {
       event.preventDefault();
@@ -156,24 +160,54 @@
         />
 
         {canRun ? (
-          <SectionCard title="Production run" subtitle="Check stock first, then convert uppers, soles, and compound materials into finished shoe pairs." icon="production">
+          <SectionCard className="height-auto" title="Production run" subtitle="Check stock first, then convert uppers, soles, and compound materials into finished shoe pairs." icon="production">
             <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" onSubmit={runProduction}>
               <Field label="Formula">
-                <SelectInput
-                  value={form.formula_id}
-                  onChange={(event) => {
-                    setForm((current) => ({ ...current, formula_id: event.target.value }));
-                    setCheckResult(null);
-                  }}
-                  required
-                >
-                  <option value="">Select formula</option>
-                  {formulas.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </SelectInput>
+              <Select
+  options={formulas.map((item) => ({
+    value: String(item.id),
+    label: item.name,
+  }))}
+
+  value={
+    formulas
+      .map((item) => ({
+        value: String(item.id),
+        label: item.name,
+      }))
+      .find((opt) => opt.value === String(form.formula_id)) || null
+  }
+
+  onChange={(selected) => {
+    const value = selected?.value || "";
+    setForm((prev) => ({
+      ...prev,
+      formula_id: value,
+    }));
+    setCheckResult(null);
+  }}
+
+  placeholder="Search formula..."
+  isClearable
+
+  menuPortalTarget={document.body}
+  menuPosition="fixed"
+
+  styles={{
+    control: (base) => ({
+      ...base,
+      minHeight: "44px",
+      borderRadius: "12px",
+      borderColor: "#d1d5db",
+      boxShadow: "none",
+      fontSize: "14px",
+    }),
+    menuPortal: (base) => ({
+      ...base,
+      zIndex: 9999,
+    }),
+  }}
+/>
               </Field>
               <Field label="Pairs to produce">
                 <TextInput
@@ -278,45 +312,6 @@
             rows={history}
           />
         </SectionCard>
-
-        <SectionCard title="Stock batches (FIFO)" subtitle="Edit or remove stock entries carefully" icon="stock">
-    <DataTable
-      columns={[
-        { key: "id", label: "Batch ID" },
-        { key: "name", label: "Material" },
-        { key: "qty_added", label: "Added" },
-        { key: "qty_remaining", label: "Remaining" },
-        { key: "notes", label: "Notes" },
-        { key: "purchased_at", label: "Date", type: "date" },
-        {
-          key: "actions",
-          label: "Actions",
-          render: (row) => (
-            <div className="flex gap-2 justify-end">
-              <Button
-                size="sm"
-                variant="secondary"
-                icon="edit"
-                onClick={() => setBatchEdit(row)}
-              >
-                Edit
-              </Button>
-
-              <Button
-                size="sm"
-                variant="danger"
-                icon="delete"
-                onClick={() => deleteBatch(row.id)}
-              >
-                Delete
-              </Button>
-            </div>
-          ),
-        },
-      ]}
-      rows={history /* or replace with stock batch API data */}
-    />
-  </SectionCard>
       </div>
     );
   }

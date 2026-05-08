@@ -10,6 +10,7 @@ import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber } from "../utils/format";
+import Select from "react-select";
 
 const initialForm = {
   name: "",
@@ -320,18 +321,46 @@ const paginatedFormulas = filteredFormulas.slice(
               />
             </Field>
             <Field label="Finished good">
-              <SelectInput
-                value={form.finished_good_id}
-                onChange={(event) => handleFinishedGoodChange(event.target.value)}
-                required
-              >
-                <option value="">Select finished good</option>
-                {finishedGoods.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} ({item.article_code})
-                  </option>
-                ))}
-              </SelectInput>
+              <Select
+  options={finishedGoods.map((item) => ({
+    value: String(item.id),
+    label: `${item.name} (${item.article_code})`,
+  }))}
+
+  value={
+    finishedGoods
+      .map((item) => ({
+        value: String(item.id),
+        label: `${item.name} (${item.article_code})`,
+      }))
+      .find((opt) => opt.value === String(form.finished_good_id)) || null
+  }
+
+  onChange={(selected) =>
+    handleFinishedGoodChange(selected?.value || "")
+  }
+
+  placeholder="Search finished good..."
+  isClearable
+  isSearchable
+
+  menuPortalTarget={document.body}
+  menuPosition="fixed"
+
+  styles={{
+    control: (base) => ({
+      ...base,
+      minHeight: "44px",
+      borderRadius: "12px",
+      borderColor: "#d1d5db",
+      boxShadow: "none",
+    }),
+    menuPortal: (base) => ({
+      ...base,
+      zIndex: 9999,
+    }),
+  }}
+/>
             </Field>
             <Field label="Output quantity">
               <TextInput
@@ -413,18 +442,46 @@ const paginatedFormulas = filteredFormulas.slice(
           <div className="space-y-3">
             {form.inputs.map((input, index) => (
               <div key={index} className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 md:grid-cols-[2fr_1fr_1fr_auto]">
-                <SelectInput
-                  value={input.raw_material_id}
-                  onChange={(event) => updateInput(index, "raw_material_id", event.target.value)}
-                  required
-                >
-                  <option value="">Select raw material</option>
-                  {materials.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {buildMaterialOptionLabel(item)}
-                    </option>
-                  ))}
-                </SelectInput>
+                <Select
+  options={materials.map((item) => ({
+    value: String(item.id),
+    label: buildMaterialOptionLabel(item),
+  }))}
+
+  value={
+    materials
+      .map((item) => ({
+        value: String(item.id),
+        label: buildMaterialOptionLabel(item),
+      }))
+      .find((opt) => opt.value === String(input.raw_material_id)) || null
+  }
+
+  onChange={(selected) =>
+    updateInput(index, "raw_material_id", selected?.value || "")
+  }
+
+  placeholder="Search raw material..."
+  isClearable
+  isSearchable
+
+  menuPortalTarget={document.body}
+  menuPosition="fixed"
+
+  styles={{
+    control: (base) => ({
+      ...base,
+      minHeight: "44px",
+      borderRadius: "12px",
+      borderColor: "#d1d5db",
+      boxShadow: "none",
+    }),
+    menuPortal: (base) => ({
+      ...base,
+      zIndex: 9999,
+    }),
+  }}
+/>
                 <TextInput
                   type="number"
                   min={0}

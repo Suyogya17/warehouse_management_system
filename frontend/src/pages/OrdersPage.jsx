@@ -11,6 +11,7 @@ import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
 import { formatNumber } from "../utils/format";
+import Select from "react-select";
 
 const initialForm = {
   customer_name: "",
@@ -162,18 +163,46 @@ export default function OrdersPage() {
               const selected = availabilityById.get(String(item.finished_good_id));
               return (
                 <div key={index} className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 md:grid-cols-[2fr_1fr_1fr_auto]">
-                  <SelectInput
-                    value={item.finished_good_id}
-                    onChange={(event) => updateItem(index, "finished_good_id", event.target.value)}
-                    required
-                  >
-                    <option value="">Select finished good</option>
-                    {availability.map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.name} ({product.article_code}) - available {formatNumber(product.available_qty)} {product.unit}
-                      </option>
-                    ))}
-                  </SelectInput>
+                 <Select
+  options={availability.map((product) => ({
+    value: String(product.id),
+    label: `${product.name} (${product.article_code}) - available ${formatNumber(product.available_qty)} ${product.unit}`,
+  }))}
+
+  value={
+    availability
+      .map((product) => ({
+        value: String(product.id),
+        label: `${product.name} (${product.article_code}) - available ${formatNumber(product.available_qty)} ${product.unit}`,
+      }))
+      .find((opt) => opt.value === String(item.finished_good_id)) || null
+  }
+
+  onChange={(selected) =>
+    updateItem(index, "finished_good_id", selected?.value || "")
+  }
+
+  placeholder="Search finished good..."
+  isClearable
+
+  menuPortalTarget={document.body}
+  menuPosition="fixed"
+
+  styles={{
+    control: (base) => ({
+      ...base,
+      minHeight: "44px",
+      borderRadius: "12px",
+      borderColor: "#d1d5db",
+      boxShadow: "none",
+      fontSize: "14px",
+    }),
+    menuPortal: (base) => ({
+      ...base,
+      zIndex: 9999,
+    }),
+  }}
+/>
                   <TextInput
                     type="number"
                     min="1"

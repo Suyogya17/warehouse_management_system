@@ -12,6 +12,7 @@
   import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
   import { api, APP_BASE_URL } from "../services/api";
   import { formatNumber } from "../utils/format";
+  import Select from "react-select";
 
   const initialForm = {
     name: "",
@@ -239,31 +240,74 @@
               {!editingId ? (
                 <>
                   <Field label="Upper raw material" hint="Only raw materials from the Upper category are shown here.">
-                    <SelectInput
-                      value={selectedUpperId}
-                      onChange={(event) => selectUpperMaterial(event.target.value)}
-                    >
-                      <option value="">Choose upper material</option>
-                      {upperMaterials.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name} ({item.article_code}) {item.color ? `- ${item.color}` : ""}
-                        </option>
-                      ))}
-                    </SelectInput>
+                    <Select
+  options={upperMaterials.map((item) => ({
+    value: String(item.id),
+    label: `${item.name} (${item.article_code}) ${
+      item.color ? `- ${item.color}` : ""
+    }`,
+  }))}
+
+  value={
+    upperMaterials
+      .map((item) => ({
+        value: String(item.id),
+        label: `${item.name} (${item.article_code}) ${
+          item.color ? `- ${item.color}` : ""
+        }`,
+      }))
+      .find((option) => option.value === selectedUpperId) || null
+  }
+
+  onChange={(selected) => {
+    const id = selected?.value || "";
+
+    setSelectedUpperId(id);          // ✅ IMPORTANT FIX
+    selectUpperMaterial(id);         // keeps your auto-fill logic
+  }}
+
+  placeholder="Search upper material..."
+  isClearable
+  className="text-sm"
+  styles={{
+    control: (base) => ({
+      ...base,
+      minHeight: "44px",
+      borderRadius: "12px",
+      borderColor: "#d1d5db",
+      boxShadow: "none",
+    }),
+  }}
+/>
                   </Field>
 
                   <Field label="Sole raw material" hint="Only raw materials from the Sole category are shown here.">
-                    <SelectInput
-                      value={selectedSoleId}
-                      onChange={(event) => selectSoleMaterial(event.target.value)}
-                    >
-                      <option value="">Choose sole material</option>
-                      {soleMaterials.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name} ({item.article_code})
-                        </option>
-                      ))}
-                    </SelectInput>
+                    <Select
+  options={soleMaterials.map((item) => ({
+    value: String(item.id),
+    label: `${item.name} (${item.article_code})`,
+  }))}
+
+  value={
+    soleMaterials
+      .map((item) => ({
+        value: String(item.id),
+        label: `${item.name} (${item.article_code})`,
+      }))
+      .find((option) => option.value === selectedSoleId) || null
+  }
+
+  onChange={(selected) => {
+    const id = selected?.value || "";
+
+    setSelectedSoleId(id);      // ✅ IMPORTANT FIX
+    selectSoleMaterial(id);     // keeps auto-fill
+  }}
+
+  placeholder="Search sole material..."
+  isClearable
+  className="text-sm"
+/>
                   </Field>
                 </>
               ) : null}

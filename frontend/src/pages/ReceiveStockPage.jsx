@@ -9,6 +9,7 @@ import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatDate, formatNumber } from "../utils/format";
+  import Select from "react-select";
 
 export default function ReceiveStockPage() {
   const { token } = useAuth();
@@ -79,18 +80,50 @@ export default function ReceiveStockPage() {
       <SectionCard title="Purchase and receive stock" subtitle="Record cartons of uppers, kg of sole compounds, finished soles, and packing materials." icon="purchase">
         <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" onSubmit={submit}>
           <Field label="Raw material">
-            <SelectInput
-              value={form.raw_material_id}
-              onChange={(event) => setForm((current) => ({ ...current, raw_material_id: event.target.value }))}
-              required
-            >
-              <option value="">Select material</option>
-              {materials.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} ({item.article_code})
-                </option>
-              ))}
-            </SelectInput>
+           <Select
+  options={materials.map((item) => ({
+    value: String(item.id),
+    label: `${item.name} (${item.article_code})`,
+  }))}
+
+  value={
+    materials
+      .map((item) => ({
+        value: String(item.id),
+        label: `${item.name} (${item.article_code})`,
+      }))
+      .find((option) => option.value === String(form.raw_material_id)) || null
+  }
+
+  onChange={(selected) =>
+    setForm((current) => ({
+      ...current,
+      raw_material_id: selected?.value || "",
+    }))
+  }
+
+  placeholder="Search material..."
+  isClearable
+  isSearchable
+  className="text-sm"
+
+  menuPortalTarget={document.body}
+  menuPosition="fixed"
+
+  styles={{
+    control: (base) => ({
+      ...base,
+      minHeight: "44px",
+      borderRadius: "12px",
+      borderColor: "#d1d5db",
+      boxShadow: "none",
+    }),
+    menuPortal: (base) => ({
+      ...base,
+      zIndex: 9999,
+    }),
+  }}
+/>
           </Field>
           <Field label="Quantity added">
             <TextInput

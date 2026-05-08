@@ -92,6 +92,17 @@ export default function PermissionsPage() {
     );
   };
 
+  // SELECT ALL FILTERED PRODUCTS
+  const selectAllFiltered = () => {
+    const allFilteredIds = filteredProducts.map((p) => p.id);
+    setSelectedProducts(allFilteredIds);
+  };
+
+  // DESELECT ALL
+  const deselectAll = () => {
+    setSelectedProducts([]);
+  };
+
   const userPermissions = permissions.filter(
     (p) => p.user_id === Number(selectedUser)
   );
@@ -264,6 +275,22 @@ export default function PermissionsPage() {
               />
               Selected only
             </label>
+          </div>
+
+          {/* SELECT ALL / DESELECT ALL BUTTONS */}
+          <div className="flex gap-2 mb-4">
+            <button
+              onClick={selectAllFiltered}
+              className="px-4 py-2 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
+            >
+              Select All
+            </button>
+            <button
+              onClick={deselectAll}
+              className="px-4 py-2 bg-gray-500 text-white rounded text-sm hover:bg-gray-600"
+            >
+              Deselect All
+            </button>
           </div>
 
           {/* TABLE */}

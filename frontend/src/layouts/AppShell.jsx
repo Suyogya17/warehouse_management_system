@@ -23,7 +23,7 @@ const navByRole = {
     // { to: "/consumption", label: "Consumption", icon: "consumption" },
   ],
   USER: [
-    { to: "/finished-goods", label: "Finished Goods", icon: "finishedGoods" },
+    { to: "/finished-goods", label: "Our Products", icon: "finishedGoods" },
     
   ],
 };
