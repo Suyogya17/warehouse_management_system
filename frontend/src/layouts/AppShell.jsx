@@ -24,6 +24,7 @@ const navByRole = {
   ],
   USER: [
     { to: "/finished-goods", label: "Our Products", icon: "finishedGoods" },
+    { to: "/order-customer", label: "Order", icon: "cart" },
     
   ],
 };
@@ -72,7 +73,7 @@ export default function AppShell() {
 
   return (
     <div className="min-h-screen bg-transparent text-slate-900">
-      <div className="mx-auto flex min-h-screen max-w-[1600px] gap-6 px-4 py-4 lg:px-6">
+      <div className="mx-auto flex min-h-screen max-w gap-6 px-4 py-4 lg:px-6">
 
         {/* MOBILE OVERLAY */}
         {mobileNavOpen && (

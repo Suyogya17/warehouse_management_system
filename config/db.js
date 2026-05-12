@@ -12,13 +12,19 @@ const pool = mysql.createPool({
 });
 
 const normalizeResult = (result) => {
+  // SELECT queries return an array of rows
   if (Array.isArray(result)) {
-    result.rows = result;
-    return result;
+    const out = result;
+    out.rows = result;
+    out.insertId = null;
+    return out;
   }
 
-  result.rows = [];
-  return result;
+  // INSERT / UPDATE / DELETE return a ResultSetHeader
+  const out = result;
+  out.rows = [];
+  out.insertId = result.insertId ?? null;
+  return out;
 };
 
 const query = async (sql, params = []) => {

@@ -559,7 +559,7 @@ const paginatedFormulas = filteredFormulas.slice(
           placeholder="Search by formula or finished good..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="flex justify-end border rounded-lg px-3 py-2 text-sm w-full max-w-xs mb-4"
+          className="flex justify-end border border-black rounded-lg px-3 py-2 text-sm w-full max-w-xs mb-4"
         />
         <div className="space-y-4">
           {paginatedFormulas.map((formula) => (

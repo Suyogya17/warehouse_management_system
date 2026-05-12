@@ -377,4 +377,183 @@ const getOne = async (req, res, next) => {
   }
 };
 
-module.exports = { checkStock, runProduction, getHistory, getOne };
+const updateProduction = async (req, res, next) => {
+  try {
+    const {  notes } = req.body;
+
+    await query(
+      `
+      UPDATE production
+      SET notes = ?
+      WHERE id = ?
+      `,
+      [
+        notes || null,
+        req.params.id,
+      ]
+    );
+
+    await auditLog({
+      userId: req.user.id,
+      action: "UPDATED",
+      tableName: "production",
+      recordId: req.params.id,
+      detail: `Updated production #${req.params.id}`,
+    });
+
+    return res.json({
+      success: true,
+      message: "Production updated successfully",
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const deleteProduction = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    await client.query("BEGIN");
+
+    const productionRes = await client.query(
+      `
+      SELECT *
+      FROM production
+      WHERE id = ?
+      `,
+      [req.params.id]
+    );
+
+    if (productionRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+
+      return res.status(404).json({
+        success: false,
+        message: "Production record not found",
+      });
+    }
+
+    const production = productionRes.rows[0];
+
+    // restore finished goods stock
+    const fgRes = await client.query(
+      `
+      SELECT quantity
+      FROM finished_goods
+      WHERE id = ?
+      `,
+      [production.finished_good_id]
+    );
+
+    const currentFgQty = Number(fgRes.rows[0].quantity);
+
+    await client.query(
+      `
+      UPDATE finished_goods
+      SET quantity = ?
+      WHERE id = ?
+      `,
+      [
+        currentFgQty - Number(production.qty_produced),
+        production.finished_good_id,
+      ]
+    );
+
+    // restore raw materials
+    const itemsRes = await client.query(
+      `
+      SELECT *
+      FROM production_items
+      WHERE production_id = ?
+      `,
+      [req.params.id]
+    );
+
+    for (const item of itemsRes.rows) {
+      const rmRes = await client.query(
+        `
+        SELECT quantity
+        FROM raw_materials
+        WHERE id = ?
+        `,
+        [item.raw_material_id]
+      );
+
+      const currentQty = Number(rmRes.rows[0].quantity);
+
+     const restoredQty =
+  currentQty + Number(item.qty_consumed);
+
+await client.query(
+  ` 
+  UPDATE raw_materials
+  SET quantity = ?
+  WHERE id = ?
+  `,
+  [
+    restoredQty,
+    item.raw_material_id,
+  ]
+);
+
+// restore stock batch
+await client.query(
+  `
+  INSERT INTO stock
+  (
+    raw_material_id,
+    qty_received,
+    qty_remaining,
+    purchased_at
+  )
+  VALUES (?, ?, ?, NOW())
+  `,
+  [
+    item.raw_material_id,
+    item.qty_consumed,
+    item.qty_consumed,
+  ]
+);
+    }
+
+    await client.query(
+      `
+      DELETE FROM production_items
+      WHERE production_id = ?
+      `,
+      [req.params.id]
+    );
+
+    await client.query(
+      `
+      DELETE FROM production
+      WHERE id = ?
+      `,
+      [req.params.id]
+    );
+
+    await client.query("COMMIT");
+
+    await auditLog({
+      userId: req.user.id,
+      action: "DELETED",
+      tableName: "production",
+      recordId: req.params.id,
+      detail: `Deleted production #${req.params.id}`,
+    });
+
+    return res.json({
+      success: true,
+      message: "Production deleted successfully",
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+module.exports = { checkStock, runProduction, getHistory, getOne, updateProduction,
+  deleteProduction, };

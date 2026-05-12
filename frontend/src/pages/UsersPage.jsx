@@ -8,6 +8,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
+import { Eye, EyeOff } from "lucide-react";
 
 const initialForm = {
   name: "",
@@ -19,9 +20,11 @@ const initialForm = {
 export default function UsersPage() {
   const { token, user: currentUser } = useAuth();
   const { showToast } = useToast();
+
   const [users, setUsers] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   const load = useCallback(async () => {
     const result = await api.getUsers(token);
@@ -36,6 +39,7 @@ export default function UsersPage() {
 
   const submit = async (event) => {
     event.preventDefault();
+
     try {
       const payload = {
         ...form,
@@ -44,18 +48,31 @@ export default function UsersPage() {
 
       if (editingId) {
         await api.updateUser(editingId, payload, token);
-        showToast({ tone: "success", title: "User updated", message: "The users list was refreshed." });
+        showToast({
+          tone: "success",
+          title: "User updated",
+          message: "The users list was refreshed.",
+        });
       } else {
         await api.registerUser(form, token);
-        showToast({ tone: "success", title: "User created", message: "The users list was refreshed." });
+        showToast({
+          tone: "success",
+          title: "User created",
+          message: "The users list was refreshed.",
+        });
       }
 
       setForm(initialForm);
       setEditingId(null);
+      setShowPassword(false);
       await load();
       announceDataRefresh("users");
     } catch (error) {
-      showToast({ tone: "error", title: "User action failed", message: error.message });
+      showToast({
+        tone: "error",
+        title: "User action failed",
+        message: error.message,
+      });
     }
   };
 
@@ -67,11 +84,13 @@ export default function UsersPage() {
       password: "",
       role: row.role || "USER",
     });
+    setShowPassword(false);
   };
 
   const cancelEdit = () => {
     setEditingId(null);
     setForm(initialForm);
+    setShowPassword(false);
   };
 
   const remove = async (id) => {
@@ -79,65 +98,119 @@ export default function UsersPage() {
       await api.deleteUser(id, token);
       await load();
       announceDataRefresh("users");
-      showToast({ tone: "success", title: "User deleted", message: "The users list was refreshed." });
+      showToast({
+        tone: "success",
+        title: "User deleted",
+        message: "The users list was refreshed.",
+      });
     } catch (error) {
-      showToast({ tone: "error", title: "Delete failed", message: error.message });
+      showToast({
+        tone: "error",
+        title: "Delete failed",
+        message: error.message,
+      });
     }
   };
 
   return (
     <div className="space-y-6">
-      {/* <PageHeader
-        eyebrow="Access control"
-        title="Users"
-        description="Create role-based access for administrators, store keepers, and read-only inventory viewers."
-        icon="users"
-      /> */}
-
       <SectionCard
         title={editingId ? "Edit user" : "Create users"}
-        subtitle={editingId ? "Update account details. Leave password blank to keep the current password." : "Admin can register admin, store keeper, or user accounts."}
+        subtitle={
+          editingId
+            ? "Update account details. Leave password blank to keep current password."
+            : "Admin can register admin, store keeper, or user accounts."
+        }
         icon="users"
       >
-        <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" onSubmit={submit}>
-          {[
-            ["name", "Name"],
-            ["email", "Email", "email"],
-            ["password", "Password", "password"],
-          ].map(([key, label, type = "text"]) => (
-            <Field key={key} label={label}>
+        <form
+          className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"
+          onSubmit={submit}
+        >
+          {/* NAME */}
+          <Field label="Name">
+            <TextInput
+              value={form.name}
+              onChange={(e) =>
+                setForm((c) => ({ ...c, name: e.target.value }))
+              }
+              required
+            />
+          </Field>
+
+          {/* EMAIL */}
+          <Field label="Email">
+            <TextInput
+              type="email"
+              value={form.email}
+              onChange={(e) =>
+                setForm((c) => ({ ...c, email: e.target.value }))
+              }
+              required
+            />
+          </Field>
+
+          {/* PASSWORD WITH EYE TOGGLE */}
+          <Field label="Password">
+            <div className="relative">
               <TextInput
-                type={type}
-                value={form[key]}
-                onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))}
-                required={key !== "password" || !editingId}
+                type={showPassword ? "text" : "password"}
+                value={form.password}
+                onChange={(e) =>
+                  setForm((c) => ({ ...c, password: e.target.value }))
+                }
+                required={!editingId}
               />
-            </Field>
-          ))}
+
+              <button
+                type="button"
+                onClick={() => setShowPassword((p) => !p)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-500 hover:text-slate-800"
+              >
+                 {showPassword ? <Eye size={18} /> : <EyeOff size={18} />}
+              </button>
+            </div>
+          </Field>
+
+          {/* ROLE */}
           <Field label="Role">
             <SelectInput
               value={form.role}
-              onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))}
+              onChange={(e) =>
+                setForm((c) => ({ ...c, role: e.target.value }))
+              }
             >
               <option value="ADMIN">ADMIN</option>
               <option value="STORE_KEEPER">STORE_KEEPER</option>
               <option value="USER">USER</option>
             </SelectInput>
           </Field>
+
+          {/* ACTIONS */}
           <div className="md:col-span-2 xl:col-span-4 flex items-center gap-3">
             <Button type="submit" icon="plus">
               {editingId ? "Save changes" : "Create account"}
             </Button>
-            {editingId ? (
-              <Button type="button" variant="secondary" onClick={cancelEdit}>
+
+            {editingId && (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={cancelEdit}
+              >
                 Cancel
               </Button>
-            ) : null}
+            )}
           </div>
         </form>
       </SectionCard>
 
-      <SectionCard title="System users" subtitle="Registered users and access levels." icon="users">
+      {/* TABLE */}
+      <SectionCard
+        title="System users"
+        subtitle="Registered users and access levels."
+        icon="users"
+      >
         <DataTable
           columns={[
             { key: "name", label: "Name" },
@@ -149,7 +222,13 @@ export default function UsersPage() {
               label: "Actions",
               render: (row) => (
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" size="sm" variant="secondary" icon="edit" onClick={() => startEdit(row)}>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    icon="edit"
+                    onClick={() => startEdit(row)}
+                  >
                     Edit
                   </Button>
                   <Button

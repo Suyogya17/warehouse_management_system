@@ -24,6 +24,38 @@ export default function DataTable({
     currentPage * rowsPerPage
   );
 
+  const getPageNumbers = () => {
+  const pages = [];
+
+  const maxVisible = 5; // how many numbers you show
+
+  let start = Math.max(1, currentPage - 2);
+  let end = Math.min(totalPages, start + maxVisible - 1);
+
+  if (end - start < maxVisible - 1) {
+    start = Math.max(1, end - maxVisible + 1);
+  }
+
+  // First page
+  if (start > 1) {
+    pages.push(1);
+    if (start > 2) pages.push("...");
+  }
+
+  // Middle pages
+  for (let i = start; i <= end; i++) {
+    pages.push(i);
+  }
+
+  // Last page
+  if (end < totalPages) {
+    if (end < totalPages - 1) pages.push("...");
+    pages.push(totalPages);
+  }
+
+  return pages;
+};
+
   return (
     <div className="w-full rounded-2xl border border-slate-200 bg-white shadow-sm">
       
@@ -118,39 +150,47 @@ export default function DataTable({
         <div className="flex items-center gap-2">
           
           {/* Prev */}
-          <button
-            onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
-            disabled={currentPage === 1}
-            className="px-3 py-1.5 rounded-lg border text-sm hover:bg-slate-100 disabled:opacity-50"
-          >
-            Prev
-          </button>
+         <div className="flex items-center gap-2">
+  
+  <button
+    onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+    disabled={currentPage === 1}
+    className="px-3 py-1.5 rounded-lg border text-sm hover:bg-slate-100 disabled:opacity-50"
+  >
+    Prev
+  </button>
 
-          {/* Page Numbers */}
-          {[...Array(totalPages)].map((_, i) => (
-            <button
-              key={i}
-              onClick={() => setCurrentPage(i + 1)}
-              className={`px-3 py-1.5 rounded-lg text-sm ${
-                currentPage === i + 1
-                  ? "bg-slate-900 text-white"
-                  : "border hover:bg-slate-100"
-              }`}
-            >
-              {i + 1}
-            </button>
-          ))}
+  {getPageNumbers().map((page, i) =>
+    page === "..." ? (
+      <span key={i} className="px-2 text-slate-400">
+        ...
+      </span>
+    ) : (
+      <button
+        key={i}
+        onClick={() => setCurrentPage(page)}
+        className={`px-3 py-1.5 rounded-lg text-sm ${
+          currentPage === page
+            ? "bg-indigo-600 text-white"
+            : "border hover:bg-indigo-50 text-slate-700"
+        }`}
+      >
+        {page}
+      </button>
+    )
+  )}
 
-          {/* Next */}
-          <button
-            onClick={() =>
-              setCurrentPage((p) => Math.min(p + 1, totalPages))
-            }
-            disabled={currentPage === totalPages}
-            className="px-3 py-1.5 rounded-lg border text-sm hover:bg-slate-100 disabled:opacity-50"
-          >
-            Next
-          </button>
+  <button
+    onClick={() =>
+      setCurrentPage((p) => Math.min(p + 1, totalPages))
+    }
+    disabled={currentPage === totalPages}
+    className="px-3 py-1.5 rounded-lg border text-sm hover:bg-slate-100 disabled:opacity-50"
+  >
+    Next
+  </button>
+
+</div>
 
         </div>
       </div>

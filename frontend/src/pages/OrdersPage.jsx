@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";  
 import Button from "../components/Button";
 import DataTable from "../components/DataTable";
 import { Field, SelectInput, TextInput } from "../components/Field";
@@ -12,14 +12,17 @@ import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
 import { formatNumber } from "../utils/format";
 import Select from "react-select";
+import { Search } from "lucide-react";
 
 const initialForm = {
   customer_name: "",
   customer_phone: "",
+  customer_address: "",
+  pan_number: "",
+  transport_name: "",
   notes: "",
   items: [{ finished_good_id: "", qty_ordered: 1 }],
 };
-
 const statusTone = {
   PENDING: "warning",
   CONFIRMED: "info",
@@ -29,6 +32,8 @@ const statusTone = {
 };
 
 export default function OrdersPage() {
+  const [orderSearch, setOrderSearch] = useState("");
+  const [stockSearch, setStockSearch] = useState("");
   const { token, user } = useAuth();
   const { showToast } = useToast();
   const isAdmin = user.role === "ADMIN";
@@ -39,7 +44,7 @@ export default function OrdersPage() {
   const load = useCallback(async () => {
     const [ordersResult, availabilityResult] = await Promise.all([
       api.getOrders(token),
-      api.getOrderAvailability(token),
+      api.getAvailability(token),
     ]);
     setOrders(ordersResult.data || []);
     setAvailability(availabilityResult.data || []);
@@ -79,14 +84,22 @@ export default function OrdersPage() {
     event.preventDefault();
 
     try {
+      const payload = {
+        ...form,
+        customer_name: form.customer_name.trim(),
+        customer_phone: form.customer_phone.trim(),
+        customer_address: form.customer_address.trim(),
+        pan_number: form.pan_number.trim(),
+        transport_name: form.transport_name.trim(),
+        notes: form.notes.trim(),
+        items: form.items.map((item) => ({
+          finished_good_id: Number(item.finished_good_id),
+          qty_ordered: Number(item.qty_ordered),
+        })),
+      };
+
       await api.createOrder(
-        {
-          ...form,
-          items: form.items.map((item) => ({
-            finished_good_id: Number(item.finished_good_id),
-            qty_ordered: Number(item.qty_ordered),
-          })),
-        },
+        payload,
         token
       );
       setForm(initialForm);
@@ -119,6 +132,29 @@ export default function OrdersPage() {
     </div>
   );
 
+  const filteredOrders = orders.filter((row) => {
+  const term = orderSearch.toLowerCase();
+
+  return (
+    row.id?.toString().includes(term) ||
+    row.customer_name?.toLowerCase().includes(term) ||
+    row.status?.toLowerCase().includes(term) ||
+    row.created_by_name?.toLowerCase().includes(term)
+  );
+});
+
+const filteredAvailability = useMemo(() => {
+  return availability.filter((item) => {
+    const query = stockSearch.toLowerCase();
+
+    return (
+      item.name?.toLowerCase().includes(query) ||
+      item.article_code?.toLowerCase().includes(query) ||
+      item.color?.toLowerCase().includes(query)
+    );
+  });
+}, [availability, stockSearch]);
+
   return (
     <div className="space-y-6">
       {/* <PageHeader
@@ -144,10 +180,66 @@ export default function OrdersPage() {
                 required
               />
             </Field>
-            <Field label="Customer phone">
+           <Field label="Customer phone">
+  <TextInput
+    type="tel"
+    maxLength={10}
+    pattern="[0-9]{10}"
+    value={form.customer_phone}
+    onChange={(event) => {
+      const value = event.target.value.replace(/\D/g, "").slice(0, 10);
+
+      setForm((current) => ({
+        ...current,
+        customer_phone: value,
+      }));
+    }}
+    required
+  />
+</Field>
+
+<Field label="Customer Address">
+  <TextInput
+    value={form.customer_address}
+    onChange={(event) => {
+      const value = event.target.value.replace(/[^a-zA-Z\s]/g, "");
+
+      setForm((current) => ({
+        ...current,
+        customer_address: value,
+      }));
+    }}
+    required
+  />
+</Field>
+
+<Field label="PAN Number">
+  <TextInput
+    type="text"
+    maxLength={9}
+    pattern="[0-9]{9}"
+    value={form.pan_number}
+    onChange={(event) => {
+      const value = event.target.value.replace(/\D/g, "").slice(0, 9);
+
+      setForm((current) => ({
+        ...current,
+        pan_number: value,
+      }));
+    }}
+    required
+  />
+</Field>
+            <Field label="Transport Name">
               <TextInput
-                value={form.customer_phone}
-                onChange={(event) => setForm((current) => ({ ...current, customer_phone: event.target.value }))}
+                value={form.transport_name}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    transport_name: event.target.value,
+                  }))
+                }
+                required
               />
             </Field>
             <Field label="Notes">
@@ -253,29 +345,42 @@ export default function OrdersPage() {
         </form>
       </SectionCard>
 
-      <SectionCard title="Stock availability" subtitle="Physical stock minus active reservations gives available stock." icon="stock">
-        <DataTable
-          columns={[
-            { key: "name", label: "Product" },
-            { key: "article_code", label: "Article" },
-            { key: "color", label: "Color" },
-            { key: "physical_stock", label: "Physical", render: (row) => `${formatNumber(row.physical_stock)} ${row.unit}` },
-            { key: "reserved_qty", label: "Reserved", render: (row) => `${formatNumber(row.reserved_qty)} ${row.unit}` },
-            { key: "available_qty", label: "Available", render: (row) => `${formatNumber(row.available_qty)} ${row.unit}` },
-          ]}
-          rows={availability}
-        />
-      </SectionCard>
+
 
       <SectionCard title="Orders" subtitle={isAdmin ? "Admin can move orders through confirmation, packing, delivery, or cancellation." : "Your reserved orders."} icon="orders">
+        <div className="relative mb-4">
+  <Search
+    size={16}
+    className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+  />
+
+  <input
+    type="text"
+    placeholder="Search orders by Customer, Status, or Items..."
+    value={orderSearch}
+onChange={(e) => setOrderSearch(e.target.value)}
+    className="rounded-xl border border-black bg-white py-2.5 pl-10 pr-4 text-sm shadow-sm focus:border-slate-400 focus:outline-none"
+
+    
+  />
+</div>
         <DataTable
           columns={[
             { key: "id", label: "Order" },
             { key: "customer_name", label: "Customer" },
+            { key: "customer_phone", label: "Phone" },
+            { key: "customer_address", label: "Address",},
+            { key: "pan_number", label: "PAN"},
+            { key: "transport_name", label: "Transport" },
             { key: "status", label: "Status", render: (row) => <StatusBadge tone={statusTone[row.status]}>{row.status}</StatusBadge> },
             { key: "items", label: "Items", render: renderOrderItems },
             { key: "created_by_name", label: "Created By" },
-            { key: "created_at", label: "Created", type: "date" },
+            {
+  key: "created_at",
+  label: "Created",
+  render: (row) =>
+    new Date(row.created_at).toLocaleString(),
+},
             isAdmin
               ? {
                   key: "actions",
@@ -304,9 +409,55 @@ export default function OrdersPage() {
                 }
               : { key: "empty", label: "" },
           ]}
-          rows={orders}
+          rows={filteredOrders}
         />
       </SectionCard>
+
+    <SectionCard
+  title="Stock availability"
+  subtitle="Physical stock minus active reservations gives available stock."
+  icon="stock"
+>
+  {/* Search */}
+  <div className="mb-4 max-w-sm">
+    <input
+      type="text"
+      placeholder="Search product, article, or color..."
+      value={stockSearch}
+      onChange={(e) => setStockSearch(e.target.value)}
+      className="w-full rounded-xl border border-black px-4 py-2.5 text-sm focus:border-slate-400 focus:outline-none"
+    />
+  </div>
+
+  <DataTable
+    columns={[
+      { key: "name", label: "Product" },
+      { key: "article_code", label: "Article" },
+      { key: "color", label: "Color" },
+      {
+        key: "physical_stock",
+        label: "Physical",
+        render: (row) =>
+          `${formatNumber(row.physical_stock)} ${row.unit}`,
+      },
+      {
+        key: "reserved_qty",
+        label: "Reserved",
+        render: (row) =>
+          `${formatNumber(row.reserved_qty)} ${row.unit}`,
+      },
+      {
+        key: "available_qty",
+        label: "Available",
+        render: (row) =>
+          `${formatNumber(row.available_qty)} ${row.unit}`,
+      },
+    ]}
+    rows={filteredAvailability}
+  />
+</SectionCard>
+
+      
     </div>
   );
 }

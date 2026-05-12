@@ -208,7 +208,7 @@ export default function ReceiveStockPage() {
 
       <SectionCard title="Purchase batch history" subtitle="Review stock batches for any raw material." icon="stock">
         <div className="mb-5 max-w-sm">
-          <SelectInput
+          {/* <SelectInput
             value={selectedId}
             onChange={(event) => setSelectedId(event.target.value)}
           >
@@ -218,7 +218,49 @@ export default function ReceiveStockPage() {
                 {item.name} ({item.article_code})
               </option>
             ))}
-          </SelectInput>
+          </SelectInput> */}
+
+           <Select
+      options={materials.map((item) => ({
+        value: String(item.id),
+        label: `${item.name} (${item.article_code})`,
+      }))}
+
+      value={
+        materials
+          .map((item) => ({
+            value: String(item.id),
+            label: `${item.name} (${item.article_code})`,
+          }))
+          .find((option) => option.value === String(selectedId)) || null
+      }
+
+      onChange={(selected) => setSelectedId(selected?.value || "")}
+
+      placeholder="Choose a raw material to view its batches"
+
+      isClearable
+      isSearchable
+      className="text-sm"
+
+      menuPortalTarget={document.body}
+      menuPosition="fixed"
+
+      styles={{
+        control: (base) => ({
+          ...base,
+          minHeight: "44px",
+          borderRadius: "12px",
+          borderColor: "#d1d5db",
+          boxShadow: "none",
+        }),
+
+        menuPortal: (base) => ({
+          ...base,
+          zIndex: 9999,
+        }),
+      }}
+    />
         </div>
 
         <DataTable

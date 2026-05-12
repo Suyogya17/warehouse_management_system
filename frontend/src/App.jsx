@@ -17,6 +17,7 @@ import UsersPage from "./pages/UsersPage";
 import OrdersPage from "./pages/OrdersPage";
 import LoginPage from "./pages/LoginPage";
 import NotFoundPage from "./pages/NotFoundPage";
+import CustomerOrdersPage from "./pages/CustomerOrdersPage";
 
 export default function App() {
   const { isAuthenticated, user } = useAuth();
@@ -110,6 +111,17 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+
+         <Route
+          path="order-customer"
+          element={
+            <ProtectedRoute roles={["USER"]}>
+              <CustomerOrdersPage />
+            </ProtectedRoute>
+          }
+        />
+
+        
 
         <Route
           path="permissions"

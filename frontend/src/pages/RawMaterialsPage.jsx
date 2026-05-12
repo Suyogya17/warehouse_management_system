@@ -55,6 +55,7 @@ export default function RawMaterialsPage() {
   const [editingId, setEditingId] = useState(null);
   const [nextStep, setNextStep] = useState(null);
   const selectedBlueprint = materialBlueprints.find((item) => item.name.toLowerCase() === form.name.toLowerCase());
+  const [deleteId, setDeleteId] = useState(null);
 
   const loadItems = useCallback(async () => {
     const result = await api.getRawMaterials(token);
@@ -148,17 +149,38 @@ export default function RawMaterialsPage() {
     });
   };
 
-  const remove = async (id) => {
-    try {
-      await api.deleteRawMaterial(id, token);
-      setNextStep(null);
-      await loadItems();
-      announceDataRefresh("raw-materials");
-      showToast({ tone: "success", title: "Raw material deleted", message: "The raw materials list was refreshed." });
-    } catch (error) {
-      showToast({ tone: "error", title: "Delete failed", message: error.message });
-    }
-  };
+const remove = (id) => {
+  showToast({
+    tone: "warning",
+    title: "Delete raw material?",
+    message: "Are you sure you want to delete this item?",
+    action: {
+      label: "Delete",
+      onClick: async () => {
+        try {
+          await api.deleteRawMaterial(id, token);
+
+          setNextStep(null);
+          await loadItems();
+
+          announceDataRefresh("raw-materials");
+
+          showToast({
+            tone: "success",
+            title: "Raw material deleted",
+            message: "The raw materials list was refreshed.",
+          });
+        } catch (error) {
+          showToast({
+            tone: "error",
+            title: "Delete failed",
+            message: error.message,
+          });
+        }
+      },
+    },
+  });
+};
 
   const [preview, setPreview] = useState(null); 
 
@@ -325,7 +347,7 @@ export default function RawMaterialsPage() {
       onChange={(e) =>
         setFilters((f) => ({ ...f, search: e.target.value }))
       }
-      className="border rounded-lg px-3 py-2 text-sm"
+      className="border border-black rounded-lg px-3 py-2 text-sm"
     />
 
     {/* Category */}
@@ -334,7 +356,7 @@ export default function RawMaterialsPage() {
       onChange={(e) =>
         setFilters((f) => ({ ...f, category: e.target.value }))
       }
-      className="border rounded-lg px-3 py-2 text-sm"
+      className="border border-black rounded-lg px-3 py-2 text-sm"
     >
       <option value="">All Categories</option>
       {[...new Set(items.map((i) => i.category))].map((cat) => (
@@ -350,7 +372,7 @@ export default function RawMaterialsPage() {
       onChange={(e) =>
         setFilters((f) => ({ ...f, stock: e.target.value }))
       }
-      className="border rounded-lg px-3 py-2 text-sm"
+      className="border border-black rounded-lg px-3 py-2 text-sm"
     >
       <option value="all">All Stock</option>
       <option value="low">Low Stock</option>
@@ -398,9 +420,15 @@ export default function RawMaterialsPage() {
                         Edit
                       </Button>
                       {user.role === "ADMIN" ? (
-                        <Button type="button" variant="danger" size="sm" icon="delete" onClick={() => remove(row.id)}>
-                          Delete
-                        </Button>
+                       <Button
+  type="button"
+  variant="danger"
+  size="sm"
+  icon="delete"
+  onClick={() => setDeleteId(row.id)}
+>
+  Delete
+</Button>
                       ) : null}
                     </div>
                   ),
@@ -410,6 +438,61 @@ export default function RawMaterialsPage() {
           rows={filteredItems}
         />
       </SectionCard>
+      {deleteId && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+    <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+      <h2 className="text-lg font-semibold text-slate-900">
+        Delete raw material?
+      </h2>
+
+      <p className="mt-2 text-sm text-slate-600">
+        Are you sure you want to delete this item?
+      </p>
+
+      <div className="mt-6 flex justify-end gap-3">
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => setDeleteId(null)}
+        >
+          No
+        </Button>
+
+        <Button
+          type="button"
+          variant="danger"
+          onClick={async () => {
+            try {
+              await api.deleteRawMaterial(deleteId, token);
+
+              setNextStep(null);
+
+              await loadItems();
+
+              announceDataRefresh("raw-materials");
+
+              showToast({
+                tone: "success",
+                title: "Raw material deleted",
+                message: "The raw materials list was refreshed.",
+              });
+            } catch (error) {
+              showToast({
+                tone: "error",
+                title: "Delete failed",
+                message: error.message,
+              });
+            } finally {
+              setDeleteId(null);
+            }
+          }}
+        >
+          Yes, Delete
+        </Button>
+      </div>
+    </div>
+  </div>
+)}
 
     </div>
   );

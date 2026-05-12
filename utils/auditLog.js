@@ -11,12 +11,30 @@ const { query } = require('../config/db');
  * @param {number|null} opts.recordId  - ID of the affected row
  * @param {string}      opts.detail    - Human-readable description
  */
-const auditLog = async ({ userId = null, action, tableName, recordId = null, detail }) => {
+const auditLog = async ({
+  userId,
+  user_id,
+  action,
+  tableName,
+  table_name,
+  entity_type,
+  recordId,
+  record_id,
+  entity_id,
+  detail,
+  details,
+}) => {
   try {
+    const resolvedUserId = userId ?? user_id ?? null;
+    const resolvedTableName = tableName ?? table_name ?? entity_type ?? null;
+    const resolvedRecordId = recordId ?? record_id ?? entity_id ?? null;
+    const resolvedDetail =
+      detail ?? (details === undefined ? null : JSON.stringify(details));
+
     await query(
       `INSERT INTO audit_logs (user_id, action, table_name, record_id, detail)
        VALUES (?, ?, ?, ?, ?)`,
-      [userId, action, tableName, recordId, detail]
+      [resolvedUserId, action, resolvedTableName, resolvedRecordId, resolvedDetail]
     );
   } catch (err) {
     // Non-fatal — never let audit failure crash the main flow

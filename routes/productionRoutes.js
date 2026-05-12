@@ -16,4 +16,16 @@ router.get('/', ctrl.getHistory);
 // GET  /api/production/:id     - single production run with items
 router.get('/:id', ctrl.getOne);
 
+router.put(
+  "/:id",
+  authorize("ADMIN"),
+  ctrl.updateProduction
+);
+
+router.delete(
+  "/:id",
+  authorize("ADMIN"),
+  ctrl.deleteProduction
+);
+
 module.exports = router;

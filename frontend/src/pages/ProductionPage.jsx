@@ -14,6 +14,7 @@
   import { formatNumber } from "../utils/format";
 
   export default function ProductionPage() {
+    const [search, setSearch] = useState("");
     const { token, user } = useAuth();
     const { showToast } = useToast();
     const canRun = ["ADMIN", "STORE_KEEPER"].includes(user.role);
@@ -21,8 +22,9 @@
     const [history, setHistory] = useState([]);
     const [checkResult, setCheckResult] = useState(null);
     const [nextStep, setNextStep] = useState(null);
-    const [form, setForm] = useState({ formula_id: "", qty_to_produce: "", notes: "" });
-    const [batchEdit, setBatchEdit] = useState(null);
+    const [form, setForm] = useState({ formula_id: "", qty_to_produce: "", notes: "" });  
+    const [editingHistory, setEditingHistory] = useState(null);
+    const [deleteHistoryId, setDeleteHistoryId] = useState(null);
 
     const load = useCallback(async () => {
       const [formulasResult, historyResult] = await Promise.all([api.getFormulas(token), api.getProductionHistory(token)]);
@@ -138,6 +140,74 @@
       showToast({ tone: "error", title: "Delete failed", message: err.message });
     }
   };
+
+  const startEditHistory = (row) => {
+  setEditingHistory({
+    production_id: row.production_id,
+    qty_produced: row.qty_produced,
+    notes: row.notes || "",
+  });
+};
+
+const saveHistoryEdit = async () => {
+  try {
+    await api.updateProductionHistory(
+      editingHistory.production_id,
+      {
+        qty_produced: Number(editingHistory.qty_produced),
+        notes: editingHistory.notes,
+      },
+      token
+    );
+
+    showToast({
+      tone: "success",
+      title: "Production updated",
+    });
+
+    setEditingHistory(null);
+
+    await load();
+  } catch (err) {
+    showToast({
+      tone: "error",
+      title: "Update failed",
+      message: err.message,
+    });
+  }
+};
+
+const deleteHistory = async (id) => {
+  try {
+    await api.deleteProductionHistory(id, token);
+
+    showToast({
+      tone: "success",
+      title: "Production deleted",
+    });
+
+    setDeleteHistoryId(null);
+
+    await load();
+  } catch (err) {
+    showToast({
+      tone: "error",
+      title: "Delete failed",
+      message: err.message,
+    });
+  }
+};
+const filteredHistory = history.filter((row) => {
+  const term = search.toLowerCase();
+
+  return (
+    row.production_id?.toString().includes(term) ||
+    row.formula_name?.toLowerCase().includes(term) ||
+    row.finished_good_name?.toLowerCase().includes(term) ||
+    row.produced_by_name?.toLowerCase().includes(term) ||
+    row.status?.toLowerCase().includes(term)
+  );
+});
 
     return (
       <div className="space-y-6">
@@ -298,20 +368,137 @@
           </SectionCard>
         ) : null}
 
-        <SectionCard title="Production history" subtitle="Completed production activity and outputs." icon="stock">
-          <DataTable
-            columns={[
-              { key: "production_id", label: "ID" },
-              { key: "formula_name", label: "Formula" },
-              { key: "finished_good_name", label: "Finished Good" },
-              { key: "qty_produced", label: "Pairs Produced", render: (row) => formatNumber(row.qty_produced) },
-              { key: "produced_by_name", label: "Produced By" },
-              { key: "status", label: "Status" },
-              { key: "produced_at", label: "Created", type: "date" },
-            ]}
-            rows={history}
-          />
-        </SectionCard>
+       <SectionCard
+  title="Production history"
+  subtitle="Completed production activity and outputs."
+  icon="stock"
+>
+  <div className="mb-4">
+  <input
+    type="text"
+    placeholder="Search production history..."
+    value={search}
+    onChange={(e) => setSearch(e.target.value)}
+    className="w-1/2 rounded-xl border border-black bg-white px-4 py-2.5 text-sm shadow-sm focus:border-slate-400 focus:outline-none"
+  />
+</div>
+  <DataTable
+    columns={[
+      { key: "production_id", label: "ID" },
+
+      { key: "formula_name", label: "Formula" },
+
+      { key: "finished_good_name", label: "Finished Good" },
+
+      {
+        key: "qty_produced",
+        label: "Pairs Produced",
+        render: (row) =>
+          editingHistory?.production_id === row.production_id ? (
+            <input
+              type="number"
+              value={editingHistory.qty_produced}
+              onChange={(e) =>
+                setEditingHistory((prev) => ({
+                  ...prev,
+                  qty_produced: e.target.value,
+                }))
+              }
+              className="w-24 rounded-lg border px-2 py-1"
+            />
+          ) : (
+            formatNumber(row.qty_produced)
+          ),
+      },
+
+      { key: "produced_by_name", label: "Produced By" },
+
+      { key: "status", label: "Status" },
+
+      { key: "produced_at", label: "Created", type: "date" },
+
+      {
+        key: "actions",
+        label: "Actions",
+        render: (row) => (
+          <div className="flex gap-2">
+            {editingHistory?.production_id === row.production_id ? (
+              <>
+                <Button
+                  size="sm"
+                  icon="check"
+                  onClick={saveHistoryEdit}
+                >
+                  Save
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setEditingHistory(null)}
+                >
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon="edit"
+                  onClick={() => startEditHistory(row)}
+                >
+                  Edit
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="danger"
+                  icon="delete"
+                  onClick={() =>
+                    setDeleteHistoryId(row.production_id)
+                  }
+                >
+                  Delete
+                </Button>
+              </>
+            )}
+          </div>
+        ),
+      },
+    ]}
+    rows={filteredHistory}
+  />
+</SectionCard>
+{deleteHistoryId && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+    <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+      <h2 className="text-lg font-semibold text-slate-900">
+        Delete production history?
+      </h2>
+
+      <p className="mt-2 text-sm text-slate-600">
+        Are you sure you want to delete this production record?
+      </p>
+
+      <div className="mt-6 flex justify-end gap-3">
+        <Button
+          variant="secondary"
+          onClick={() => setDeleteHistoryId(null)}
+        >
+          No
+        </Button>
+
+        <Button
+          variant="danger"
+          onClick={() => deleteHistory(deleteHistoryId)}
+        >
+          Yes, Delete
+        </Button>
+      </div>
+    </div>
+  </div>
+)}
       </div>
     );
   }

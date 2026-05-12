@@ -303,20 +303,27 @@ export default function PermissionsPage() {
                   <th className="p-3 text-left">Article Name</th>
                   <th className="p-3 text-left">Details</th>
                   <th className="p-3 text-left">Stock</th>
+                  <th className="p-3 text-left">Access</th>
                   <th className="p-3 text-left">Visible</th>
                 </tr>
               </thead>
 
               <tbody>
                 {paginatedAssignProducts.map((p) => {
-                  const checked = selectedProducts.includes(p.id);
+                  const checked = permissions.some(
+  (perm) =>
+    perm.user_id === Number(selectedUser) &&
+    perm.finished_good_id === p.id
+);
 
                   return (
                     <tr
                       key={p.id}
-                      className={`border-t hover:bg-gray-50 ${
-                        checked ? "bg-green-50" : ""
-                      }`}
+                      className={`border-t transition ${
+  checked
+    ? "bg-green-50 hover:bg-green-100"
+    : "bg-red-50/30 hover:bg-red-50"
+}`}
                     >
                       {/* CHECKBOX */}
                       <td className="p-3">
@@ -354,13 +361,28 @@ export default function PermissionsPage() {
                       </td>
 
                       {/* STOCK */}
-                      <td className="p-3 text-gray-500">
-                        {p.quantity} {p.unit || "pairs"}
-                      </td>
+<td className="p-3 text-gray-500">
+  {p.quantity} {p.unit || "pairs"}
+</td>
 
-                      <td className="p-3 text-gray-500">
-                        {p.is_visible === false ? "Hidden" : "Visible"}
-                      </td>
+{/* ACCESS STATUS */}
+<td className="p-3">
+ {checked ? (
+  <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+    Visible
+  </span>
+) : (
+  <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">
+    Hidden
+  </span>
+)}
+  
+</td>
+
+{/* VISIBILITY */}
+<td className="p-3 text-gray-500">
+  {p.is_visible === false ? "Hidden" : "Visible"}
+</td>
                     </tr>
                   );
                 })}

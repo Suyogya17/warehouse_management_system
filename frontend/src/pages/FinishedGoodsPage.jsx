@@ -57,6 +57,7 @@
     const [nextStep, setNextStep] = useState(null);
     const [selectedUpperId, setSelectedUpperId] = useState("");
     const [selectedSoleId, setSelectedSoleId] = useState("");
+    const [deleteId, setDeleteId] = useState(null);
 
     const [search, setSearch] = useState("");
 
@@ -463,13 +464,13 @@
           subtitle={isAdmin ? "Admin can create, manage, and control user visibility for finished goods." : "Visible product catalog for users."}
           icon="finishedGoods"
         >
-          <div className="flex justify-end mb-3">
+          <div className="mb-4 items-center ">
   <input
     type="text"
     placeholder="Search by name or article..."
     value={search}
     onChange={(e) => setSearch(e.target.value)}
-    className="border rounded-lg px-3 py-2 text-sm w-full max-w-xs"
+    className="border border-black rounded-lg px-3 py-2 text-sm w-full max-w-xs"
   />
 </div>
 
@@ -529,9 +530,15 @@
                           <Button type="button" variant="secondary" size="sm" icon="edit" onClick={() => startEdit(row)}>
                           Edit
                         </Button>
-                        <Button type="button" variant="danger" size="sm" icon="delete" onClick={() => remove(row.id)}>
-                          Delete
-                        </Button>
+                        <Button
+  type="button"
+  variant="danger"
+  size="sm"
+  icon="delete"
+  onClick={() => setDeleteId(row.id)}
+>
+  Delete
+</Button>
                         </div>
                       </div>
                     ),
@@ -541,6 +548,7 @@
             rows={filteredItems}
           />
         </SectionCard>
+        
       </div>
     );
   }

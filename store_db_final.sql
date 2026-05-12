@@ -186,6 +186,11 @@ CREATE TABLE orders (
   created_by INT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  customer_address TEXT NOT NULL,
+  pan_number VARCHAR(100) NOT NULL,
+  transport_name VARCHAR(255) NOT NULL,
+  stock_deducted TINYINT(1) DEFAULT 0,
+  is_deleted TINYINT(4) DEFAULT 0,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );
 
@@ -207,4 +212,3 @@ ADD COLUMN is_visible TINYINT(1) NOT NULL DEFAULT 0;
 
 
 SELECT * FROM users;
-
