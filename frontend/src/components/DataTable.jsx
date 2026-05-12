@@ -81,10 +81,12 @@ export default function DataTable({
 
                     <span className="text-sm text-slate-700 text-right break-words">
                       {col.render
-                        ? col.render(row)
+                        ? col.render(row,index)
+                        :row[col.key]??"-"}
+                    
                         : col.type === "date"
                         ? formatDate(row[col.key])
-                        : row[col.key] ?? "-"}
+                        : row[col.key] ?? "-"
                     </span>
                   </div>
                 ))}
