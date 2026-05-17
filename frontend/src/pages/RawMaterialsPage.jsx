@@ -49,7 +49,7 @@ const buildFormData = (values, editingId) => {
 export default function RawMaterialsPage() {
   const { token, user } = useAuth();
   const { showToast } = useToast();
-  const canManage = user.role === "ADMIN";
+  const canManage = user.role === "ADMIN" || "CO_ADMIN";
   const [items, setItems] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState(null);

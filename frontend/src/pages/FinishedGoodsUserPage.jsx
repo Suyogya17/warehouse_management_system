@@ -702,20 +702,26 @@ import { useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber } from "../utils/format";
 
+const getAvailableQty = (product) =>
+  Number(product?.available_qty ?? product?.display_quantity ?? 0);
+
 function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
   const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
 
   useEffect(() => {
-    if (variants?.length) setSelectedVariant(variants[0]);
-  }, [variants]);
+    if (!variants?.length) {
+      setSelectedVariant(null);
+      return;
+    }
 
-  // Preload sibling variant images
-  useEffect(() => {
-    variants.slice(1).forEach((variant) => {
-      if (variant?.image_url) {
-        const image = new Image();
-        image.src = `${APP_BASE_URL}${variant.image_url}`;
-      }
+    setSelectedVariant((current) => {
+      const refreshedCurrent = variants.find(
+        (variant) => Number(variant.id) === Number(current?.id)
+      );
+
+      if (refreshedCurrent) return refreshedCurrent;
+
+      return variants.find((variant) => getAvailableQty(variant) > 0) || variants[0];
     });
   }, [variants]);
 
@@ -725,7 +731,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
 
   // FIX: Use available_qty (display_stock - reserved) for all stock UI.
   // This comes from /orders/availability and reflects real reservations.
-  const availableQty = Number(selectedVariant.available_qty ?? selectedVariant.display_quantity ?? 0);
+  const availableQty = getAvailableQty(selectedVariant);
 
   const isLowStock = availableQty > 0 && availableQty < 10;
   const isOutOfStock = availableQty <= 0;
@@ -746,6 +752,8 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
           <img
             loading="lazy"
             decoding="async"
+            width={400}        // add dimensions
+            height={300}
             src={`${APP_BASE_URL}${selectedVariant.image_url}`}
             alt={selectedVariant.name}
             className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
@@ -785,15 +793,14 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
       </div>
 
       {/* CONTENT */}
-      <div className="flex flex-col flex-1 p-4 gap-3">
+      <div className="flex flex-col">
         {/* TITLE + STOCK BADGE */}
         <div className="flex items-start justify-between gap-2">
-          <h3 className="flex-1 text-sm sm:text-base font-bold text-slate-900 line-clamp-2 leading-snug min-h-[44px]">
+          <h3 className="flex-1 text-sm sm:text-base font-bold text-slate-900 line-clamp-2 leading-snug min-h-[10px]">
             {selectedVariant.article_code || selectedVariant.name}
           </h3>
-
           <span
-            className={`text-[10px] px-2 py-1 rounded-full whitespace-nowrap font-semibold
+            className={`text-[10px] px-2 py-1 rounded-full font-semibold gap-2
             ${
               isOutOfStock
                 ? "bg-gray-100 text-gray-600"
@@ -806,16 +813,22 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
           </span>
         </div>
 
+         {/* SIZE */}
+        {selectedVariant.size && (
+          <div className="text-xs text-slate-600">
+            Size: <span className="font-semibold">{selectedVariant.size}</span>
+          </div>
+        )}
+        
         {/* COLOR VARIANTS */}
-        {variants.length > 1 && (
-          <div className="space-y-1">
-            <p className="text-[11px] text-slate-500 font-medium">Colors</p>
-            <div className="flex flex-wrap gap-1.5">
+        {variants.length > 0 && (
+          <div className="flex flex-col  py-2">
+            <div className="flex scrollbar-hidden  overflow-x-auto px-1 ">
               {variants.map((variant) => (
                 <button
                   key={variant.id}
                   onClick={() => setSelectedVariant(variant)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all
+                  className={`px-2.5 rounded-lg text-xs font-medium transition-all
                   ${
                     selectedVariant.id === variant.id
                       ? "bg-indigo-500 text-white"
@@ -829,12 +842,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
           </div>
         )}
 
-        {/* SIZE */}
-        {selectedVariant.size && (
-          <div className="text-xs text-slate-600">
-            Size: <span className="font-semibold">{selectedVariant.size}</span>
-          </div>
-        )}
+       
 
         {/* STOCK INFO — shows available (reserved-aware), not raw physical */}
         <div className="bg-slate-50 rounded-xl p-3 space-y-2">
@@ -856,11 +864,11 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
         </div>
 
         {/* ADD TO CART BUTTON */}
-        <div className="mt-auto pt-2">
+        <div className="flex justify-center mt-auto pt-2 ">
           <button
             onClick={() => onAddToCart(selectedVariant)}
             disabled={isOutOfStock}
-            className={`w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all
+            className={`my-2 px-4 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all
             ${
               isInCart
                 ? "bg-green-500 text-white hover:bg-green-600"
@@ -955,6 +963,8 @@ export default function FinishedGoodsUserPage() {
     });
     return Object.values(groups);
   }, [items]);
+  console.log("RAW ITEMS:", items.length);
+  console.log("GROUPED:", groupedProducts.length);
 
   const sizes = [...new Set(items.map((i) => i.size).filter(Boolean))];
 
@@ -962,17 +972,19 @@ export default function FinishedGoodsUserPage() {
 
   const filteredProducts = useMemo(() => {
     return groupedProducts
+    
       .map((variants) =>
         variants.filter((item) => {
           const matchSearch =
             !filters.search ||
             item.name?.toLowerCase().includes(filters.search.toLowerCase()) ||
             item.article_code?.toLowerCase().includes(filters.search.toLowerCase());
+            // console.log("Group sample:", groupedProducts[0]?.map(v => ({ name: v.name, available_qty: v.available_qty })));
 
           const matchSize = !filters.size || item.size === filters.size;
 
           // FIX: Filter by available_qty (reserved-aware), not raw quantity
-          const availableQty = Number(item.available_qty ?? item.display_quantity ?? 0);
+          const availableQty = getAvailableQty(item);
           const matchStock =
             filters.stock === "all"
               ? true
@@ -981,6 +993,7 @@ export default function FinishedGoodsUserPage() {
               : availableQty >= 10;
 
           return matchSearch && matchSize && matchStock;
+          
         })
       )
       .filter((variants) => variants.length > 0)
@@ -1015,14 +1028,14 @@ export default function FinishedGoodsUserPage() {
 
   const handleAddToCart = (product) => {
     // FIX: Guard against out-of-stock using available_qty, not quantity
-    const availableQty = Number(product.available_qty ?? product.display_quantity ?? 0);
+    const availableQty = getAvailableQty(product);
     if (!product || availableQty <= 0) return;
 
     const productId = Number(product.id);
 
     // Already in cart — take user to order page
     if (cartProductIds.has(productId)) {
-      navigate("/order-customer");
+      // navigate("/order-customer");
       return;
     }
 
@@ -1053,7 +1066,7 @@ export default function FinishedGoodsUserPage() {
     };
 
     setCart((prev) => [...prev, cartItem]);
-    navigate("/order-customer");
+    
   };
 
   const totalCartItems = cart.reduce(
@@ -1093,42 +1106,42 @@ export default function FinishedGoodsUserPage() {
       {/* TOP BAR */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <button
-          onClick={() => navigate("/order-customer")}
-          className="relative px-5 py-3 bg-indigo-500 text-white rounded-xl font-semibold hover:bg-indigo-600 transition-all flex items-center justify-center gap-2 shadow-sm"
+          onClick={() => navigate("/order-customer")} className="bg-indigo-500 flex flex-row w-fit gap-3 py-2 px-3 text-white rounded-xl"
+          
         >
           <ShoppingCart size={18} />
           <span>Cart</span>
           {totalCartItems > 0 && (
-            <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold rounded-full h-6 w-6 flex items-center justify-center">
+            <span className="relative -top-2 -right-2 bg-red-500 text-white text-xs font-bold rounded-full h-6 w-6 flex items-center justify-center">
               {totalCartItems}
             </span>
           )}
         </button>
 
-        <div className="flex gap-2">
+        <div className="flex justify-between gap-2">
+          <button
+            onClick={() => setSort((prev) => (prev === "newest" ? "oldest" : "newest"))}
+            className={`flex px-4 py-2.5 border rounded-xl font-medium transition-all
+            ${
+              sort === "newest"
+                ? "bg-red-600 text-white border-red-300"
+                : "bg-red-500 text-white  hover:bg-slate-50 border-slate-300"
+            }`}
+          >
+            {sort === "newest" ? "Newest" : "Oldest"}
+          </button>
+
           <button
             onClick={() => setShowFilters((prev) => !prev)}
-            className={`flex-1 sm:flex-none px-4 py-2.5 border rounded-xl font-medium transition-all flex items-center justify-center gap-2
+            className={`flex px-2 py-2 border rounded-xl font-medium transition-all flex items-center justify-center gap-2
             ${
               showFilters
-                ? "bg-indigo-500 text-white border-indigo-500"
-                : "bg-white text-slate-700 hover:bg-slate-50 border-slate-300"
+                ? "bg-red-600 text-white border-red-300"
+                : "text-slate-700 hover:bg-slate-50 border-slate-300"
             }`}
           >
             <Filter size={16} />
             <span>Filter</span>
-          </button>
-
-          <button
-            onClick={() => setSort((prev) => (prev === "newest" ? "oldest" : "newest"))}
-            className={`flex-1 sm:flex-none px-4 py-2.5 border rounded-xl font-medium transition-all
-            ${
-              sort === "newest"
-                ? "bg-indigo-500 text-white border-indigo-500"
-                : "bg-white text-slate-700 hover:bg-slate-50 border-slate-300"
-            }`}
-          >
-            {sort === "newest" ? "Newest" : "Oldest"}
           </button>
         </div>
       </div>
@@ -1186,10 +1199,10 @@ export default function FinishedGoodsUserPage() {
       {/* PRODUCTS GRID */}
       {paginatedProducts.length ? (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
-            {paginatedProducts.map((variants, index) => (
+          <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
+            {paginatedProducts.map((variants) => (
               <ProductCard
-                key={index}
+                key={variants.map((variant) => variant.id).join("-")}
                 variants={variants}
                 onAddToCart={handleAddToCart}
                 cartProductIds={cartProductIds}

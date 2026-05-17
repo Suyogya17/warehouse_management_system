@@ -3,8 +3,7 @@ import Button from "../components/Button";
 import EntitySummaryCard from "../components/EntitySummaryCard";
 import SectionCard from "../components/SectionCard";
 import DataTable from "../components/DataTable";
-import { Field, SelectInput, TextInput } from "../components/Field";
-import PageHeader from "../components/PageHeader";
+import { Field, TextInput } from "../components/Field";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
@@ -15,16 +14,50 @@ import Select from "react-select";
 export default function ConsumptionPage() {
   const { token, user } = useAuth();
   const { showToast } = useToast();
-  const canLog = user.role === "ADMIN";
-  const [materials, setMaterials] = useState([]);
-  const [logs, setLogs] = useState([]);
-  const [form, setForm] = useState({ raw_material_id: "", qty_used: "", reason: "" });
-  const selectedMaterial = materials.find((item) => String(item.id) === String(form.raw_material_id));
-  const commonReasons = ["Damaged", "Sample", "Wastage", "QC Reject"];
+  const [batches, setBatches] = useState([]);
+  const canLog = user.role === "ADMIN" || user.role === "CO_ADMIN";
 
+  const [materials, setMaterials] = useState([]);
+  const [finishedGoods, setFinishedGoods] = useState([]);
+  const [logs, setLogs] = useState([]);
+
+  const [rawForm, setRawForm] = useState({
+    raw_material_id: "",
+    qty_used: "",
+    reason: "",
+  });
+
+  const [finishedForm, setFinishedForm] = useState({
+    finished_good_id: "",
+    qty_used: "",
+    reason: "",
+  });
+
+  // ✅ Selected items (IMPORTANT optimization)
+  const selectedRawMaterial = materials.find(
+    (item) => String(item.id) === String(rawForm.raw_material_id)
+  );
+
+  const selectedFinishedGood = finishedGoods.find(
+    (item) => String(item.id) === String(finishedForm.finished_good_id)
+  );
+
+  // ✅ Separate reason sets (FIXED)
+  const rawReasons = ["Damaged", "Sample", "Wastage", "QC Reject"];
+  const finishedReasons = ["Damage", "Sample", "Return", "Extra"];
+
+  // Load data
   const load = useCallback(async () => {
-    const [materialsResult, logsResult] = await Promise.all([api.getRawMaterials(token), api.getConsumptionLogs(token)]);
+    const [materialsResult, finishedGoodsResult, logsResult] =
+      await Promise.all([
+        api.getRawMaterials(token),
+        api.getFinishedGoods(token),
+        api.getConsumptionLogs(token),
+      ]);
+
+
     setMaterials(materialsResult.data || []);
+    setFinishedGoods(finishedGoodsResult.data || []);
     setLogs(logsResult.data || []);
   }, [token]);
 
@@ -34,152 +67,328 @@ export default function ConsumptionPage() {
 
   useDataRefresh(load, "consumption");
 
-  const submit = async (event) => {
-    event.preventDefault();
-    try {
-      await api.logConsumption(
-        {
-          raw_material_id: Number(form.raw_material_id),
-          qty_used: Number(form.qty_used),
-          reason: form.reason,
-        },
-        token
-      );
-      setForm({ raw_material_id: "", qty_used: "", reason: "" });
-      await load();
-      announceDataRefresh("consumption");
-      showToast({ tone: "success", title: "Consumption logged", message: "Stock and consumption history were refreshed." });
-    } catch (error) {
-      showToast({ tone: "error", title: "Consumption failed", message: error.message });
-    }
-  };
+const submitRaw = async (e) => {
+  e.preventDefault();
 
+  const raw_material_id = Number(rawForm.raw_material_id);
+  const qty_used = Number(rawForm.qty_used);
+  const reason = rawForm.reason?.trim();
+
+  if (!raw_material_id || !qty_used || qty_used <= 0 || !reason) {
+    return showToast({
+      tone: "error",
+      title: "Invalid input",
+      message: "Please fill all fields correctly.",
+    });
+  }
+
+  try {
+    await api.logConsumption(
+      {
+        type: "RAW",
+        raw_material_id,
+        qty_used,
+        reason,
+      },
+      token
+    );
+
+    setRawForm({ raw_material_id: "", qty_used: "", reason: "" });
+    await load();
+    announceDataRefresh("consumption");
+
+    showToast({
+      tone: "success",
+      title: "Success",
+      message: "Raw material consumption logged.",
+    });
+  } catch (err) {
+    console.log("RAW ERROR PAYLOAD ISSUE:", err);
+    showToast({
+      tone: "error",
+      title: "Failed",
+      message: err.message,
+    });
+  }
+};
+  // FINISHED submit
+  const submitFinished = async (e) => {
+  e.preventDefault();
+
+  const finished_good_id = Number(finishedForm.finished_good_id);
+  const qty_used = Number(finishedForm.qty_used);
+  const reason = finishedForm.reason?.trim();
+
+  if (!finished_good_id || !qty_used || qty_used <= 0 || !reason) {
+    return showToast({
+      tone: "error",
+      title: "Invalid input",
+      message: "Please fill all fields correctly.",
+    });
+  }
+
+  try {
+    await api.logConsumption(
+      {
+        type: "FINISHED",
+        finished_good_id,
+        qty_used,
+        reason,
+      },
+      token
+    );
+
+    setFinishedForm({ finished_good_id: "", qty_used: "", reason: "" });
+    await load();
+    announceDataRefresh("consumption");
+
+    showToast({
+      tone: "success",
+      title: "Success",
+      message: "Finished goods updated.",
+    });
+  } catch (err) {
+    console.log("FINISHED ERROR PAYLOAD ISSUE:", err);
+    showToast({
+      tone: "error",
+      title: "Failed",
+      message: err.message,
+    });
+  }
+};
   return (
     <div className="space-y-6">
-      {/* <PageHeader
-        eyebrow="Usage tracking"
-        title="Consumption"
-        description="Record non-production deductions such as wastage, samples, and QC-related material losses."
-        icon="consumption"
-      /> */}
 
-      {canLog ? (
-        <SectionCard title="Log material consumption" subtitle="Use this for damaged, sample, wastage, or manual consumption events." icon="consumption">
-          <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" onSubmit={submit}>
+      {/* RAW MATERIAL SECTION */}
+      {canLog && (
+        <SectionCard
+          title="Raw Material Consumption"
+          subtitle="Track raw material usage"
+          icon="consumption"
+        >
+          <form
+            className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"
+            onSubmit={submitRaw}
+          >
             <Field label="Raw material">
-             <Select
-  options={materials.map((item) => ({
-    value: String(item.id),
-    label: `${item.name} (${item.article_code})`,
-  }))}
-
-  value={
-    materials
-      .map((item) => ({
-        value: String(item.id),
-        label: `${item.name} (${item.article_code})`,
-      }))
-      .find((opt) => opt.value === String(form.raw_material_id)) || null
-  }
-
-  onChange={(selected) =>
-    setForm((current) => ({
-      ...current,
-      raw_material_id: selected?.value || "",
-    }))
-  }
-
-  placeholder="Search material..."
-  isClearable
-  isSearchable
-
-  menuPortalTarget={document.body}
-  menuPosition="fixed"
-
-  styles={{
-    control: (base) => ({
-      ...base,
-      minHeight: "44px",
-      borderRadius: "12px",
-      borderColor: "#d1d5db",
-      boxShadow: "none",
-    }),
-    menuPortal: (base) => ({
-      ...base,
-      zIndex: 9999,
-    }),
-  }}
-/>
+              <Select
+                options={materials.map((item) => ({
+                  value: String(item.id),
+                  label: `${item.name} (${item.article_code})`,
+                }))}
+                value={
+                  materials
+                    .map((item) => ({
+                      value: String(item.id),
+                      label: `${item.name} (${item.article_code})`,
+                    }))
+                    .find(
+                      (opt) =>
+                        opt.value === String(rawForm.raw_material_id)
+                    ) || null
+                }
+                onChange={(selected) =>
+                  setRawForm((p) => ({
+                    ...p,
+                    raw_material_id: selected?.value || "",
+                  }))
+                }
+                isClearable
+                isSearchable
+              />
             </Field>
-            <Field label="Quantity used">
+
+            <Field label="Quantity">
               <TextInput
                 type="number"
-                min="1"
-                value={form.qty_used}
-                onChange={(event) => setForm((current) => ({ ...current, qty_used: event.target.value }))}
-                required
+                value={rawForm.qty_used}
+                onChange={(e) =>
+                  setRawForm((p) => ({ ...p, qty_used: e.target.value }))
+                }
               />
             </Field>
-            <div className="xl:col-span-2">
+
             <Field label="Reason">
               <TextInput
-                value={form.reason}
-                onChange={(event) => setForm((current) => ({ ...current, reason: event.target.value }))}
-                placeholder="Damaged, Sample, Wastage, QC Reject"
+                value={rawForm.reason}
+                onChange={(e) =>
+                  setRawForm((p) => ({ ...p, reason: e.target.value }))
+                }
               />
             </Field>
-            </div>
+
             <div className="md:col-span-2 xl:col-span-4 flex flex-wrap gap-2">
-              {commonReasons.map((reason) => (
+              {rawReasons.map((r) => (
                 <Button
-                  key={reason}
+                  key={r}
                   type="button"
-                  variant={form.reason === reason ? "primary" : "secondary"}
-                  size="sm"
-                  onClick={() => setForm((current) => ({ ...current, reason }))}
+                  variant={rawForm.reason === r ? "primary" : "secondary"}
+                  onClick={() =>
+                    setRawForm((p) => ({ ...p, reason: r }))
+                  }
                 >
-                  {reason}
+                  {r}
                 </Button>
               ))}
             </div>
-            {selectedMaterial ? (
+
+            {selectedRawMaterial && (
               <div className="md:col-span-2 xl:col-span-4">
                 <EntitySummaryCard
-                  title={selectedMaterial.name}
-                  subtitle={`Article code: ${selectedMaterial.article_code}`}
-                  imageUrl={selectedMaterial.image_url ? `${APP_BASE_URL}${selectedMaterial.image_url}` : null}
+                  title={selectedRawMaterial.name}
+                  subtitle={selectedRawMaterial.article_code}
+                  imageUrl={
+                    selectedRawMaterial.image_url
+                      ? `${APP_BASE_URL}${selectedRawMaterial.image_url}`
+                      : null
+                  }
                   metrics={[
-                    { label: "Category", value: selectedMaterial.category || "-" },
-                    { label: "Color", value: selectedMaterial.color || "-" },
-                    { label: "Current stock", value: `${formatNumber(selectedMaterial.quantity)} ${selectedMaterial.unit}` },
-                    { label: "Unit", value: selectedMaterial.unit || "-" },
+                    {
+                      label: "Stock",
+                      value: `${formatNumber(
+                        selectedRawMaterial.quantity
+                      )} ${selectedRawMaterial.unit}`,
+                    },
                   ]}
-                  description="Confirm the material and quantity here before saving the consumption entry."
                 />
               </div>
-            ) : null}
-            <div className="md:col-span-2 xl:col-span-4 flex items-center gap-3">
-              <Button type="submit" icon="check">
-                Save consumption
-              </Button>
-            </div>
+            )}
+
+            <Button type="submit">Save</Button>
           </form>
         </SectionCard>
-      ) : null}
+      )}
 
-      <SectionCard title="Consumption history" subtitle="Track how much raw material has been used." icon="stock">
-        <DataTable
+      {/* FINISHED GOODS SECTION */}
+      <SectionCard
+        title="Finished Goods Consumption"
+        subtitle="Deduct finished stock"
+        icon="stock"
+      >
+        <form
+          className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"
+          onSubmit={submitFinished}
+        >
+          <Field label="Finished Product">
+            <Select
+              options={finishedGoods.map((item) => ({
+                value: String(item.id),
+                label: `${item.name} (${item.article_code})`,
+              }))}
+              value={
+                finishedGoods
+                  .map((item) => ({
+                    value: String(item.id),
+                    label: `${item.name} (${item.article_code})`,
+                  }))
+                  .find(
+                    (opt) =>
+                      opt.value === String(finishedForm.finished_good_id)
+                  ) || null
+              }
+              onChange={(selected) =>
+                setFinishedForm((p) => ({
+                  ...p,
+                  finished_good_id: selected?.value || "",
+                }))
+              }
+              isClearable
+              isSearchable
+            />
+          </Field>
+
+          <Field label="Quantity">
+            <TextInput
+              type="number"
+              value={finishedForm.qty_used}
+              onChange={(e) =>
+                setFinishedForm((p) => ({
+                  ...p,
+                  qty_used: e.target.value,
+                }))
+              }
+            />
+          </Field>
+
+          <Field label="Reason">
+            <TextInput
+              value={finishedForm.reason}
+              onChange={(e) =>
+                setFinishedForm((p) => ({
+                  ...p,
+                  reason: e.target.value,
+                }))
+              }
+            />
+          </Field>
+
+          <div className="md:col-span-2 xl:col-span-4 flex flex-wrap gap-2">
+            {finishedReasons.map((r) => (
+              <Button
+                key={r}
+                type="button"
+                variant={
+                  finishedForm.reason === r ? "primary" : "secondary"
+                }
+                onClick={() =>
+                  setFinishedForm((p) => ({ ...p, reason: r }))
+                }
+              >
+                {r}
+              </Button>
+            ))}
+          </div>
+
+          {selectedFinishedGood && (
+            <div className="md:col-span-2 xl:col-span-4">
+              <EntitySummaryCard
+                title={selectedFinishedGood.name}
+                subtitle={selectedFinishedGood.article_code}
+                imageUrl={
+                  selectedFinishedGood.image_url
+                    ? `${APP_BASE_URL}${selectedFinishedGood.image_url}`
+                    : null
+                }
+                metrics={[
+                  {
+                    label: "Stock",
+                    value: `${formatNumber(
+                      selectedFinishedGood.quantity
+                    )} ${selectedFinishedGood.unit}`,
+                  },
+                ]}
+              />
+            </div>
+          )}
+
+          <Button type="submit">Deduct Stock</Button>
+        </form>
+      </SectionCard>
+
+      {/* HISTORY */}
+      <SectionCard title="History" icon="stock">
+        {/* <DataTable
           columns={[
-            { key: "name", label: "Material" },
-            { key: "article_code", label: "Article Code" },
-            { key: "qty_used", label: "Used", render: (row) => `${formatNumber(row.qty_used)} ${row.unit}` },
+            { key: "name", label: "Item" },
+            { key: "article_code", label: "Code" },
+            { key: "qty_used", label: "Used" },
             { key: "reason", label: "Reason" },
-            { key: "logged_by_name", label: "Logged By" },
-            { key: "created_at", label: "Created", type: "date" },
+            { key: "created_at", label: "Date", type: "date" },
           ]}
           rows={logs}
-        />
+        /> */}
+        <DataTable
+                  columns={[
+                    { key: "name", label: "Material" },
+                    { key: "qty_added", label: "Added", render: (row) => `${formatNumber(row.qty_added)} ${row.unit}` },
+                    { key: "qty_remaining", label: "Remaining", render: (row) => `${formatNumber(row.qty_remaining)} ${row.unit}` },
+                    { key: "notes", label: "Notes" },
+                    { key: "purchased_at", label: "Purchased At", render: (row) => formatDate(row.purchased_at) },
+                  ]}
+                  rows={batches}
+                />
       </SectionCard>
+
     </div>
   );
 }

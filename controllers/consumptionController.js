@@ -25,64 +25,125 @@ const getAll = async (req, res, next) => {
  */
 const logConsumption = async (req, res, next) => {
   const client = await getClient();
+  console.log("BODY RECEIVED:", req.body);
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
-    const { raw_material_id, qty_used, reason } = req.body;
+    const { type, raw_material_id, finished_good_id, qty_used, reason } = req.body;
 
-    if (!raw_material_id || !qty_used || qty_used <= 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ success: false, message: 'raw_material_id and qty_used (>0) are required' });
-    }
-
-    // Check material + current stock
-    const matRes = await client.query(
-      'SELECT id, name, article_code, quantity FROM raw_materials WHERE id=?',
-      [raw_material_id]
-    );
-    if (matRes.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ success: false, message: 'Raw material not found' });
-    }
-
-    const mat = matRes.rows[0];
-    const prevQty = parseFloat(mat.quantity);
-
-    if (prevQty < qty_used) {
-      await client.query('ROLLBACK');
-      return res.status(422).json({
+    // ─── BASIC VALIDATION ─────────────────────────────
+    if (!type || !qty_used || qty_used <= 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
         success: false,
-        message: `Insufficient stock. Available: ${prevQty}, Requested: ${qty_used}`,
+        message: "type and qty_used (>0) are required",
       });
     }
 
-    // 1. Log the consumption
-    const logRes = await client.query(
-      `INSERT INTO consumption_logs (raw_material_id, qty_used, reason, logged_by)
-       VALUES (?,?,?,?)`,
-      [raw_material_id, qty_used, reason || null, req.user.id]
+    let item;
+    let table;
+    let idField;
+    let idValue;
+
+    // ─── TYPE HANDLING ────────────────────────────────
+    if (type === "RAW") {
+      if (!raw_material_id) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          success: false,
+          message: "raw_material_id is required for RAW consumption",
+        });
+      }
+
+      table = "raw_materials";
+      idField = "raw_material_id";
+      idValue = raw_material_id;
+
+      item = await client.query(
+        "SELECT id, name, article_code, quantity FROM raw_materials WHERE id=?",
+        [raw_material_id]
+      );
+    } 
+    else if (type === "FINISHED") {
+      if (!finished_good_id) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          success: false,
+          message: "finished_good_id is required for FINISHED consumption",
+        });
+      }
+
+      table = "finished_goods";
+      idField = "finished_good_id";
+      idValue = finished_good_id;
+
+      item = await client.query(
+        "SELECT id, name, article_code, quantity FROM finished_goods WHERE id=?",
+        [finished_good_id]
+      );
+    } 
+    else {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        success: false,
+        message: "Invalid type",
+      });
+    }
+
+    // ─── CHECK ITEM EXISTS ─────────────────────────────
+    if (item.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Item not found" });
+    }
+
+    const row = item.rows[0];
+
+    // ─── STOCK CHECK ───────────────────────────────────
+    if (row.quantity < qty_used) {
+      await client.query("ROLLBACK");
+      return res.status(422).json({
+        success: false,
+        message: "Insufficient stock",
+      });
+    }
+
+   // ─── INSERT LOG ────────────────────────────────────
+let logRes;
+
+if (raw_material_id) {
+  logRes = await client.query(
+    `INSERT INTO consumption_logs (raw_material_id, qty_used, reason, logged_by)
+     VALUES (?, ?, ?, ?)`,
+    [raw_material_id, qty_used, reason || null, req.user.id]
+  );
+} else {
+  logRes = await client.query(
+    `INSERT INTO consumption_logs (finished_good_id, qty_used, reason, logged_by)
+     VALUES (?, ?, ?, ?)`,
+    [finished_good_id, qty_used, reason || null, req.user.id]
+  );
+}
+
+const logId = logRes.insertId;
+
+    // ─── UPDATE STOCK ─────────────────────────────────
+    await client.query(
+      `UPDATE ${table}
+       SET quantity = quantity - ?
+       WHERE id = ?`,
+      [qty_used, idValue]
     );
-    const logId = logRes.insertId;
 
-    // 2. Deduct from raw_materials (simple — not FIFO, as this is manual)
-    const newQty = prevQty - parseFloat(qty_used);
-    await client.query('UPDATE raw_materials SET quantity=? WHERE id=?', [newQty, raw_material_id]);
-
-    await client.query('COMMIT');
-
-    await auditLog({
-      userId: req.user.id, action: 'CONSUMPTION', tableName: 'consumption_logs',
-      recordId: logId,
-      detail: `${mat.name} (${mat.article_code}): -${qty_used} [${reason}]. ${prevQty} → ${newQty}`,
-    });
+    await client.query("COMMIT");
 
     return res.status(201).json({
       success: true,
-      message: `Consumption logged. ${mat.name}: ${prevQty} → ${newQty}`,
-      data: { id: logId, raw_material_id, qty_used, reason: reason || null, logged_by: req.user.id },
+      message: "Consumption logged successfully",
+      data: { id: logId },
     });
+
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query("ROLLBACK");
     next(err);
   } finally {
     client.release();

@@ -18,6 +18,12 @@ import OrdersPage from "./pages/OrdersPage";
 import LoginPage from "./pages/LoginPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import CustomerOrdersPage from "./pages/CustomerOrdersPage";
+import ElderFinishedPage from "./pages/ElderFinishedPage";
+import StockPage from "./pages/StockPage";
+import MemberFinishedPage from "./pages/MemberFinishedGoodPage";
+import MemberStockPage from "./pages/MemberStockPage";
+import MemberOrderPage from "./pages/MemberOrderPage";
+import OnHoldPage from "./pages/OnHoldPage";
 
 export default function App() {
   const { isAuthenticated, user } = useAuth();
@@ -48,7 +54,7 @@ export default function App() {
         <Route
           path="raw-materials"
           element={
-            <ProtectedRoute roles={["ADMIN", "STORE_KEEPER"]}>
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               <RawMaterialsPage />
             </ProtectedRoute>
           }
@@ -57,7 +63,7 @@ export default function App() {
         <Route
           path="finished-goods"
           element={
-            <ProtectedRoute roles={["ADMIN","STORE_KEEPER", "USER"]}>
+            <ProtectedRoute roles={["ADMIN","CO_ADMIN","MEMBER", "USER"]}>
               {user?.role === "USER" ? (
                 <FinishedGoodsUserPage />
               ) : (
@@ -70,7 +76,7 @@ export default function App() {
         <Route
           path="receive-stock"
           element={
-            <ProtectedRoute roles={["ADMIN"]}>
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               <ReceiveStockPage />
             </ProtectedRoute>
           }
@@ -79,7 +85,7 @@ export default function App() {
         <Route
           path="consumption"
           element={
-            <ProtectedRoute roles={["ADMIN", "STORE_KEEPER"]}>
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               <ConsumptionPage />
             </ProtectedRoute>
           }
@@ -88,7 +94,7 @@ export default function App() {
         <Route
           path="formulas"
           element={
-            <ProtectedRoute roles={["ADMIN"]}>
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               <FormulasPage />
             </ProtectedRoute>
           }
@@ -97,7 +103,7 @@ export default function App() {
         <Route
           path="production"
           element={
-            <ProtectedRoute roles={["ADMIN"]}>
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               <ProductionPage />
             </ProtectedRoute>
           }
@@ -106,8 +112,17 @@ export default function App() {
         <Route
           path="orders"
           element={
-            <ProtectedRoute roles={["ADMIN"]}>
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               <OrdersPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="stock"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              <StockPage />
             </ProtectedRoute>
           }
         />
@@ -121,13 +136,56 @@ export default function App() {
           }
         />
 
-        
+        <Route
+          path="elder-finished"
+          element={
+            <ProtectedRoute roles={["ELDER"]}>
+              <ElderFinishedPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="finished-goods-member"
+          element={
+            <ProtectedRoute roles={["MEMBER"]}>
+              <MemberFinishedPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="stock-member"
+          element={
+            <ProtectedRoute roles={["MEMBER"]}>
+              <MemberStockPage />
+            </ProtectedRoute>
+          }
+        />
+
+         <Route
+          path="order-member"
+          element={
+            <ProtectedRoute roles={["MEMBER"]}>
+              <MemberOrderPage />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="permissions"
           element={
-            <ProtectedRoute roles={["ADMIN"]}>
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               <PermissionsPage />
+            </ProtectedRoute>
+          }
+        />
+
+         <Route
+          path="on-hold"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              <OnHoldPage />
             </ProtectedRoute>
           }
         />

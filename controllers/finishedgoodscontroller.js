@@ -7,6 +7,7 @@ const getImagePath = (req) => (req.file ? `/uploads/${req.file.filename}` : null
 // ─── LIST ALL ───────────────────────────────────────────────────────────────
 const getAll = async (req, res, next) => {
   try {
+    console.log("=== getAll HIT ===", req.user);
     const { article_code } = req.query;
     const userId = req.user.id;
     const userRole = req.user.role;
@@ -14,7 +15,7 @@ const getAll = async (req, res, next) => {
     let sql = '';
     let params = [];
 
-    if (userRole === 'ADMIN' || userRole === 'STORE_KEEPER') {
+    if (userRole === 'ADMIN' || userRole === 'CO_ADMIN') {
       sql = `SELECT * FROM finished_goods WHERE 1=1`;
 
       if (article_code) {
@@ -24,7 +25,7 @@ const getAll = async (req, res, next) => {
 
       sql += ` ORDER BY article_code, color`;
 
-    } else if (userRole === 'USER') {
+    } else if (userRole === 'USER' || userRole === 'MEMBER' || userRole === 'ELDER') {
       sql = `
         SELECT fg.*
         FROM finished_goods fg
@@ -32,9 +33,16 @@ const getAll = async (req, res, next) => {
           ON upp.finished_good_id = fg.id
         WHERE upp.user_id = ?
           AND upp.can_view = 1
+          AND fg.is_visible = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM user_product_permissions deny
+            WHERE deny.finished_good_id = fg.id
+              AND deny.user_id = ?
+              AND deny.can_view = 0
+          )
       `;
 
-      params.push(userId);
+      params.push(userId, userId);
 
       if (article_code) {
         sql += ` AND fg.article_code LIKE ?`;
@@ -48,6 +56,9 @@ const getAll = async (req, res, next) => {
     }
 
     const rows = await query(sql, params);
+    console.log("SQL:", sql);
+    console.log("ROWS RETURNED:", rows.length);  // ← add this
+    console.log("USER ROLE:", userRole);          // ← and this
 
     return res.json({
       success: true,
@@ -69,7 +80,7 @@ const getOne = async (req, res, next) => {
     let sql;
     let params = [req.params.id];
 
-    if (userRole === 'ADMIN' || userRole === 'STORE_KEEPER') {
+    if (userRole === 'ADMIN' || userRole === 'CO_ADMIN') {
       sql = `SELECT * FROM finished_goods WHERE id = ?`;
 
     } else {
@@ -81,8 +92,15 @@ const getOne = async (req, res, next) => {
         WHERE fg.id = ?
           AND upp.user_id = ?
           AND upp.can_view = 1
+          AND fg.is_visible = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM user_product_permissions deny
+            WHERE deny.finished_good_id = fg.id
+              AND deny.user_id = ?
+              AND deny.can_view = 0
+          )
       `;
-      params.push(userId);
+      params.push(userId, userId);
     }
 
     const rows = await query(sql, params);
@@ -111,6 +129,7 @@ const create = async (req, res, next) => {
       color,
       size,
       unit,
+      quantity,
       min_quantity,
       inner_box_per_pair,
       inner_boxes_per_outer_box
@@ -124,7 +143,7 @@ const create = async (req, res, next) => {
        quantity, min_quantity,
        inner_box_per_pair, inner_boxes_per_outer_box,
        image_url, is_visible)
-      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     `;
 
     const params = [
@@ -134,6 +153,7 @@ const create = async (req, res, next) => {
       color || null,
       size || null,
       unit || 'pairs',
+      Number(quantity || 0),
       min_quantity || 5,
       Number(inner_box_per_pair || 1),
       inner_boxes_per_outer_box ? Number(inner_boxes_per_outer_box) : null,
@@ -162,12 +182,16 @@ const update = async (req, res, next) => {
       color,
       size,
       unit,
-      min_quantity
+      min_quantity,
+      inner_box_per_pair,           
+      inner_boxes_per_outer_box
     } = req.body;
 
     const image_url = req.file
       ? `/uploads/${req.file.filename}`
       : null;
+
+    const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
 
     let sql = `
       UPDATE finished_goods
@@ -177,8 +201,18 @@ const update = async (req, res, next) => {
           color = ?,
           size = ?,
           unit = ?,
-          min_quantity = ?
+          min_quantity = ?,
+          inner_box_per_pair = ?,
+          inner_boxes_per_outer_box = ?
+          ${supportsDisplayQuantity ? ', display_quantity = COALESCE(NULLIF(display_quantity, 0), quantity)' : ''}
     `;
+
+    const parsedOuterBox =
+  inner_boxes_per_outer_box !== undefined &&
+  inner_boxes_per_outer_box !== null &&
+  inner_boxes_per_outer_box !== ""
+    ? Number(inner_boxes_per_outer_box)
+    : null;
 
     const params = [
       name,
@@ -187,7 +221,10 @@ const update = async (req, res, next) => {
       color || null,
       size || null,
       unit || 'pairs',
-      min_quantity || 5
+      min_quantity || 5,
+      Number(inner_box_per_pair || 1),
+      parsedOuterBox,
+
     ];
 
     if (image_url) {
@@ -200,7 +237,7 @@ const update = async (req, res, next) => {
 
     const result = await query(sql, params);
 
-    if (result.affectedRows === 0) {
+    if (!result || result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: 'Not found' });
     }
 
@@ -212,20 +249,33 @@ const update = async (req, res, next) => {
 };
 // ─── DELETE ────────────────────────────────────────────────────────────────
 const remove = async (req, res, next) => {
-  try {
-    const result = await query(
-      `DELETE FROM finished_goods WHERE id = ?`,
-      [req.params.id]
-    );
+   try {
+    const { id } = req.params;
 
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ success: false, message: 'Not found' });
+     const result = await query(
+      "UPDATE finished_goods SET is_deleted = 1 WHERE id = ?",
+      [id]
+    );
+    console.log("DELETE HIT:", req.params.id);
+
+    if (!result || result.affectedRows === 0){
+      return res.status(404).json({
+        success: false,
+        message: "Item not found",
+      });
     }
 
-    return res.json({ success: true, message: 'Deleted successfully' });
+    res.json({
+      success: true,
+      message: "Item moved to deleted state",
+    });
 
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
   }
 };
 

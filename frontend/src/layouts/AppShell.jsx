@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import Button from "../components/Button";
 import Icon from "../components/Icon";
+import { normalizeRole } from "../utils/roles";
 
 const navByRole = {
   ADMIN: [
@@ -14,18 +15,42 @@ const navByRole = {
     { to: "/formulas", label: "Formulas", icon: "formulas" },
     { to: "/production", label: "Production", icon: "production" },
     { to: "/orders", label: "Orders", icon: "orders" },
+    { to: "/stock", label: "Stock", icon: "stock" },
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/users", label: "Users", icon: "users" },
+    { to: "/on-hold", label: "On Hold", icon: "hidden" },
+    
   ],
-  STORE_KEEPER: [
+
+  CO_ADMIN: [
+    { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/raw-materials", label: "Raw Materials", icon: "materials" },
     { to: "/finished-goods", label: "Production House Calculation", icon: "production" },
-    // { to: "/consumption", label: "Consumption", icon: "consumption" },
+    { to: "/receive-stock", label: "Purchase", icon: "purchase" },
+    { to: "/consumption", label: "Consumption", icon: "consumption" },
+    { to: "/formulas", label: "Formulas", icon: "formulas" },
+    { to: "/production", label: "Production", icon: "production" },
+    { to: "/orders", label: "Orders", icon: "orders" },
+    { to:   "/stock", label: "Stock", icon: "stock" },
+    { to: "/permissions", label: "Permissions", icon: "permission" },
+    { to: "/on-hold", label: "On Hold", icon: "hidden" },
+
   ],
-  USER: [
+
+  MEMBER: [
+    { to: "/finished-goods-member", label: "Our Products", icon: "finishedGoods" },
+    { to: "/order-member", label: "Order", icon: "cart" },
+    //  { to: "/on-hold-member", label: "On Hold", icon: "hidden" },
+     { to: "/stock-member", label: "Stock", icon: "stock" },
+  ],
+
+   USER: [
     { to: "/finished-goods", label: "Our Products", icon: "finishedGoods" },
     { to: "/order-customer", label: "Order", icon: "cart" },
-    
+  ],
+
+  ELDER: [
+    { to: "/elder-finished", label: "Our Products", icon: "finishedGoods" },
   ],
 };
 
@@ -35,7 +60,8 @@ export default function AppShell() {
 
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
-  const navItems = navByRole[user?.role] || [];
+  const role = normalizeRole(user?.role);
+  const navItems = navByRole[role] || [];
 
   const pageTitle = useMemo(() => {
     return (

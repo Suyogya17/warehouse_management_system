@@ -8,7 +8,7 @@ router.use(authenticate);
 router.post('/check', ctrl.checkStock);
 
 // POST /api/production/run     - execute production run (ADMIN, STORE_KEEPER)
-router.post('/run', authorize('ADMIN', 'STORE_KEEPER'), ctrl.runProduction);
+router.post('/run', authorize('ADMIN', 'CO_ADMIN'), ctrl.runProduction);
 
 // GET  /api/production         - production history
 router.get('/', ctrl.getHistory);
@@ -18,13 +18,13 @@ router.get('/:id', ctrl.getOne);
 
 router.put(
   "/:id",
-  authorize("ADMIN"),
+  authorize("ADMIN", "CO_ADMIN"),
   ctrl.updateProduction
 );
 
 router.delete(
   "/:id",
-  authorize("ADMIN"),
+  authorize("ADMIN", "CO_ADMIN"),
   ctrl.deleteProduction
 );
 

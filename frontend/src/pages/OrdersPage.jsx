@@ -11,6 +11,7 @@ import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
 import { formatNumber } from "../utils/format";
+import { hasRole } from "../utils/roles";
 import Select from "react-select";
 import { Search } from "lucide-react";
 
@@ -36,7 +37,7 @@ export default function OrdersPage() {
   const [stockSearch, setStockSearch] = useState("");
   const { token, user } = useAuth();
   const { showToast } = useToast();
-  const isAdmin = user.role === "ADMIN";
+  const canManageOrders = hasRole(user?.role, ["ADMIN", "CO_ADMIN"]);
   const [orders, setOrders] = useState([]);
   const [availability, setAvailability] = useState([]);
   const [form, setForm] = useState(initialForm);
@@ -347,7 +348,7 @@ const filteredAvailability = useMemo(() => {
 
 
 
-      <SectionCard title="Orders" subtitle={isAdmin ? "Admin can move orders through confirmation, packing, delivery, or cancellation." : "Your reserved orders."} icon="orders">
+      <SectionCard title="Orders" subtitle={canManageOrders ? "Admin can move orders through confirmation, packing, delivery, or cancellation." : "Your reserved orders."} icon="orders">
         <div className="relative mb-4">
   <Search
     size={16}
@@ -366,7 +367,8 @@ onChange={(e) => setOrderSearch(e.target.value)}
 </div>
         <DataTable
           columns={[
-            { key: "id", label: "Order" },
+            // { key: "id", label: "Order"},
+            {key: "S.No", label: "S.No", render: (_, index) => index + 1},
             { key: "customer_name", label: "Customer" },
             { key: "customer_phone", label: "Phone" },
             { key: "customer_address", label: "Address",},
@@ -376,12 +378,12 @@ onChange={(e) => setOrderSearch(e.target.value)}
             { key: "items", label: "Items", render: renderOrderItems },
             { key: "created_by_name", label: "Created By" },
             {
-  key: "created_at",
-  label: "Created",
-  render: (row) =>
-    new Date(row.created_at).toLocaleString(),
-},
-            isAdmin
+              key: "created_at",
+              label: "Created",
+              render: (row) =>
+                new Date(row.created_at).toLocaleString(),
+            },
+            canManageOrders
               ? {
                   key: "actions",
                   label: "Actions",
@@ -412,50 +414,6 @@ onChange={(e) => setOrderSearch(e.target.value)}
           rows={filteredOrders}
         />
       </SectionCard>
-
-    <SectionCard
-  title="Stock availability"
-  subtitle="Physical stock minus active reservations gives available stock."
-  icon="stock"
->
-  {/* Search */}
-  <div className="mb-4 max-w-sm">
-    <input
-      type="text"
-      placeholder="Search product, article, or color..."
-      value={stockSearch}
-      onChange={(e) => setStockSearch(e.target.value)}
-      className="w-full rounded-xl border border-black px-4 py-2.5 text-sm focus:border-slate-400 focus:outline-none"
-    />
-  </div>
-
-  <DataTable
-    columns={[
-      { key: "name", label: "Product" },
-      { key: "article_code", label: "Article" },
-      { key: "color", label: "Color" },
-      {
-        key: "physical_stock",
-        label: "Physical",
-        render: (row) =>
-          `${formatNumber(row.physical_stock)} ${row.unit}`,
-      },
-      {
-        key: "reserved_qty",
-        label: "Reserved",
-        render: (row) =>
-          `${formatNumber(row.reserved_qty)} ${row.unit}`,
-      },
-      {
-        key: "available_qty",
-        label: "Available",
-        render: (row) =>
-          `${formatNumber(row.available_qty)} ${row.unit}`,
-      },
-    ]}
-    rows={filteredAvailability}
-  />
-</SectionCard>
 
       
     </div>

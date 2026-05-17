@@ -49,7 +49,7 @@
   export default function FinishedGoodsPage() {
     const { token, user } = useAuth();
     const { showToast } = useToast();
-    const isAdmin = user.role === "ADMIN";
+    const isAdmin = user.role === "ADMIN" || user.role === "CO_ADMIN";
     const [items, setItems] = useState([]);
     const [materials, setMaterials] = useState([]);
     const [form, setForm] = useState(initialForm);
@@ -66,6 +66,7 @@
         api.getFinishedGoods(token),
         api.getRawMaterials(token),
       ]);
+      console.log("goods result:", goodsResult); // ← add this
       setItems(goodsResult.data || []);
       setMaterials(materialsResult.data || []);
     }, [token]);
@@ -162,12 +163,12 @@
             : "This product is now visible to normal users.",
           steps: item.is_visible
             ? [
-                "Users will no longer see this product in their catalog.",
-                "You can display it again later when stock is ready.",
-              ]
-            : [
                 "Users can now see this product in their catalog.",
                 "If needed, run production again later to replenish stock.",
+              ]
+            : [
+                "Users will no longer see this product in their catalog.",
+                "You can display it again later when stock is ready.",
               ],
         });
         await loadItems();
@@ -201,15 +202,21 @@
       }));
     };
 
-    const filteredItems = items.filter((item) => {
-  const query = search.toLowerCase();
 
-  return (
-    item.name?.toLowerCase().includes(query) ||
-    item.article_code?.toLowerCase().includes(query) ||
-    item.sole_code?.toLowerCase().includes(query)
-  );
-});
+        const filteredItems = items.filter((item) => {
+          if (!isAdmin && !item.is_visible) return false; 
+        const q = search.trim().toLowerCase();
+        const name = (item.name || "").toLowerCase();
+        const articleCode = (item.article_code || "").toLowerCase();
+        const soleCode = (item.sole_code || "").toLowerCase();
+
+        return (
+          name.includes(q) ||
+          articleCode.includes(q) ||
+          soleCode.includes(q)
+        );
+      });
+const isEmpty = filteredItems.length === 0;
 
     return (
       <div className="space-y-6">
@@ -231,7 +238,7 @@
           }
         />
 
-        {isAdmin ? (
+        {isAdmin && (
           <SectionCard
             title={editingId ? "Update finished good" : "Add finished good"}
             subtitle="Choose the upper and sole from raw materials so codes are filled in automatically."
@@ -450,14 +457,29 @@
                   />
                 </div>
               ) : null}
-              <div className="md:col-span-2 xl:col-span-3 flex flex-wrap items-center gap-3">
-                <Button type="submit">
-                  {editingId ? "Save changes" : "Create finished good"}
-                </Button>
-              </div>
+              <div className="md:col-span-2 xl:col-span-3 flex justify-center  gap-3">
+                    <Button type="submit">
+                      {editingId ? "Save changes" : "Create finished good"}
+                    </Button>
+
+                    {editingId && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => {
+                          setEditingId(null);
+                          setForm(initialForm);
+                          setSelectedUpperId("");
+                          setSelectedSoleId("");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    )}
+                  </div>
             </form>
           </SectionCard>
-        ) : null}
+        ) }
 
             <SectionCard
           title="Finished goods"
@@ -473,8 +495,8 @@
     className="border border-black rounded-lg px-3 py-2 text-sm w-full max-w-xs"
   />
 </div>
-
           <DataTable
+          
             columns={[
               {
                 key: "image_url",
@@ -530,22 +552,26 @@
                           <Button type="button" variant="secondary" size="sm" icon="edit" onClick={() => startEdit(row)}>
                           Edit
                         </Button>
-                        <Button
-  type="button"
-  variant="danger"
-  size="sm"
-  icon="delete"
-  onClick={() => setDeleteId(row.id)}
->
-  Delete
-</Button>
+                        {/* <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      icon="delete"
+                      onClick={() => setDeleteId(row.id)}
+                      >
+                        Delete
+                      </Button> */}
                         </div>
                       </div>
                     ),
                   }
                 : { key: "empty", label: "" },
             ]}
+            
             rows={filteredItems}
+            
+
+            
           />
         </SectionCard>
         

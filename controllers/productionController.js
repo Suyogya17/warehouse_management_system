@@ -503,7 +503,7 @@ await client.query(
   INSERT INTO stock
   (
     raw_material_id,
-    qty_received,
+    qty_added,
     qty_remaining,
     purchased_at
   )

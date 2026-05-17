@@ -2175,19 +2175,18 @@ export default function UserOrderPage() {
 
       {/* CART */}
       <SectionCard
-        title={
-          <div className="flex items-center gap-2">
-            <ShoppingCart size={20} />
-            Cart Summary ({totalItems} {totalItems === 1 ? "item" : "items"})
-          </div>
-        }
-        actions={
-          cart.length > 0 && (
-            <button onClick={clearCart} className="text-red-600 hover:text-red-700 font-medium text-sm flex items-center gap-1">
-              <Trash2 size={16} /> Clear Cart
-            </button>
-          )
-        }
+      title={
+  <div className="flex items-center justify-between w-full">
+    
+    {/* LEFT */}
+    <div className="flex gap-2">
+      <ShoppingCart size={20} />
+      <span className="text-sm sm:text-base font-medium">
+        Cart Summary
+      </span>
+    </div>
+  </div>
+}
       >
         {errors.cart && (
           <div className="mb-4 bg-red-50 border border-red-200 rounded-xl p-4 flex gap-2">
@@ -2222,8 +2221,19 @@ export default function UserOrderPage() {
                 : Number(item.qty_ordered);
 
               return (
-                <div key={item.finished_good_id} className="border border-slate-200 rounded-xl p-4 bg-white">
-                  <div className="flex gap-4">
+                <div key={item.finished_good_id} className="border rounded-2xl p-4 bg-white shadow-sm hover:shadow-md transition-all">
+                   <div className="flex justify-end">
+                          <button
+                          className="w-9 h-9 rounded-lg border border-red-300 hover:bg-red-50 text-red-600 flex items-center justify-center transition"
+                          onClick={() => removeFromCart(item.finished_good_id)}
+                        >
+                          <X size={16} />
+                        </button>
+                          </div>
+
+                  <div className="flex gap-4 ">
+
+                    
                     <div className="w-20 h-20 bg-slate-100 rounded-lg overflow-hidden flex-shrink-0">
                       {item.product.image_url ? (
                         <img src={`${APP_BASE_URL}${item.product.image_url}`} alt={item.product.name} className="w-full h-full object-cover" />
@@ -2233,39 +2243,32 @@ export default function UserOrderPage() {
                         </div>
                       )}
                     </div>
+                    
 
-                    <div className="flex-1 space-y-2">
+                    <div className="flex-1 flex-col justify-between">
+                      
                       <h3 className="font-bold text-slate-900">
                         {item.product.article_code || item.product.name}
                       </h3>
-
-                      <div className="flex flex-wrap gap-2 text-xs text-slate-600">
-                        {item.product.color && (
-                          <span className="px-2 py-1 bg-slate-100 rounded">Color: {item.product.color}</span>
+                       {item.product.color && (
+                          <span className="px-2 py-1 text-xs">Color: {item.product.color}</span>
                         )}
                         {item.product.size && (
-                          <span className="px-2 py-1 bg-slate-100 rounded">Size: {item.product.size}</span>
+                          <span className="px-2 py-1 bg-slate-100 text-slate-700 rounded text-xs">
+                            Size: {item.product.size}
+                          </span>
                         )}
-                        <span className="px-2 py-1 bg-green-50 text-green-700 rounded">
-                          Available: {formatNumber(available)} pairs
-                        </span>
-                      </div>
-
-                      {hasCartons && (
-                        <button
-                          onClick={() => toggleOrderBy(item.finished_good_id)}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                            item.orderBy === "cartons"
-                              ? "bg-indigo-500 text-white"
-                              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                          }`}
-                        >
-                          {item.orderBy === "cartons" ? "Ordering by Cartons" : "Switch to Cartons"}
-                        </button>
-                      )}
+                        <div className="flex gap-4 text-xs text-slate-500">
+                          
+                          <span className="rounded px-2 py-1 bg-slate-100 bg-green-100 text-green-800">
+                            Available: {formatNumber(available)} pairs
+                          </span>
+                          </div>
+                      
 
                       <div className="flex items-center justify-between pt-2">
                         <div className="flex items-center gap-3">
+                          
                           <button
                             className="w-9 h-9 rounded-lg border border-slate-300 hover:bg-slate-100 flex items-center justify-center transition"
                             onClick={() => updateQty(item.finished_good_id, Number(item.qty_ordered) - 1)}
@@ -2287,18 +2290,12 @@ export default function UserOrderPage() {
                           </button>
                         </div>
 
+                       
                         {hasCartons && item.orderBy === "cartons" && (
                           <div className="text-sm text-slate-600">
                             = <span className="font-bold text-indigo-600">{formatNumber(actualPairs)}</span> pairs
                           </div>
                         )}
-
-                        <button
-                          className="w-9 h-9 rounded-lg border border-red-300 hover:bg-red-50 text-red-600 flex items-center justify-center transition"
-                          onClick={() => removeFromCart(item.finished_good_id)}
-                        >
-                          <X size={16} />
-                        </button>
                       </div>
                     </div>
                   </div>
@@ -2306,7 +2303,7 @@ export default function UserOrderPage() {
               );
             })}
 
-            <div className="flex justify-end text-sm text-slate-600 pt-1">
+            <div className="flex justify-end text-sm text-slate-600 pt-1 px-5">
               Total pairs in cart:{" "}
               <span className="ml-1 font-bold text-indigo-600">
                 {formatNumber(getTotalPairs(cart))}

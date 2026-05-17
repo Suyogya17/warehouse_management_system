@@ -6,7 +6,7 @@ router.use(authenticate);
 
 router.get('/', ctrl.getAll);
 router.get('/availability', ctrl.getAvailability);
-router.post('/', authorize('ADMIN', 'USER'), ctrl.create);
-router.put('/:id/status', authorize('ADMIN'), ctrl.updateStatus);
+router.post('/', authorize('ADMIN','CO_ADMIN', 'USER'), ctrl.create);
+router.put('/:id/status', authorize('ADMIN', 'CO_ADMIN'), ctrl.updateStatus);
 
 module.exports = router;

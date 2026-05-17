@@ -1,13 +1,20 @@
 import { createContext, useContext, useEffect, useMemo, useState, useCallback } from "react";
 import { api } from "../services/api";
+import { normalizeRole } from "../utils/roles";
 
 const AuthContext = createContext(null);
 const STORAGE_KEY = "store-management-auth";
 
+const normalizeUser = (user) =>
+  user ? { ...user, role: normalizeRole(user.role) } : user;
+
 export const AuthProvider = ({ children }) => {
   const [auth, setAuth] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : { token: "", user: null };
+    if (!saved) return { token: "", user: null };
+
+    const parsed = JSON.parse(saved);
+    return { ...parsed, user: normalizeUser(parsed.user) };
   });
   const [loading, setLoading] = useState(false);
 
@@ -24,16 +31,45 @@ export const AuthProvider = ({ children }) => {
     return () => window.removeEventListener("store-management:auth-expired", handleExpiredAuth);
   }, []);
 
+   // =========================
+  // 🔥 AUTO LOGOUT (IMPORTANT)
+  // =========================
+  useEffect(() => {
+    if (!auth.token) return;
+
+    try {
+      const payload = JSON.parse(atob(auth.token.split(".")[1]));
+      const expiry = payload.exp * 1000;
+
+      const timeout = expiry - Date.now();
+
+      // already expired → logout immediately
+      if (timeout <= 0) {
+        logout();
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        logout();
+      }, timeout);
+
+      return () => clearTimeout(timer);
+    } catch (err) {
+      logout(); // invalid token → force logout
+    }
+  }, [auth.token]);
+
   // ✅ Wrap functions in useCallback to stabilize references
   const login = useCallback(async (email, password, expectedRole) => {
     setLoading(true);
     try {
       const result = await api.login({ email, password });
-      if (expectedRole && result.user.role !== expectedRole) {
-        throw new Error(`This account is ${result.user.role}. Please use the correct login type.`);
+      const user = normalizeUser(result.user);
+      if (expectedRole && user.role !== normalizeRole(expectedRole)) {
+        throw new Error(`This account is ${user.role}. Please use the correct login type.`);
       }
-      setAuth({ token: result.token, user: result.user });
-      return result.user;
+      setAuth({ token: result.token, user });
+      return user;
     } finally {
       setLoading(false);
     }
@@ -47,8 +83,9 @@ export const AuthProvider = ({ children }) => {
   const refreshProfile = useCallback(async () => {
     if (!auth.token) return null;
     const result = await api.getProfile(auth.token);
-    setAuth((current) => ({ ...current, user: result.data }));
-    return result.data;
+    const user = normalizeUser(result.data);
+    setAuth((current) => ({ ...current, user }));
+    return user;
   }, [auth.token]);
 
   // ✅ Now include all dependencies

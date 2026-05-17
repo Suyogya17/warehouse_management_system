@@ -201,7 +201,7 @@
 //   );
 // }
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { formatDate } from "../utils/format";
 import EmptyState from "./EmptyState";
 
@@ -247,7 +247,7 @@ export default function DataTable({
   };
 
   return (
-                <div className="w-full bg-white shadow-sm">
+                <div className="w-full rounded-2xl border border-slate-200 bg-white shadow-sm">
 
                   {/* MOBILE TABLE VIEW */}
                       <div className="overflow-x-auto">

@@ -1,6 +1,7 @@
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useEffect } from "react";
+import { hasRole } from "../utils/roles";
 
 export default function ProtectedRoute({ roles, children }) {
   const { isAuthenticated, user } = useAuth();
@@ -21,7 +22,7 @@ export default function ProtectedRoute({ roles, children }) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  if (roles?.length && !roles.includes(user?.role)) {
+  if (roles?.length && !hasRole(user?.role, roles)) {
     return <Navigate to="/" replace />;
   }
 

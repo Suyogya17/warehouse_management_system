@@ -3,6 +3,27 @@ const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { hasColumn } = require('../utils/schemaSupport');
 
+const syncFinishedGoodVisibility = async (finishedGoodId) => {
+  const result = await query(
+    `SELECT COUNT(*) AS active_count
+     FROM user_product_permissions upp
+     JOIN users u ON u.id = upp.user_id
+     WHERE upp.finished_good_id = ?
+       AND upp.can_view = 1
+       AND u.role IN ('USER', 'MEMBER', 'ELDER')`,
+    [finishedGoodId]
+  );
+
+  const activeCount = Number(result[0]?.active_count || 0);
+
+  await query(
+    `UPDATE finished_goods
+     SET is_visible = ?
+     WHERE id = ?`,
+    [activeCount > 0 ? 1 : 0, finishedGoodId]
+  );
+};
+
 // ─── GRANT ACCESS ─────────────────────────────────────────────────────────────
 const grantAccess = async (req, res, next) => {
   try {
@@ -13,12 +34,22 @@ const grantAccess = async (req, res, next) => {
     }
 
     for (const fg_id of finished_good_ids) {
-      await query(
-        `INSERT INTO user_product_permissions (user_id, finished_good_id, can_view)
-         VALUES (?, ?, 1)
-         ON DUPLICATE KEY UPDATE can_view = 1`,
+      const updated = await query(
+        `UPDATE user_product_permissions
+         SET can_view = 1
+         WHERE user_id = ? AND finished_good_id = ?`,
         [user_id, fg_id]
       );
+
+      if (!updated.affectedRows) {
+        await query(
+          `INSERT INTO user_product_permissions (user_id, finished_good_id, can_view)
+           VALUES (?, ?, 1)`,
+          [user_id, fg_id]
+        );
+      }
+
+      await syncFinishedGoodVisibility(fg_id);
     }
 
     await auditLog({
@@ -40,10 +71,22 @@ const revokeAccess = async (req, res, next) => {
   try {
     const { user_id, finished_good_id } = req.body;
 
-    await query(
-      'DELETE FROM user_product_permissions WHERE user_id = ? AND finished_good_id = ?',
+    const updated = await query(
+      `UPDATE user_product_permissions
+       SET can_view = 0
+       WHERE user_id = ? AND finished_good_id = ?`,
       [user_id, finished_good_id]
     );
+
+    if (!updated.affectedRows) {
+      await query(
+        `INSERT INTO user_product_permissions (user_id, finished_good_id, can_view)
+         VALUES (?, ?, 0)`,
+        [user_id, finished_good_id]
+      );
+    }
+
+    await syncFinishedGoodVisibility(finished_good_id);
 
     await auditLog({
       userId: req.user.id,
@@ -68,10 +111,13 @@ const getUserProducts = async (req, res, next) => {
       `SELECT fg.*
        FROM finished_goods fg
        JOIN user_product_permissions upp ON upp.finished_good_id = fg.id
-       WHERE upp.user_id = ? AND upp.can_view = 1
+       WHERE upp.user_id = ?
+         AND upp.can_view = 1
+         AND fg.is_visible = 1
        ORDER BY fg.name`,
       [user_id]
     );
+
 
     return res.json({ success: true, data: result.rows });
   } catch (err) {
@@ -85,7 +131,7 @@ const getAllPermissions = async (req, res, next) => {
     const supportsImage = await hasColumn('finished_goods', 'image_url');
     const supportsVisibility = await hasColumn('finished_goods', 'is_visible');
     const result = await query(
-      `SELECT upp.*, u.name AS user_name, u.email,
+      `SELECT upp.*, u.name AS user_name, u.email, u.role AS user_role,
               fg.name AS product_name, fg.article_code, fg.sole_code, fg.color,
               fg.size, fg.quantity, fg.min_quantity,
               ${supportsImage ? 'fg.image_url' : 'CAST(NULL AS CHAR) AS image_url'},

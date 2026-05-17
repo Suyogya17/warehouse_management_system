@@ -2,7 +2,7 @@ import Icon from "./Icon";
 
 export default function SectionCard({ title, subtitle, children, actions, icon = "spark" }) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm px-1 py-3">
       <div className="flex flex-col gap-3 border-b border-slate-100 px-6 py-2 md:flex-row md:items-center md:justify-between bg-indigo-90">
         <div>
           <div className="flex items-center gap-3">

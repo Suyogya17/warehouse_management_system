@@ -17,7 +17,7 @@
     const [search, setSearch] = useState("");
     const { token, user } = useAuth();
     const { showToast } = useToast();
-    const canRun = ["ADMIN", "STORE_KEEPER"].includes(user.role);
+    const canRun = ["ADMIN", "CO_ADMIN"].includes(user.role);
     const [formulas, setFormulas] = useState([]);
     const [history, setHistory] = useState([]);
     const [checkResult, setCheckResult] = useState(null);

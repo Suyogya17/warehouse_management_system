@@ -31,12 +31,12 @@ router.post('/login', login);
 router.get('/profile', authenticate, getProfile);
 
 // GET /api/auth/users  (ADMIN only)
-router.get('/users', authenticate, authorize('ADMIN'), listUsers);
+router.get('/users', authenticate, authorize('ADMIN', 'CO_ADMIN'), listUsers);
 
 // PUT /api/auth/users/:id  (ADMIN only)
-router.put('/users/:id', authenticate, authorize('ADMIN'), updateUser);
+router.put('/users/:id', authenticate, authorize('ADMIN','CO_ADMIN'), updateUser);
 
 // DELETE /api/auth/users/:id  (ADMIN only)
-router.delete('/users/:id', authenticate, authorize('ADMIN'), deleteUser);
+router.delete('/users/:id', authenticate, authorize('ADMIN','CO_ADMIN'), deleteUser);
 
 module.exports = router;

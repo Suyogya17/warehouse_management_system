@@ -64,7 +64,6 @@ export default function FormulasPage() {
   const [search, setSearch] = useState("");
 const [filterFinishedGood, setFilterFinishedGood] = useState("");
 const [currentPage, setCurrentPage] = useState(1);
-
 const ITEMS_PER_PAGE = 10;
   const [materials, setMaterials] = useState([]);
   const [finishedGoods, setFinishedGoods] = useState([]);
@@ -290,6 +289,24 @@ const paginatedFormulas = filteredFormulas.slice(
   (currentPage - 1) * ITEMS_PER_PAGE,
   currentPage * ITEMS_PER_PAGE
 );
+const getPageNumbers = () => {
+    const pages = [];
+    const maxVisible = 5;
+    let start = Math.max(1, currentPage - 2);
+    let end = Math.min(totalPages, start + maxVisible - 1);
+    if (end - start < maxVisible - 1) start = Math.max(1, end - maxVisible + 1);
+
+    if (start > 1) {
+      pages.push(1);
+      if (start > 2) pages.push("...");
+    }
+    for (let i = start; i <= end; i++) pages.push(i);
+    if (end < totalPages) {
+      if (end < totalPages - 1) pages.push("...");
+      pages.push(totalPages);
+    }
+    return pages;
+  };
 
 
   return (
@@ -609,6 +626,20 @@ const paginatedFormulas = filteredFormulas.slice(
     >
       Prev
     </Button>
+
+    {getPageNumbers().map((page, i) => (
+            <button
+              key={i}
+              onClick={() => typeof page === "number" && setCurrentPage(page)}
+              className={`px-3 py-1.5 rounded-lg text-sm ${
+                currentPage === page
+                  ? "bg-indigo-600 text-white"
+                  : "border hover:bg-indigo-50 text-slate-700"
+              }`}
+            >
+              {page}
+            </button>
+          ))}
 
     <Button
       type="button"

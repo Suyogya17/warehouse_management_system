@@ -181,7 +181,9 @@ export default function UsersPage() {
               }
             >
               <option value="ADMIN">ADMIN</option>
-              <option value="STORE_KEEPER">STORE_KEEPER</option>
+              <option value="CO_ADMIN">CO_ADMIN</option>
+              <option value="MEMBER">MEMBER</option>
+              <option value="ELDER">ELDER</option>
               <option value="USER">USER</option>
             </SelectInput>
           </Field>
