@@ -7,7 +7,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import DashboardPage from "./pages/DashboardPage";
 import RawMaterialsPage from "./pages/RawMaterialsPage";
 import FinishedGoodsPage from "./pages/FinishedGoodsPage";
-import FinishedGoodsUserPage from "./pages/FinishedGoodsUserPage";
+import FinishedGoodsUserPage from "./pages/Users/FinishedGoodsUserPage";
 import ReceiveStockPage from "./pages/ReceiveStockPage";
 import ConsumptionPage from "./pages/ConsumptionPage";
 import FormulasPage from "./pages/FormulasPage";
@@ -17,12 +17,12 @@ import UsersPage from "./pages/UsersPage";
 import OrdersPage from "./pages/OrdersPage";
 import LoginPage from "./pages/LoginPage";
 import NotFoundPage from "./pages/NotFoundPage";
-import CustomerOrdersPage from "./pages/CustomerOrdersPage";
-import ElderFinishedPage from "./pages/ElderFinishedPage";
+import CustomerOrdersPage from "./pages/Users/CustomerOrdersPage";
+import ElderFinishedPage from "./pages/Elder/ElderFinishedPage";
 import StockPage from "./pages/StockPage";
-import MemberFinishedPage from "./pages/MemberFinishedGoodPage";
-import MemberStockPage from "./pages/MemberStockPage";
-import MemberOrderPage from "./pages/MemberOrderPage";
+import MemberFinishedPage from "./pages/Member/MemberFinishedGoodPage";
+import MemberStockPage from "./pages/Member/MemberStockPage";
+import MemberOrderPage from "./pages/Member/MemberOrderPage";
 import OnHoldPage from "./pages/OnHoldPage";
 
 export default function App() {

@@ -387,6 +387,7 @@ const isEmpty = filteredItems.length === 0;
               <Field label="Size">
                 <TextInput
                   value={form.size}
+                  required
                   onChange={(event) => setForm((current) => ({ ...current, size: event.target.value }))}
                 />
               </Field>
@@ -423,9 +424,11 @@ const isEmpty = filteredItems.length === 0;
               <Field label="Inner boxes per outer box">
                 <TextInput
                   type="number"
+                  required
                   min={0}
                   step="1"
                   value={form.inner_boxes_per_outer_box}
+                   onWheel={(event) => event.target.blur()} // prevents mouse scroll changing value
                   onChange={(event) => setForm((current) => ({ ...current, inner_boxes_per_outer_box: Number(event.target.value) }))}
                 />
               </Field>

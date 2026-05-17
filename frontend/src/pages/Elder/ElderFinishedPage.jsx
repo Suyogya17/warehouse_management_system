@@ -8,15 +8,15 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
-import EmptyState from "../components/EmptyState";
-import PageHeader from "../components/PageHeader";
-import SectionCard from "../components/SectionCard";
+import EmptyState from "../../components/EmptyState";
+import PageHeader from "../../components/PageHeader";
+import SectionCard from "../../components/SectionCard";
 
-import { useAuth } from "../context/AuthContext";
-import { useDataRefresh } from "../hooks/useDataRefresh";
+import { useAuth } from "../../context/AuthContext";
+import { useDataRefresh } from "../../hooks/useDataRefresh";
 
-import { api, APP_BASE_URL } from "../services/api";
-import { formatNumber } from "../utils/format";
+import { api, APP_BASE_URL } from "../../services/api";
+import { formatNumber } from "../../utils/format";
 
 const getAvailableQty = (product) =>
   Number(product?.available_qty ?? product?.display_quantity ?? 0);
@@ -211,7 +211,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
   );
 }
 
-export default function FinishedGoodsUserPage() {
+export default function ElderFinishedGoods() {
   const { token } = useAuth();
   const navigate = useNavigate();
 

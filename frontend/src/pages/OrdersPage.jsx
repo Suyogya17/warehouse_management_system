@@ -14,6 +14,7 @@ import { formatNumber } from "../utils/format";
 import { hasRole } from "../utils/roles";
 import Select from "react-select";
 import { Search } from "lucide-react";
+import NepaliDate from "nepali-date-converter";
 
 const initialForm = {
   customer_name: "",
@@ -31,6 +32,8 @@ const statusTone = {
   DELIVERED: "success",
   CANCELLED: "danger",
 };
+
+const PRINTABLE_DELIVERY_STATUSES = ["CONFIRMED", "PACKED", "DELIVERED"];
 
 export default function OrdersPage() {
   const [orderSearch, setOrderSearch] = useState("");
@@ -112,9 +115,18 @@ export default function OrdersPage() {
     }
   };
 
-  const changeStatus = async (orderId, status) => {
+  const changeStatus = async (orderId, status, cancellationReason = "") => {
     try {
-      await api.updateOrderStatus(orderId, { status }, token);
+      await api.updateOrderStatus(
+        orderId,
+        {
+          status,
+          ...(status === "CANCELLED"
+            ? { cancellation_reason: cancellationReason }
+            : {}),
+        },
+        token
+      );
       await load();
       announceDataRefresh("orders");
       showToast({ tone: "success", title: "Order updated", message: `Order marked ${status.toLowerCase()}.` });
@@ -155,6 +167,347 @@ const filteredAvailability = useMemo(() => {
     );
   });
 }, [availability, stockSearch]);
+
+const deliveryNoteNumbersByOrderId = useMemo(() => {
+  const printableOrders = orders
+    .filter((order) => PRINTABLE_DELIVERY_STATUSES.includes(order.status))
+    .sort((a, b) => {
+      const aDate = new Date(a.confirmed_at || a.created_at).getTime();
+      const bDate = new Date(b.confirmed_at || b.created_at).getTime();
+
+      if (aDate !== bDate) return aDate - bDate;
+      return Number(a.id) - Number(b.id);
+    });
+
+  return new Map(
+    printableOrders.map((order, index) => [Number(order.id), `DN-${1001 + index}`])
+  );
+}, [orders]);
+
+const escapeHtml = (value) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+
+const printDeliveryNote = (order, manualDeliveryNoteNumber = "") => {
+  const now = new Date();
+
+  // English Date
+  const englishDate = now.toLocaleDateString("en-GB");
+
+  // Nepali Date
+  const nepDate = new NepaliDate(now);
+  const nepaliDate = nepDate.format("YYYY.MM.DD");
+
+  // Current Time
+  const currentTime = now.toLocaleTimeString();
+
+  // Auto Delivery Note Number
+  const deliveryNoteNumber =
+    manualDeliveryNoteNumber.trim() ||
+    deliveryNoteNumbersByOrderId.get(Number(order.id)) ||
+    `DN-${1000 + order.id}`;
+
+  const printableItems = (order.items || []).map((item) => {
+    const product = availabilityById.get(String(item.finished_good_id));
+    const pairs = Number(item.qty_ordered || 0);
+    const pairsPerCarton = Number(
+      item.inner_boxes_per_outer_box ||
+        product?.inner_boxes_per_outer_box ||
+        0
+    );
+    const cartons = pairsPerCarton > 0 ? pairs / pairsPerCarton : 0;
+
+    return {
+      ...item,
+      pairs,
+      pairsPerCarton,
+      cartons,
+    };
+  });
+
+  const totalPairs = printableItems.reduce((sum, item) => sum + item.pairs, 0);
+  const totalCartons = printableItems.reduce(
+    (sum, item) => sum + item.cartons,
+    0
+  );
+
+  const formatPrintNumber = (value) =>
+    Number(value || 0).toLocaleString(undefined, {
+      maximumFractionDigits: 2,
+    });
+
+  const itemsHtml = printableItems
+    .map(
+      (item, index) => `
+        <tr>
+          <td style="border:1px solid black;padding:6px;text-align:center;">
+            ${index + 1}
+          </td>
+
+          <td style="border:1px solid black;padding:6px;">
+            ${escapeHtml(item.product_name)}
+          </td>
+
+          <td style="border:1px solid black;padding:6px;text-align:center;">
+            ${
+              item.pairsPerCarton > 0
+                ? formatPrintNumber(item.cartons)
+                : "0"
+            }
+          </td>
+
+          <td style="border:1px solid black;padding:6px;text-align:center;">
+            ${formatPrintNumber(item.pairs)} ${escapeHtml(item.unit || "pairs")}
+          </td>
+        </tr>
+      `
+    )
+    .join("");
+
+  const printWindow = window.open("", "_blank", "width=900,height=700");
+
+  if (!printWindow) {
+    showToast({
+      tone: "error",
+      title: "Print blocked",
+      message: "Allow popups for this site and try printing again.",
+    });
+    return;
+  }
+
+  printWindow.document.open();
+  printWindow.document.write(`
+    <!doctype html>
+    <html>
+      <head>
+        <title>Delivery Note</title>
+
+        <style>
+          body {
+            font-family: Arial;
+            padding: 24px;
+            color: black;
+          }
+
+          @page {
+            size: A4;
+            margin: 16mm;
+            @bottom-right {
+              content: "Page " counter(page) " of " counter(pages);
+            }
+          }
+
+          @media print {
+            body {
+              padding: 0 0 22mm;
+            }
+
+            thead {
+              display: table-header-group;
+            }
+
+            tr,
+            .totals,
+            .signature {
+              break-inside: avoid;
+              page-break-inside: avoid;
+            }
+
+            .page-number {
+              display: block;
+              position: fixed;
+              right: 0;
+              bottom: 0;
+              font-size: 11px;
+            }
+
+            .page-number::after {
+              content: "Page " counter(page) " of " counter(pages);
+            }
+          }
+
+          .page-number {
+            display: none;
+          }
+
+          .header {
+            text-align: center;
+            font-size: 30px;
+            font-weight: bold;
+            margin-bottom: 20px;
+          }
+
+          .top-grid {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+          }
+
+          .top-grid td {
+            border: 1px solid black;
+            padding: 10px;
+            vertical-align: top;
+          }
+
+          table.items {
+            width: 100%;
+            border-collapse: collapse;
+          }
+
+          table.items th {
+            border: 1px solid black;
+            padding: 8px;
+            background: #f3f3f3;
+          }
+
+          .totals {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 14px;
+          }
+
+          .totals td {
+            border: 1px solid black;
+            padding: 8px;
+            font-weight: bold;
+          }
+
+          .totals .label {
+            text-align: right;
+          }
+
+          .totals .value {
+            text-align: center;
+          }
+
+          .signature {
+            margin-top: 70px;
+            display: flex;
+            justify-content: space-between;
+          }
+
+          .signature div {
+            text-align: center;
+            width: 200px;
+          }
+        </style>
+      </head>
+
+      <body>
+
+        <div class="header">
+          DELIVERY NOTE
+        </div>
+
+        <table class="top-grid">
+          <tr>
+            <td width="60%">
+              <strong>Dated</strong><br/><br/>
+
+              Nepali Date: ${nepaliDate}<br/>
+              English Date: ${englishDate}<br/>
+              Time: ${currentTime}
+              <br/><br/>
+
+              <strong>Transport Name:</strong><br/>
+              ${escapeHtml(order.transport_name || "-")}
+            </td>
+
+            <td width="40%">
+              <strong>Delivery Note No:</strong> ${deliveryNoteNumber}
+              <br/><br/>
+
+              <strong>Created By:</strong><br/>
+              ${escapeHtml(order.created_by_name || "-")}
+
+              <br/><br/>
+
+              <strong>Customer Name:</strong><br/>
+              ${escapeHtml(order.customer_name)}
+              <br/><br/>
+
+              <strong>Address:</strong><br/>
+              ${escapeHtml(order.customer_address || "-")}
+              <br/><br/>
+
+              <strong>PAN Number:</strong><br/>
+              ${escapeHtml(order.pan_number || "-")}
+            </td>
+          </tr>
+        </table>
+
+        <table class="items">
+          <thead>
+            <tr>
+              <th width="8%">SN</th>
+              <th>Description of Goods</th>
+              <th width="16%">Carton</th>
+              <th width="20%">Pairs</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            ${itemsHtml}
+          </tbody>
+        </table>
+
+        <table class="totals">
+          <tr>
+            <td class="label" width="64%">Total</td>
+            <td class="value" width="16%">${formatPrintNumber(totalCartons)}</td>
+            <td class="value" width="20%">${formatPrintNumber(totalPairs)} pairs</td>
+          </tr>
+        </table>
+
+        <div class="signature">
+          <div>
+            ___________________<br/>
+            Delivered By
+          </div>
+
+          <div>
+            ___________________<br/>
+            Received By
+          </div>
+
+          <div>
+            ___________________<br/>
+            Printed By (${escapeHtml(user?.name || "User")})
+          </div>
+        </div>
+
+        <div class="page-number"></div>
+
+      </body>
+    </html>
+  `);
+
+  printWindow.document.close();
+
+  let didPrint = false;
+  const printNote = () => {
+    if (didPrint) return;
+    if (printWindow.closed) return;
+
+    didPrint = true;
+    printWindow.focus();
+    printWindow.print();
+  };
+
+  printWindow.onafterprint = () => {
+    printWindow.close();
+  };
+
+  printWindow.addEventListener("load", () => {
+    setTimeout(printNote, 100);
+  }, { once: true });
+
+  setTimeout(printNote, 700);
+};
 
   return (
     <div className="space-y-6">
@@ -375,6 +728,12 @@ onChange={(e) => setOrderSearch(e.target.value)}
             { key: "pan_number", label: "PAN"},
             { key: "transport_name", label: "Transport" },
             { key: "status", label: "Status", render: (row) => <StatusBadge tone={statusTone[row.status]}>{row.status}</StatusBadge> },
+            {
+              key: "cancellation_reason",
+              label: "Cancel Reason",
+              render: (row) =>
+                row.status === "CANCELLED" ? row.cancellation_reason || "-" : "-",
+            },
             { key: "items", label: "Items", render: renderOrderItems },
             { key: "created_by_name", label: "Created By" },
             {
@@ -387,10 +746,46 @@ onChange={(e) => setOrderSearch(e.target.value)}
               ? {
                   key: "actions",
                   label: "Actions",
-                  render: (row) =>
-                    ["DELIVERED", "CANCELLED"].includes(row.status) ? null : (
+                  render: (row) => {
+                    const canPrint = PRINTABLE_DELIVERY_STATUSES.includes(row.status);
+                    const canChangeStatus = !["DELIVERED", "CANCELLED"].includes(row.status);
+
+                    if (!canPrint && !canChangeStatus) return null;
+
+                    return (
                       <div className="flex flex-wrap gap-2">
+                        {canPrint ? (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => printDeliveryNote(row)}
+                            >
+                              Print Note
+                            </Button>
+                            {/* <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => {
+                                const noteNumber = window.prompt(
+                                  "Enter delivery note number",
+                                  deliveryNoteNumbersByOrderId.get(Number(row.id)) ||
+                                    `DN-${1000 + row.id}`
+                                );
+
+                                if (noteNumber === null) return;
+                                printDeliveryNote(row, noteNumber);
+                              }}
+                            >
+                              Manual Note No
+                            </Button> */}
+                          </>
+                        ) : null}
+
+                        {canChangeStatus ? (
+                          <>
                         {row.status === "PENDING" ? (
+
                           <Button size="sm" variant="secondary" onClick={() => changeStatus(row.id, "CONFIRMED")}>
                             Confirm
                           </Button>
@@ -403,13 +798,43 @@ onChange={(e) => setOrderSearch(e.target.value)}
                         <Button size="sm" icon="check" onClick={() => changeStatus(row.id, "DELIVERED")}>
                           Deliver
                         </Button>
-                        <Button size="sm" variant="danger" onClick={() => changeStatus(row.id, "CANCELLED")}>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() => {
+                            const reason = window.prompt("Why is this order being cancelled?");
+
+                            if (reason === null) return;
+
+                            const trimmedReason = reason.trim();
+
+                            if (!trimmedReason) {
+                              showToast({
+                                tone: "error",
+                                title: "Cancel reason required",
+                                message: "Please enter why the order is being cancelled.",
+                              });
+                              return;
+                            }
+
+                            changeStatus(row.id, "CANCELLED", trimmedReason);
+                          }}
+                        >
                           Cancel
                         </Button>
+                          </>
+                        ) : null}
                       </div>
-                    ),
+                    );
+                  },
                 }
               : { key: "empty", label: "" },
+              {
+            key: "confirmed_by_name",
+            label: "Confirmed By",
+            render: (row) => row.confirmed_by_name || "-",
+          },
+
           ]}
           rows={filteredOrders}
         />
