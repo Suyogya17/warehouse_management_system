@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import Button from "../components/Button";
 import Icon from "../components/Icon";
+import NotificationWatcher from "../components/NotificationWatcher";
 import { normalizeRole } from "../utils/roles";
 
 const navByRole = {
@@ -61,13 +62,19 @@ const navByRole = {
 };
 
 export default function AppShell() {
-  const { user, logout } = useAuth();
+  const { token, user, logout } = useAuth();
   const location = useLocation();
 
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState([]);
 
   const role = normalizeRole(user?.role);
   const navItems = navByRole[role] || [];
+  const notificationStorageKey = user?.id
+    ? `store-management:notification-inbox:${user.id}`
+    : "";
+  const unreadCount = notifications.filter((item) => !item.read).length;
 
   const pageTitle = useMemo(() => {
     return (
@@ -79,6 +86,131 @@ export default function AppShell() {
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    setNotificationsOpen(false);
+
+    if (!notificationStorageKey) {
+      setNotifications([]);
+      return;
+    }
+
+    try {
+      const saved = localStorage.getItem(notificationStorageKey);
+      setNotifications(saved ? JSON.parse(saved) : []);
+    } catch {
+      setNotifications([]);
+    }
+  }, [notificationStorageKey]);
+
+  const saveNotifications = useCallback(
+    (nextNotifications) => {
+      if (notificationStorageKey) {
+        localStorage.setItem(
+          notificationStorageKey,
+          JSON.stringify(nextNotifications)
+        );
+      }
+    },
+    [notificationStorageKey]
+  );
+
+  const addNotification = useCallback(
+    (notification) => {
+      setNotifications((current) => {
+        const next = [
+          {
+            id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            title: notification.title,
+            message: notification.message,
+            tone: notification.tone || "info",
+            createdAt: new Date().toISOString(),
+            read: false,
+          },
+          ...current,
+        ].slice(0, 20);
+
+        saveNotifications(next);
+        return next;
+      });
+    },
+    [saveNotifications]
+  );
+
+  const markNotificationsRead = useCallback(() => {
+    setNotifications((current) => {
+      const next = current.map((item) => ({ ...item, read: true }));
+      saveNotifications(next);
+      return next;
+    });
+  }, [saveNotifications]);
+
+  const UserCard = () => (
+    <div className="relative mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-base font-semibold">{user?.name}</p>
+          <p className="truncate text-sm text-slate-500">{user?.email}</p>
+          <span className="mt-2 inline-block rounded-full bg-indigo-100 px-2.5 py-1 text-xs text-indigo-700">
+            {user?.role}
+          </span>
+        </div>
+
+        <button
+          type="button"
+          className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-indigo-50 hover:text-indigo-700"
+          onClick={() => setNotificationsOpen((open) => !open)}
+          aria-label="Notifications"
+        >
+          <Icon name="bell" className="h-4 w-4" />
+          {unreadCount ? (
+            <span className="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
+              {unreadCount > 9 ? "9+" : unreadCount}
+            </span>
+          ) : null}
+        </button>
+      </div>
+
+      {notificationsOpen ? (
+        <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-50 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <p className="text-sm font-semibold text-slate-900">Notifications</p>
+            <button
+              type="button"
+              className="text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:text-slate-300"
+              disabled={!unreadCount}
+              onClick={markNotificationsRead}
+            >
+              Mark as read
+            </button>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {notifications.length ? (
+              notifications.map((notification) => (
+                <div
+                  key={notification.id}
+                  className={`border-b border-slate-100 px-4 py-3 last:border-b-0 ${
+                    notification.read ? "bg-white" : "bg-indigo-50/70"
+                  }`}
+                >
+                  <p className="text-sm font-semibold text-slate-900">
+                    {notification.title}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                    {notification.message}
+                  </p>
+                </div>
+              ))
+            ) : (
+              <div className="px-4 py-6 text-center text-sm text-slate-500">
+                No notifications yet.
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
 
   const NavList = () => (
     <>
@@ -105,6 +237,7 @@ export default function AppShell() {
 
   return (
     <div className="min-h-screen bg-transparent text-slate-900">
+      <NotificationWatcher user={user} token={token} onNotify={addNotification} />
       <div className="mx-auto flex min-h-screen max-w gap-6 px-4 py-4 lg:px-6">
 
         {/* MOBILE OVERLAY */}
@@ -131,13 +264,7 @@ export default function AppShell() {
             </div>
 
             {/* USER */}
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-              <p className="text-base font-semibold">{user?.name}</p>
-              <p className="text-sm text-slate-500">{user?.email}</p>
-              <span className="mt-2 inline-block rounded-full bg-indigo-100 px-2.5 py-1 text-xs text-indigo-700">
-                {user?.role}
-              </span>
-            </div>
+            <UserCard />
 
             {/* NAV */}
             <nav className="mt-4 flex-1 space-y-2 overflow-y-auto">
@@ -161,13 +288,7 @@ export default function AppShell() {
           <div className="sticky top-4 space-y-4 rounded-2xl border border-slate-200 bg-white p-4">
 
             {/* USER CARD */}
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="font-semibold">{user?.name}</p>
-              <p className="text-sm text-slate-500">{user?.email}</p>
-              <span className="mt-2 inline-block rounded-full bg-indigo-100 px-2 py-1 text-xs text-indigo-700">
-                {user?.role}
-              </span>
-            </div>
+            <UserCard />
 
             {/* NAV */}
             <nav className="space-y-2">

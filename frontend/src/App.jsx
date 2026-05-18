@@ -60,20 +60,15 @@ export default function App() {
           }
         />        
 
-        <Route
+       <Route
   path="finished-goods"
   element={
-    <ProtectedRoute roles={["USER"]}>
-      <FinishedGoodsUserPage />
-    </ProtectedRoute>
-  }
-/>
-
-<Route
-  path="finished-goods"
-  element={
-    <ProtectedRoute roles={["ADMIN","CO_ADMIN","MEMBER"]}>
-      <FinishedGoodsPage />
+    <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER", "USER"]}>
+      {user?.role === "USER" ? (
+        <FinishedGoodsUserPage />
+      ) : (
+        <FinishedGoodsPage />
+      )}
     </ProtectedRoute>
   }
 />

@@ -144,7 +144,6 @@
   const startEditHistory = (row) => {
   setEditingHistory({
     production_id: row.production_id,
-    qty_produced: row.qty_produced,
     notes: row.notes || "",
   });
 };
@@ -154,7 +153,6 @@ const saveHistoryEdit = async () => {
     await api.updateProductionHistory(
       editingHistory.production_id,
       {
-        qty_produced: Number(editingHistory.qty_produced),
         notes: editingHistory.notes,
       },
       token
@@ -393,45 +391,41 @@ const filteredHistory = history.filter((row) => {
       {
         key: "qty_produced",
         label: "Pairs Produced",
-        render: (row) =>
-          editingHistory?.production_id === row.production_id ? (
-            <input
-              type="number"
-              value={editingHistory.qty_produced}
-              onChange={(e) =>
-                setEditingHistory((prev) => ({
-                  ...prev,
-                  qty_produced: e.target.value,
-                }))
-              }
-              className="w-24 rounded-lg border px-2 py-1"
-            />
-          ) : (
-            formatNumber(row.qty_produced)
-          ),
       },
 
       { key: "produced_by_name", label: "Produced By" },
 
       { key: "status", label: "Status" },
+   {
+  key: "notes",
+  label: "Warehouse Name",
+  render: (row) => {
+    const isEditing = editingHistory?.production_id === row.production_id;
 
-      { key: "produced_at", label: "Created", type: "date" },
+    return (
+      <div className="flex items-center justify-between gap-2">
+        {isEditing ? (
+          <input
+            className="w-full rounded border px-2 py-1 text-sm"
+            value={editingHistory.notes}
+            onChange={(e) =>
+              setEditingHistory((prev) => ({
+                ...prev,
+                notes: e.target.value,
+              }))
+            }
+          />
+        ) : (
+          <span>{row.notes || "-"}</span>
+        )}
 
-      {
-        key: "actions",
-        label: "Actions",
-        render: (row) => (
+        {canRun && (
           <div className="flex gap-2">
-            {editingHistory?.production_id === row.production_id ? (
+            {isEditing ? (
               <>
-                <Button
-                  size="sm"
-                  icon="check"
-                  onClick={saveHistoryEdit}
-                >
+                <Button size="sm" icon="check" onClick={saveHistoryEdit}>
                   Save
                 </Button>
-
                 <Button
                   size="sm"
                   variant="secondary"
@@ -441,36 +435,76 @@ const filteredHistory = history.filter((row) => {
                 </Button>
               </>
             ) : (
-              <>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  icon="edit"
-                  onClick={() => startEditHistory(row)}
-                >
-                  Edit
-                </Button>
-
-                <Button
-                  size="sm"
-                  variant="danger"
-                  icon="delete"
-                  onClick={() =>
-                    setDeleteHistoryId(row.production_id)
-                  }
-                >
-                  Delete
-                </Button>
-              </>
+              <Button
+                size="sm"
+                variant="secondary"
+                icon="edit"
+                onClick={() => startEditHistory(row)}
+              >
+                Edit
+              </Button>
             )}
           </div>
-        ),
-      },
+        )}
+      </div>
+    );
+  },
+}
+
+      // {
+      //   key: "actions",
+      //   label: "Actions",
+      //   render: (row) => (
+      //     <div className="flex gap-2">
+      //       {editingHistory?.production_id === row.production_id ? (
+      //         <>
+      //           <Button
+      //             size="sm"
+      //             icon="check"
+      //             onClick={saveHistoryEdit}
+      //           >
+      //             Save
+      //           </Button>
+
+      //           <Button
+      //             size="sm"
+      //             variant="secondary"
+      //             onClick={() => setEditingHistory(null)}
+      //           >
+      //             Cancel
+      //           </Button>
+      //         </>
+      //       ) : (
+      //         <>
+      //           <Button
+      //             size="sm"
+      //             variant="secondary"
+      //             icon="edit"
+      //             onClick={() => startEditHistory(row)}
+      //           >
+      //             Edit
+      //           </Button>
+
+      //           {/* <Button
+      //             size="sm"
+      //             variant="danger"
+      //             icon="delete"
+      //             onClick={() =>
+      //               setDeleteHistoryId(row.production_id)
+      //             }
+      //           >
+      //             Delete
+      //           </Button> */}
+      //         </>
+      //       )}
+      //     </div>
+      //   ),
+      // },
     ]}
     rows={filteredHistory}
   />
 </SectionCard>
-{deleteHistoryId && (
+{/* {deleteHistoryId && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
     <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
       <h2 className="text-lg font-semibold text-slate-900">
@@ -498,7 +532,7 @@ const filteredHistory = history.filter((row) => {
       </div>
     </div>
   </div>
-)}
+)} */}
       </div>
     );
   }

@@ -1,27 +1,185 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Package as PackageIcon, Check } from "lucide-react";
+
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import StatCard from "../components/StatCard";
+
 import { useAuth } from "../context/AuthContext";
 import { useDataRefresh } from "../hooks/useDataRefresh";
-import { api } from "../services/api";
+import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber } from "../utils/format";
-import { materialBlueprints, manufacturingFlowByRole } from "../utils/manufacturing";
+import { manufacturingFlowByRole } from "../utils/manufacturing";
 
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
+const getAvailableQty = (product) =>
+  Number(product?.available_qty ?? product?.display_quantity ?? product?.quantity ?? 0);
+
+// ─────────────────────────────────────────────────────────────
+// ProductCard — reused from FinishedGoodsUserPage (read-only, no cart)
+// ─────────────────────────────────────────────────────────────
+function ProductCard({ variants = [] }) {
+  const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
+
+  useEffect(() => {
+    if (!variants?.length) { setSelectedVariant(null); return; }
+    setSelectedVariant((current) => {
+      const refreshed = variants.find((v) => Number(v.id) === Number(current?.id));
+      if (refreshed) return refreshed;
+      return variants.find((v) => getAvailableQty(v) > 0) || variants[0];
+    });
+  }, [variants]);
+
+  if (!selectedVariant) return null;
+
+  const availableQty = getAvailableQty(selectedVariant);
+  const isLowStock   = availableQty > 0 && availableQty < 10;
+  const isOutOfStock = availableQty <= 0;
+  const isNew =
+    selectedVariant.created_at &&
+    new Date(selectedVariant.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const cartons = selectedVariant.inner_boxes_per_outer_box
+    ? Math.floor(availableQty / Number(selectedVariant.inner_boxes_per_outer_box))
+    : 0;
+
+  return (
+    <div className="group flex flex-col rounded-2xl border border-slate-200 bg-white overflow-hidden hover:shadow-xl transition-all duration-300">
+      {/* IMAGE */}
+      <div className="relative aspect-[4/3] bg-slate-100 overflow-hidden">
+        {selectedVariant.image_url ? (
+          <img
+            loading="lazy"
+            decoding="async"
+            width={400}
+            height={300}
+            src={`${APP_BASE_URL}${selectedVariant.image_url}`}
+            alt={selectedVariant.name}
+            className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <PackageIcon className="text-slate-400" size={42} />
+          </div>
+        )}
+
+        {/* BADGES */}
+        <div className="absolute top-2 left-2 right-2 flex items-start justify-between">
+          {isNew ? (
+            <span className="bg-indigo-500 text-white text-[10px] sm:text-xs px-2 py-1 rounded-full font-semibold">
+              NEW
+            </span>
+          ) : <div />}
+        </div>
+
+        {/* OUT OF STOCK OVERLAY */}
+        {isOutOfStock && (
+          <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+            <span className="bg-red-500 text-white px-4 py-2 rounded-lg font-semibold text-sm">
+              Out of Stock
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* CONTENT */}
+      <div className="flex flex-col p-3 gap-2">
+        {/* TITLE + STOCK BADGE */}
+        <div className="flex items-start justify-between gap-2">
+          <h3 className="flex-1 text-sm sm:text-base font-bold text-slate-900 line-clamp-2 leading-snug">
+            {selectedVariant.article_code || selectedVariant.name}
+          </h3>
+          <span
+            className={`text-[10px] px-2 py-1 rounded-full font-semibold whitespace-nowrap
+            ${isOutOfStock
+              ? "bg-gray-100 text-gray-600"
+              : isLowStock
+              ? "bg-red-100 text-red-600"
+              : "bg-green-100 text-green-600"
+            }`}
+          >
+            {isOutOfStock ? "Out" : isLowStock ? "Low" : "In Stock"}
+          </span>
+        </div>
+
+        {/* SIZE */}
+        {selectedVariant.size && (
+          <div className="text-xs text-slate-600">
+            Size: <span className="font-semibold">{selectedVariant.size}</span>
+          </div>
+        )}
+
+        {/* COLOR VARIANTS */}
+        {variants.length > 1 && (
+          <div className="flex flex-wrap gap-1">
+            {variants.map((variant) => (
+              <button
+                key={variant.id}
+                onClick={() => setSelectedVariant(variant)}
+                className={`px-2.5 py-0.5 rounded-lg text-xs font-medium transition-all
+                ${selectedVariant.id === variant.id
+                  ? "bg-indigo-500 text-white"
+                  : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+              >
+                {variant.color}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* STOCK INFO */}
+        <div className="bg-slate-50 rounded-xl p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-slate-500">Available Stock</span>
+            <span className="text-sm font-bold text-slate-900">
+              {formatNumber(availableQty)} {selectedVariant.unit || "pcs"}
+            </span>
+          </div>
+          {Number(selectedVariant.inner_boxes_per_outer_box) > 0 && (
+            <div className="flex items-center justify-between border-t border-slate-200 pt-2">
+              <span className="text-xs text-slate-500">Cartons</span>
+              <span className="text-sm font-bold text-indigo-600">
+                {formatNumber(cartons)}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// DashboardPage
+// ─────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { token, user } = useAuth();
+
   const [state, setState] = useState({
-    stock: null,  
+    stock: null,
     finishedGoods: [],
     formulas: [],
     production: [],
     consumption: [],
     orders: [],
+    availability: [],   // ← for product cards (admin/co-admin)
   });
+
+  // product grid filters
+  const [search, setSearch]     = useState("");
+  const [stockFilter, setStockFilter] = useState("all"); // all | available | low
+  const [currentPage, setCurrentPage] = useState(1);
+  const PRODUCTS_PER_PAGE = 12;
+
+  const isAdmin = user.role === "ADMIN" || user.role === "CO_ADMIN";
 
   const load = useCallback(async () => {
     const requests = [];
 
+    // stock summary
     if (user.role !== "USER") requests.push(api.getStockSummary(token));
     else requests.push(Promise.resolve(null));
 
@@ -31,21 +189,13 @@ export default function DashboardPage() {
     requests.push(user.role !== "STORE_KEEPER" ? api.getConsumptionLogs(token) : Promise.resolve({ data: [] }));
     requests.push(user.role !== "STORE_KEEPER" ? api.getOrders(token) : Promise.resolve({ data: [] }));
 
-    const userOrders = state.orders || [];
+    // availability for product cards (admin/co-admin only)
+    if (isAdmin) requests.push(api.getAvailability(token));
+    else requests.push(Promise.resolve({ data: [] }));
 
-    const pendingOrders = userOrders.filter(
-      (o) => o.status === "PENDING"
-    ).length;
+    const [stock, finishedGoods, formulas, production, consumption, orders, availability] =
+      await Promise.all(requests);
 
-    const confirmedOrders = userOrders.filter(
-      (o) => o.status === "CONFIRMED"
-    ).length;
-
-    const deliveredOrders = userOrders.filter(
-      (o) => o.status === "DELIVERED"
-    ).length;
-
-    const [stock, finishedGoods, formulas, production, consumption, orders] = await Promise.all(requests);
     setState({
       stock,
       finishedGoods: finishedGoods.data || [],
@@ -53,43 +203,92 @@ export default function DashboardPage() {
       production: production.data || [],
       consumption: consumption.data || [],
       orders: orders.data || [],
+      availability: availability.data || [],
     });
-  }, [token, user.role]);
+  }, [token, user.role, isAdmin]);
 
-  useEffect(() => {
-    load().catch(console.error);
-  }, [load]);
-
+  useEffect(() => { load().catch(console.error); }, [load]);
   useDataRefresh(load, "dashboard");
 
-  const lowStock = state.stock?.low_stock_alerts?.length || 0;
-  const finishedTotal = state.finishedGoods.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-  const rawTotal = state.stock?.data?.reduce((sum, item) => sum + Number(item.quantity || 0), 0) || 0;
-  const workflowSteps = manufacturingFlowByRole[user.role] || [];
-  const workflowStats = {
-    materialsCount: state.stock?.data?.length || 0,
-    finishedGoodsCount: state.finishedGoods.length,
-    formulasCount: state.formulas.length,
-    productionCount: state.production.length,
-    consumptionCount: state.consumption.length,
-    ordersCount: state.orders.length,
-    lowStockCount: lowStock,
+  // ── Stat card values ──────────────────────────────────────
+  const lowStock       = state.stock?.low_stock_alerts?.length || 0;
+  const finishedTotal  = state.finishedGoods.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const rawTotal       = state.stock?.data?.reduce((sum, item) => sum + Number(item.quantity || 0), 0) || 0;
+
+  const userOrders      = state.orders || [];
+  const pendingOrders   = userOrders.filter((o) => o.status === "PENDING").length;
+  const confirmedOrders = userOrders.filter((o) => o.status === "CONFIRMED").length;
+  const deliveredOrders = userOrders.filter((o) => o.status === "DELIVERED").length;
+
+  // ── Group availability items by article_code (same logic as catalog) ──
+  const groupedProducts = useMemo(() => {
+    const groups = {};
+    state.availability.forEach((item) => {
+      const key =
+        item.article_code ||
+        item.name?.split("_")?.slice(0, -1)?.join("_") ||
+        item.name ||
+        `product-${item.id}`;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(item);
+    });
+    return Object.values(groups);
+  }, [state.availability]);
+
+  // ── Filter ────────────────────────────────────────────────
+  const filteredProducts = useMemo(() => {
+    return groupedProducts
+      .map((variants) =>
+        variants.filter((item) => {
+          const matchSearch =
+            !search ||
+            item.name?.toLowerCase().includes(search.toLowerCase()) ||
+            item.article_code?.toLowerCase().includes(search.toLowerCase());
+
+          const qty = getAvailableQty(item);
+          const matchStock =
+            stockFilter === "all"     ? true
+            // : stockFilter === "out"   ? qty = 0 && qty < 0
+            // : qty >= 10;
+                : stockFilter === "available" ? qty >= 1
+                : stockFilter === "out"     ? qty <= 0
+                // : stockFilter === "available" ? qty >= 10
+                : qty > 0 && qty < 10;  // low
+
+          return matchSearch && matchStock;
+        })
+      )
+      .filter((v) => v.length > 0)
+      .sort((a, b) => new Date(b[0]?.created_at || 0) - new Date(a[0]?.created_at || 0));
+  }, [groupedProducts, search, stockFilter]);
+
+  // reset page on filter change
+  useEffect(() => { setCurrentPage(1); }, [search, stockFilter]);
+
+  // ── Pagination ────────────────────────────────────────────
+  const totalPages       = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE);
+  const paginatedProducts = filteredProducts.slice(
+    (currentPage - 1) * PRODUCTS_PER_PAGE,
+    currentPage * PRODUCTS_PER_PAGE
+  );
+
+  const getPages = () => {
+    const pages = [];
+    if (totalPages <= 7) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else if (currentPage <= 4) {
+      pages.push(1, 2, 3, 4, 5, "...", totalPages);
+    } else if (currentPage >= totalPages - 3) {
+      pages.push(1, "...", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+    } else {
+      pages.push(1, "...", currentPage - 1, currentPage, currentPage + 1, "...", totalPages);
+    }
+    return pages;
   };
 
-  const userOrders = state.orders || [];
-
-const pendingOrders = userOrders.filter(
-  (o) => o.status === "PENDING"
-).length;
-
-const confirmedOrders = userOrders.filter(
-  (o) => o.status === "CONFIRMED"
-).length;
-
-const deliveredOrders = userOrders.filter(
-  (o) => o.status === "DELIVERED"
-).length;
-
+  // ─────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
       <PageHeader
@@ -99,48 +298,127 @@ const deliveredOrders = userOrders.filter(
         icon="dashboard"
       />
 
+      {/* ── STAT CARDS ── */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {user.role === "USER" ? (
           <>
-            {/* <StatCard label="Visible Products" value={formatNumber(state.finishedGoods.length)} tone="bold" /> */}
-            <StatCard
-              label="Catalog Status"
-              value="Active"
-              tone="default"
-              icon="finishedGoods"
-            />
-
-            <StatCard
-              label="Pending Orders"
-              value={formatNumber(pendingOrders)}
-              tone="alert"
-              icon="orders"
-            />
-
-            <StatCard
-              label="Confirmed Orders"
-              value={formatNumber(confirmedOrders)}
-              tone="calm"
-              icon="check"
-            />
-
-            <StatCard
-              label="Delivered Orders"
-              value={formatNumber(deliveredOrders)}
-              tone="default"
-              icon="check"
-            />
+            <StatCard label="Catalog Status"    value="Active"                        tone="default" icon="finishedGoods" />
+            <StatCard label="Pending Orders"    value={formatNumber(pendingOrders)}   tone="alert"   icon="orders" />
+            <StatCard label="Confirmed Orders"  value={formatNumber(confirmedOrders)} tone="calm"    icon="check" />
+            <StatCard label="Delivered Orders"  value={formatNumber(deliveredOrders)} tone="default" icon="check" />
           </>
         ) : (
           <>
-            <StatCard label="Raw Material Stock" value={formatNumber(rawTotal)} tone="calm" icon="materials" />
-            <StatCard label="Finished Goods Stock In Pairs" value={formatNumber(finishedTotal)} tone="calm" icon="finishedGoods" />  
-            <StatCard label="Low Stock Alerts" value={formatNumber(lowStock)} tone={lowStock ? "alert" : "default"} icon={lowStock ? "warning" : "check"} />
-            <StatCard label="Production Runs" value={formatNumber(state.production.length)} tone="default" icon="production" />
-            <StatCard label="Active Orders" value={formatNumber(state.orders.filter((item) => !["DELIVERED", "CANCELLED"].includes(item.status)).length)} tone="alert" icon="orders" />
+            <StatCard label="Raw Material Stock"              value={formatNumber(rawTotal)}       tone="calm"  icon="materials" />
+            <StatCard label="Finished Goods Stock In Pairs"   value={formatNumber(finishedTotal)}  tone="calm"  icon="finishedGoods" />
+            <StatCard label="Low Stock Alerts"                value={formatNumber(lowStock)}        tone={lowStock ? "alert" : "default"} icon={lowStock ? "warning" : "check"} />
+            <StatCard label="Production Runs"                 value={formatNumber(state.production.length)} tone="default" icon="production" />
+            <StatCard
+              label="Active Orders"
+              value={formatNumber(state.orders.filter((o) => !["DELIVERED", "CANCELLED"].includes(o.status)).length)}
+              tone="alert"
+              icon="orders"
+            />
           </>
         )}
       </div>
+
+      {/* ── PRODUCT GRID (admin / co-admin only) ── */}
+      {isAdmin && (
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <h2 className="text-lg font-bold text-slate-800">
+              Finished Goods &nbsp;
+              <span className="text-slate-400 font-normal text-base">
+                ({filteredProducts.length})
+              </span>
+            </h2>
+
+            {/* inline filters */}
+            <div className="flex gap-2 flex-wrap">
+              <input
+                type="text"
+                placeholder="Search products…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              />
+              <select
+                value={stockFilter}
+                onChange={(e) => setStockFilter(e.target.value)}
+                className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              >
+                <option value="all">All Stock</option>
+                <option value="available">In Stock</option>
+                <option value="out">Out of Stock</option>
+              </select>
+              {(search || stockFilter !== "all") && (
+                <button
+                  onClick={() => { setSearch(""); setStockFilter("all"); }}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition-all"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          {paginatedProducts.length ? (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
+                {paginatedProducts.map((variants) => (
+                  <ProductCard
+                    key={variants.map((v) => v.id).join("-")}
+                    variants={variants}
+                  />
+                ))}
+              </div>
+
+              {totalPages > 1 && (
+                <div className="flex items-center justify-center gap-2 flex-wrap pt-2">
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+                    disabled={currentPage === 1}
+                    className="px-4 py-2 rounded-xl border bg-white hover:bg-slate-50 disabled:opacity-50 text-sm font-medium"
+                  >
+                    Previous
+                  </button>
+
+                  {getPages().map((page, index) =>
+                    page === "..." ? (
+                      <span key={index} className="px-2 text-slate-400">...</span>
+                    ) : (
+                      <button
+                        key={index}
+                        onClick={() => setCurrentPage(page)}
+                        className={`w-10 h-10 rounded-xl border text-sm font-semibold transition-all
+                        ${currentPage === page
+                          ? "bg-indigo-500 text-white border-indigo-500"
+                          : "bg-white text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    )
+                  )}
+
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+                    disabled={currentPage === totalPages}
+                    className="px-4 py-2 rounded-xl border bg-white hover:bg-slate-50 disabled:opacity-50 text-sm font-medium"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-center py-16 text-slate-400 text-sm">
+              No products found.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

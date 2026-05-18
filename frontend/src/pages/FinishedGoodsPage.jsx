@@ -1,4 +1,4 @@
-  import { useCallback, useEffect, useState } from "react";
+  import { useCallback, useEffect, useState, useMemo } from "react";
   import Button from "../components/Button";
   import DataTable from "../components/DataTable";
   import EntitySummaryCard from "../components/EntitySummaryCard";
@@ -58,6 +58,7 @@
     const [selectedUpperId, setSelectedUpperId] = useState("");
     const [selectedSoleId, setSelectedSoleId] = useState("");
     const [deleteId, setDeleteId] = useState(null);
+    const [production, setProduction] = useState([]);
 
     const [search, setSearch] = useState("");
 
@@ -65,6 +66,7 @@
       const [goodsResult, materialsResult] = await Promise.all([
         api.getFinishedGoods(token),
         api.getRawMaterials(token),
+        api.getProductionHistory(token), // 👈 ADD THIS
       ]);
       console.log("goods result:", goodsResult); // ← add this
       setItems(goodsResult.data || []);
@@ -81,6 +83,28 @@
     const soleMaterials = materials.filter((item) => item.category === "Sole");
     const selectedUpperMaterial = upperMaterials.find((item) => String(item.id) === selectedUpperId);
     const selectedSoleMaterial = soleMaterials.find((item) => String(item.id) === selectedSoleId);
+
+    const productionNotesMap = useMemo(() => {
+    const map = {};
+
+    (production || []).forEach((p) => {
+      if (!map[p.finished_good_id]) {
+        map[p.finished_good_id] = [];
+      }
+
+      if (p.notes) {
+        map[p.finished_good_id].push({
+          id: p.id,
+          notes: p.notes,
+          qty_produced: p.qty_produced,
+          created_at: p.created_at,
+          produced_by: p.produced_by,
+        });
+      }
+    });
+
+  return map;
+}, [production]);
 
     const submit = async (event) => {
       event.preventDefault();
@@ -569,6 +593,32 @@ const isEmpty = filteredItems.length === 0;
                     ),
                   }
                 : { key: "empty", label: "" },
+//                 {
+//                   key: "production_notes",
+//                   label: "WareHouse Name",
+//                   render: (row) => {
+//                     const notes = productionNotesMap[row.id] || [];
+
+//                     if (!notes.length) {
+//                       return <span className="text-slate-400 text-sm">No notes</span>;
+//                     }
+
+//                     return (
+//                       <div className="text-xs space-y-1 max-w-xs">
+//                         {notes.slice(0, 2).map((n) => (
+//                           <div key={n.id} className="bg-slate-100 p-2 rounded-lg">
+//                             <div className="font-semibold">
+//                               Qty: {n.qty_produced}
+//                             </div>
+//                             <div className="text-slate-600 line-clamp-2">
+//                               {n.notes}
+//                             </div>
+//                           </div>
+//                         ))}
+//                       </div>
+//                     );
+//                   },
+// }
             ]}
             
             rows={filteredItems}

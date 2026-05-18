@@ -7,6 +7,7 @@ const paths = {
   formulas: "M7 4h10M7 12h10M7 20h10M4 4h.01M4 12h.01M4 20h.01",
   production: "M4 16l4-4 3 3 7-7M4 7h6v6",
   orders: "M6 3h9l3 3v15H6zM15 3v4h4M9 11h6M9 15h6M9 19h4",
+  bell: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 20a2 2 0 0 0 4 0",
   users: "M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2m16 0v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75M14 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0",
   menu: "M4 7h16M4 12h16M4 17h16",
   close: "M6 6l12 12M18 6 6 18",
