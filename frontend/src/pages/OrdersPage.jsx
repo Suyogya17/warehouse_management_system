@@ -44,7 +44,7 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState([]);
   const [availability, setAvailability] = useState([]);
   const [form, setForm] = useState(initialForm);
-
+const [statusFilter, setStatusFilter] = useState("ALL");
   const load = useCallback(async () => {
     const [ordersResult, availabilityResult] = await Promise.all([
       api.getOrders(token),
@@ -148,13 +148,25 @@ export default function OrdersPage() {
   const filteredOrders = orders.filter((row) => {
   const term = orderSearch.toLowerCase();
 
-  return (
+   const matchesSearch =
     row.id?.toString().includes(term) ||
     row.customer_name?.toLowerCase().includes(term) ||
     row.status?.toLowerCase().includes(term) ||
-    row.created_by_name?.toLowerCase().includes(term)
-  );
+    row.created_by_name?.toLowerCase().includes(term);
+
+  const matchesStatus =
+    statusFilter === "ALL" || row.status === statusFilter;
+
+  return matchesSearch && matchesStatus;
 });
+
+//   return (
+//     row.id?.toString().includes(term) ||
+//     row.customer_name?.toLowerCase().includes(term) ||
+//     row.status?.toLowerCase().includes(term) ||
+//     row.created_by_name?.toLowerCase().includes(term)
+//   );
+// });
 
 const filteredAvailability = useMemo(() => {
   return availability.filter((item) => {
@@ -180,7 +192,15 @@ const deliveryNoteNumbersByOrderId = useMemo(() => {
     });
 
   return new Map(
-    printableOrders.map((order, index) => [Number(order.id), `DN-${1001 + index}`])
+    printableOrders.map((order, index) => {
+      const orderId = Number(order.id);
+      // For order ID 25 and above, use new system: DN-1965, DN-1966, etc.
+      if (orderId >= 25) {
+        return [orderId, `DN-${1940 + orderId}`];
+      }
+      // For orders before ID 25, keep old sequential system
+      return [orderId, `DN-${1001 + index}`];
+    })
   );
 }, [orders]);
 
@@ -192,7 +212,7 @@ const escapeHtml = (value) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 
-const printDeliveryNote = (order, manualDeliveryNoteNumber = "") => {
+const printDeliveryNote = (order = "") => {
   const now = new Date();
 
   // English Date
@@ -206,10 +226,9 @@ const printDeliveryNote = (order, manualDeliveryNoteNumber = "") => {
   const currentTime = now.toLocaleTimeString();
 
   // Auto Delivery Note Number
-  const deliveryNoteNumber =
-    manualDeliveryNoteNumber.trim() ||
-    deliveryNoteNumbersByOrderId.get(Number(order.id)) ||
-    `DN-${1000 + order.id}`;
+const deliveryNoteNumber =
+  deliveryNoteNumbersByOrderId.get(Number(order.id)) ||
+  (Number(order.id) >= 25 ? `DN-${1940 + Number(order.id)}` : `DN-${1000 + Number(order.id)}`);
 
   const printableItems = (order.items || []).map((item) => {
     const product = availabilityById.get(String(item.finished_good_id));
@@ -702,31 +721,73 @@ const printDeliveryNote = (order, manualDeliveryNoteNumber = "") => {
 
 
       <SectionCard title="Orders" subtitle={canManageOrders ? "Admin can move orders through confirmation, packing, delivery, or cancellation." : "Your reserved orders."} icon="orders">
-        <div className="relative mb-4">
-  <Search
-    size={16}
-    className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-  />
 
-  <input
-    type="text"
-    placeholder="Search orders by Customer, Status, or Items..."
-    value={orderSearch}
-onChange={(e) => setOrderSearch(e.target.value)}
-    className="rounded-xl border border-black bg-white py-2.5 pl-10 pr-4 text-sm shadow-sm focus:border-slate-400 focus:outline-none"
 
-    
-  />
+        <div className="flex justify-between px-2 py-3 mb-1">
+
+
+    {/* Search Box */}
+  <div className="relative ">
+    <Search
+      size={16}
+      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+    />
+
+    <input
+      type="text"
+      placeholder="Search orders..."
+      value={orderSearch}
+      onChange={(e) => setOrderSearch(e.target.value)}
+      className="rounded-xl border border-black bg-white py-2.5 pl-10 pr-4 text-sm shadow-sm focus:border-slate-400 focus:outline-none"
+    />
+  </div>
+
+  {/* Status Filter */}
+  <select
+    value={statusFilter}
+    onChange={(e) => setStatusFilter(e.target.value)}
+    className="rounded-xl border border-black bg-white px-4 py-2.5 text-sm shadow-sm focus:border-slate-400 focus:outline-none"
+  >
+    <option value="ALL">All Status</option>
+    <option value="PENDING">Pending</option>
+    <option value="CONFIRMED">Confirmed</option>
+    <option value="PACKED">Packed</option>
+    <option value="DELIVERED">Delivered</option>
+    <option value="CANCELLED">Cancelled</option>
+  </select>
 </div>
         <DataTable
           columns={[
-            // { key: "id", label: "Order"},
-            {key: "S.No", label: "S.No", render: (_, index) => index + 1},
-            { key: "customer_name", label: "Customer" },
-            { key: "customer_phone", label: "Phone" },
-            { key: "customer_address", label: "Address",},
-            { key: "pan_number", label: "PAN"},
-            { key: "transport_name", label: "Transport" },
+            { key: "id", label: "Order-ID"},
+            // {key: "S.No", label: "S.No", render: (_, index) => index + 1},
+           {
+  key: "customer_details",
+  label: "Customer Details",
+  render: (row) => {
+    return (
+      <div>
+        <strong>{row.customer_name || "-"}</strong>
+        <br />
+        <small style={{ color: '#666' }}>
+          Phone: {row.customer_phone || "-"}
+        </small>
+        <br />
+        <small style={{ color: '#666' }}>
+          Address: {row.customer_address || "-"}
+        </small>
+        <br />
+        <small style={{ color: '#666' }}>
+          PAN: {row.pan_number || "-"}
+        </small>
+        <br />
+        <small style={{ color: '#666' }}>
+          Transport: {row.transport_name || "-"}
+        </small>
+      </div>
+    );
+  },
+},
+             { key: "items", label: "Items", render: renderOrderItems },
             { key: "status", label: "Status", render: (row) => <StatusBadge tone={statusTone[row.status]}>{row.status}</StatusBadge> },
             {
               key: "cancellation_reason",
@@ -734,13 +795,27 @@ onChange={(e) => setOrderSearch(e.target.value)}
               render: (row) =>
                 row.status === "CANCELLED" ? row.cancellation_reason || "-" : "-",
             },
-            { key: "items", label: "Items", render: renderOrderItems },
+           
             { key: "created_by_name", label: "Created By" },
             {
               key: "created_at",
               label: "Created",
-              render: (row) =>
-                new Date(row.created_at).toLocaleString(),
+              render: (row) => {
+  const createdDate = new Date(row.created_at);
+
+  return (
+    <div className="flex flex-col">
+      <strong>
+        {createdDate.toLocaleDateString("en-GB")}
+      </strong>
+
+      <span className="text-xs text-slate-500">
+        {createdDate.toLocaleTimeString()}
+      </span>
+    </div>
+  );
+}
+                // new Date(row.created_at).toLocaleString(),
             },
             canManageOrders
               ? {
@@ -761,7 +836,7 @@ onChange={(e) => setOrderSearch(e.target.value)}
                               variant="secondary"
                               onClick={() => printDeliveryNote(row)}
                             >
-                              Print Note
+                              🖨️ DN
                             </Button>
                             {/* <Button
                               size="sm"
@@ -829,11 +904,27 @@ onChange={(e) => setOrderSearch(e.target.value)}
                   },
                 }
               : { key: "empty", label: "" },
-              {
-            key: "confirmed_by_name",
-            label: "Confirmed By",
-            render: (row) => row.confirmed_by_name || "-",
-          },
+           {
+  key: "confirmed_by_name",
+  label: "Confirmed By / DN",
+  render: (row) => {
+    const deliveryNoteNumber = 
+      deliveryNoteNumbersByOrderId.get(Number(row.id)) ||
+      `DN-${1940 + row.id}`;  // ← CHANGED FROM 1000 TO 1940
+    
+    return (
+      <>
+        {row.confirmed_by_name || "-"}
+        <br />
+        <small style={{ color: '#666' }}>{deliveryNoteNumber}</small>
+      </>
+    );
+  },
+},
+          // {key:"Delivery No",
+          //   label: "Delivery No",
+          //   render: (row)=>row.deliveryNoteNumber || "-",
+          // },
 
           ]}
           rows={filteredOrders}

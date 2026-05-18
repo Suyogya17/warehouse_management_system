@@ -24,7 +24,7 @@ import MemberFinishedPage from "./pages/Member/MemberFinishedGoodPage";
 import MemberStockPage from "./pages/Member/MemberStockPage";
 import MemberOrderPage from "./pages/Member/MemberOrderPage";
 import OnHoldPage from "./pages/OnHoldPage";
-
+import SummaryPage from "./pages/SummaryPage"
 export default function App() {
   const { isAuthenticated, user } = useAuth();
 
@@ -61,17 +61,22 @@ export default function App() {
         />        
 
         <Route
-          path="finished-goods"
-          element={
-            <ProtectedRoute roles={["ADMIN","CO_ADMIN","MEMBER", "USER"]}>
-              {user?.role === "USER" ? (
-                <FinishedGoodsUserPage />
-              ) : (
-                <FinishedGoodsPage />
-              )}
-            </ProtectedRoute>
-          }
-        />
+  path="finished-goods"
+  element={
+    <ProtectedRoute roles={["USER"]}>
+      <FinishedGoodsUserPage />
+    </ProtectedRoute>
+  }
+/>
+
+<Route
+  path="finished-goods"
+  element={
+    <ProtectedRoute roles={["ADMIN","CO_ADMIN","MEMBER"]}>
+      <FinishedGoodsPage />
+    </ProtectedRoute>
+  }
+/>
 
         <Route
           path="receive-stock"
@@ -190,6 +195,15 @@ export default function App() {
           }
         />
 
+         <Route
+          path="summary"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              <SummaryPage />
+            </ProtectedRoute>
+          }
+        />
+
         <Route
           path="users"
           element={
@@ -199,6 +213,8 @@ export default function App() {
           }
         />
       </Route>
+
+      
 
       {/* 404 */}
       <Route

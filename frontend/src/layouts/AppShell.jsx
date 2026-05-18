@@ -17,8 +17,10 @@ const navByRole = {
     { to: "/orders", label: "Orders", icon: "orders" },
     { to: "/stock", label: "Stock", icon: "stock" },
     { to: "/permissions", label: "Permissions", icon: "permission" },
-    { to: "/users", label: "Users", icon: "users" },
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
+    { to: "/summary", label: "Summary", icon: "hidden" },
+    { to: "/users", label: "Users", icon: "users" },
+    
     
   ],
 
@@ -34,10 +36,12 @@ const navByRole = {
     { to:   "/stock", label: "Stock", icon: "stock" },
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
+    { to: "/summary", label: "Summary", icon: "hidden" },
 
   ],
 
   MEMBER: [
+    { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/finished-goods-member", label: "Our Products", icon: "finishedGoods" },
     { to: "/order-member", label: "Order", icon: "cart" },
     //  { to: "/on-hold-member", label: "On Hold", icon: "hidden" },
@@ -45,11 +49,13 @@ const navByRole = {
   ],
 
    USER: [
+    { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/finished-goods", label: "Our Products", icon: "finishedGoods" },
     { to: "/order-customer", label: "Order", icon: "cart" },
   ],
 
   ELDER: [
+    { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/elder-finished", label: "Our Products", icon: "finishedGoods" },
   ],
 };
@@ -151,7 +157,7 @@ export default function AppShell() {
         </aside>
 
         {/* DESKTOP SIDEBAR */}
-        <aside className="hidden w-80 shrink-0 lg:block">
+        <aside className="hidden w-50 shrink-0 lg:block">
           <div className="sticky top-4 space-y-4 rounded-2xl border border-slate-200 bg-white p-4">
 
             {/* USER CARD */}

@@ -31,6 +31,20 @@ export default function DashboardPage() {
     requests.push(user.role !== "STORE_KEEPER" ? api.getConsumptionLogs(token) : Promise.resolve({ data: [] }));
     requests.push(user.role !== "STORE_KEEPER" ? api.getOrders(token) : Promise.resolve({ data: [] }));
 
+    const userOrders = state.orders || [];
+
+    const pendingOrders = userOrders.filter(
+      (o) => o.status === "PENDING"
+    ).length;
+
+    const confirmedOrders = userOrders.filter(
+      (o) => o.status === "CONFIRMED"
+    ).length;
+
+    const deliveredOrders = userOrders.filter(
+      (o) => o.status === "DELIVERED"
+    ).length;
+
     const [stock, finishedGoods, formulas, production, consumption, orders] = await Promise.all(requests);
     setState({
       stock,
@@ -62,6 +76,20 @@ export default function DashboardPage() {
     lowStockCount: lowStock,
   };
 
+  const userOrders = state.orders || [];
+
+const pendingOrders = userOrders.filter(
+  (o) => o.status === "PENDING"
+).length;
+
+const confirmedOrders = userOrders.filter(
+  (o) => o.status === "CONFIRMED"
+).length;
+
+const deliveredOrders = userOrders.filter(
+  (o) => o.status === "DELIVERED"
+).length;
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -75,8 +103,33 @@ export default function DashboardPage() {
         {user.role === "USER" ? (
           <>
             {/* <StatCard label="Visible Products" value={formatNumber(state.finishedGoods.length)} tone="bold" /> */}
-            <StatCard label="Catalog Status" value="Active" tone="default" icon="finishedGoods" />
-            <StatCard label="My Orders" value={formatNumber(state.orders.length)} tone="calm" icon="orders" />
+            <StatCard
+              label="Catalog Status"
+              value="Active"
+              tone="default"
+              icon="finishedGoods"
+            />
+
+            <StatCard
+              label="Pending Orders"
+              value={formatNumber(pendingOrders)}
+              tone="alert"
+              icon="orders"
+            />
+
+            <StatCard
+              label="Confirmed Orders"
+              value={formatNumber(confirmedOrders)}
+              tone="calm"
+              icon="check"
+            />
+
+            <StatCard
+              label="Delivered Orders"
+              value={formatNumber(deliveredOrders)}
+              tone="default"
+              icon="check"
+            />
           </>
         ) : (
           <>
