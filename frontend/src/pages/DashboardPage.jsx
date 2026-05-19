@@ -298,41 +298,70 @@ export default function DashboardPage() {
   const PRODUCTS_PER_PAGE = 12;
 
   const isAdmin = user.role === "ADMIN" || user.role === "CO_ADMIN";
+  const canViewDashboard = isAdmin || user.role === "MEMBER";
 
-  const load = useCallback(async () => {
-    const requests = [];
+const load = useCallback(async () => {
+  const requests = [];
 
-    if (user.role !== "USER") requests.push(api.getStockSummary(token));
-    else requests.push(Promise.resolve(null));
+  // 0 — stock summary
+  requests.push(user.role !== "USER"
+    ? api.getStockSummary(token)
+    : Promise.resolve(null)
+  );
 
-    requests.push(api.getFinishedGoods(token));
-    requests.push(user.role === "ADMIN" ? api.getFormulas(token) : Promise.resolve({ data: [] }));
-    requests.push(user.role !== "USER" ? api.getProductionHistory(token) : Promise.resolve({ data: [] }));
-    requests.push(user.role !== "STORE_KEEPER" ? api.getConsumptionLogs(token) : Promise.resolve({ data: [] }));
-    requests.push(user.role !== "STORE_KEEPER" ? api.getOrders(token) : Promise.resolve({ data: [] }));
+  // 1 — finished goods
+  requests.push(api.getFinishedGoods(token));
 
-    if (isAdmin) {
-      requests.push(api.getAvailability(token));
-      requests.push(api.getPermissions(token));
-    } else {
-      requests.push(Promise.resolve({ data: [] }));
-      requests.push(Promise.resolve({ data: [] }));
-    }
+  // 2 — formulas
+  requests.push(user.role === "ADMIN"
+    ? api.getFormulas(token)
+    : Promise.resolve({ data: [] })
+  );
 
-    const [stock, finishedGoods, formulas, production, consumption, orders, availability, permissions] =
-      await Promise.all(requests);
+  // 3 — production history
+  requests.push(user.role !== "USER"
+    ? api.getProductionHistory(token)
+    : Promise.resolve({ data: [] })
+  );
 
-    setState({
-      stock,
-      finishedGoods: finishedGoods.data || [],
-      formulas:      formulas.data      || [],
-      production:    production.data    || [],
-      consumption:   consumption.data   || [],
-      orders:        orders.data        || [],
-      availability:  availability.data  || [],
-      permissions:   permissions.data   || [],
-    });
-  }, [token, user.role, isAdmin]);
+  // 4 — consumption logs
+  requests.push(user.role !== "MEMBER"
+    ? api.getConsumptionLogs(token)
+    : Promise.resolve({ data: [] })
+  );
+
+  // 5 — orders
+  requests.push(user.role !== "MEMBER"
+    ? api.getOrders(token)
+    : Promise.resolve({ data: [] })
+  );
+
+  // 6 — availability (admin, co-admin, and member all need this for the product grid)
+  requests.push(isAdmin || user.role === "MEMBER"
+    ? api.getAvailability(token)
+    : Promise.resolve({ data: [] })
+  );
+
+  // 7 — permissions (admin only, for on-hold logic)
+  requests.push(isAdmin
+    ? api.getPermissions(token)
+    : Promise.resolve({ data: [] })
+  );
+
+  const [stock, finishedGoods, formulas, production, consumption, orders, availability, permissions] =
+    await Promise.all(requests);
+
+  setState({
+    stock,
+    finishedGoods: finishedGoods.data || [],
+    formulas:      formulas.data      || [],
+    production:    production.data    || [],
+    consumption:   consumption.data   || [],
+    orders:        orders.data        || [],
+    availability:  availability.data  || [],
+    permissions:   permissions.data   || [],
+  });
+}, [token, user.role, isAdmin]);
 
   useEffect(() => { load().catch(console.error); }, [load]);
   useDataRefresh(load, "dashboard");
@@ -455,6 +484,7 @@ export default function DashboardPage() {
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {user.role === "USER" ? (
           <>
+          
             <StatCard label="Catalog Status"   value="Active"                        tone="default" icon="finishedGoods" />
             <StatCard label="Pending Orders"   value={formatNumber(pendingOrders)}   tone="alert"   icon="orders" />
             <StatCard label="Confirmed Orders" value={formatNumber(confirmedOrders)} tone="calm"    icon="check" />
@@ -471,14 +501,15 @@ export default function DashboardPage() {
               tone="alert" icon="orders"
             />
             {isAdmin && (
-              <StatCard label="On Hold Products" value={formatNumber(onHoldProducts.length)} tone="alert" icon="hidden" />
+              <StatCard label="On Hold Products" 
+              value={formatNumber(onHoldProducts.length)} tone="alert" icon="hidden" />
             )}
           </>
         )}
       </div>
 
       {/* ── FINISHED GOODS GRID ── */}
-      {isAdmin && (
+      {canViewDashboard && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h2 className="text-lg font-bold text-slate-800">
@@ -522,7 +553,7 @@ export default function DashboardPage() {
       )}
 
       {/* ── ON HOLD GRID ── */}
-      {isAdmin && (
+      {canViewDashboard && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">

@@ -47,10 +47,11 @@ const navByRole = {
   MEMBER: [
     { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/finished-goods-member", label: "Our Products", icon: "finishedGoods" },
-    { to: "/order-member", label: "Order", icon: "cart" },
+    // { to: "/order-member", label: "Order", icon: "cart" },
     //  { to: "/on-hold-member", label: "On Hold", icon: "hidden" },
      { to: "/stock-member", label: "Stock", icon: "stock" },
      { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
+     { to: "/summary", label: "Summary", icon: "hidden" },
   ],
 
    USER: [

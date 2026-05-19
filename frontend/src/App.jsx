@@ -194,7 +194,7 @@ export default function App() {
          <Route
           path="summary"
           element={
-            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER"]}>
               <SummaryPage />
             </ProtectedRoute>
           }
