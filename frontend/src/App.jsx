@@ -24,7 +24,8 @@ import MemberFinishedPage from "./pages/Member/MemberFinishedGoodPage";
 import MemberStockPage from "./pages/Member/MemberStockPage";
 import MemberOrderPage from "./pages/Member/MemberOrderPage";
 import OnHoldPage from "./pages/OnHoldPage";
-import SummaryPage from "./pages/SummaryPage"
+import SummaryPage from "./pages/SummaryPage";
+import ProductLedgerPage from "./pages/ProductLedgerPage";
 export default function App() {
   const { isAuthenticated, user } = useAuth();
 
@@ -195,6 +196,15 @@ export default function App() {
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               <SummaryPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="product-ledger"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER"]}>
+              <ProductLedgerPage />
             </ProtectedRoute>
           }
         />

@@ -526,6 +526,10 @@ const isEmpty = filteredItems.length === 0;
           
             columns={[
               {
+                key: "id",
+                label: "FG.ID",
+              },
+              {
                 key: "image_url",
                 label: "Image",
                 render: (row) =>

@@ -379,6 +379,10 @@ const getOne = async (req, res, next) => {
 
 const updateProduction = async (req, res, next) => {
   try {
+    if (!["ADMIN", "CO_ADMIN"].includes(req.user.role)) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+    
     const {  notes } = req.body;
 
     await query(

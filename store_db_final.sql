@@ -183,6 +183,7 @@ CREATE TABLE orders (
   customer_phone VARCHAR(50),
   status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
   notes TEXT,
+  cancellation_reason TEXT,
   created_by INT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

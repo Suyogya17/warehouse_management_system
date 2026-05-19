@@ -19,6 +19,7 @@ const navByRole = {
     { to: "/stock", label: "Stock", icon: "stock" },
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
+    { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
     { to: "/summary", label: "Summary", icon: "hidden" },
     { to: "/users", label: "Users", icon: "users" },
     
@@ -37,7 +38,9 @@ const navByRole = {
     { to:   "/stock", label: "Stock", icon: "stock" },
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
+    { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
     { to: "/summary", label: "Summary", icon: "hidden" },
+    
 
   ],
 
@@ -47,6 +50,7 @@ const navByRole = {
     { to: "/order-member", label: "Order", icon: "cart" },
     //  { to: "/on-hold-member", label: "On Hold", icon: "hidden" },
      { to: "/stock-member", label: "Stock", icon: "stock" },
+     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
   ],
 
    USER: [
@@ -285,7 +289,7 @@ export default function AppShell() {
 
         {/* DESKTOP SIDEBAR */}
         <aside className="hidden w-50 shrink-0 lg:block">
-          <div className="sticky top-4 space-y-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-col justify-align sticky top-4 space-y-4 h-full rounded-2xl border border-slate-200 bg-white p-4">
 
             {/* USER CARD */}
             <UserCard />

@@ -26,6 +26,10 @@ const paths = {
   stock: "M5 19h14M7 16V9m5 7V5m5 11v-4",
   arrowRight: "M5 12h14M13 6l6 6-6 6",
   spark: "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z",
+  permission: "M12 3l7 4v5c0 4.5-3 8.7-7 10-4-1.3-7-5.5-7-10V7z",
+  hidden: "M3 3l18 18M10.6 10.7a3 3 0 0 0 4 4M9.9 5.1A12.4 12.4 0 0 1 12 5c6.5 0 10 7 10 7a18.1 18.1 0 0 1-4.2 4.8M6.2 6.3A18 18 0 0 0 2 12s3.5 7 10 7a10.9 10.9 0 0 0 3.1-.4",
+  cart: "M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0",
+  ledger: "M4 4h16v16H4zM4 9h16M4 14h16M9 9v11",
 };
 
 export default function Icon({ name, className = "h-4 w-4", strokeWidth = 1.8 }) {

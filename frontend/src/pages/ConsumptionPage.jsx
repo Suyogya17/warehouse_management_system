@@ -14,7 +14,6 @@ import Select from "react-select";
 export default function ConsumptionPage() {
   const { token, user } = useAuth();
   const { showToast } = useToast();
-  const [batches, setBatches] = useState([]);
   const canLog = user.role === "ADMIN" || user.role === "CO_ADMIN";
 
   const [materials, setMaterials] = useState([]);
@@ -55,7 +54,6 @@ export default function ConsumptionPage() {
         api.getConsumptionLogs(token),
       ]);
 
-
     setMaterials(materialsResult.data || []);
     setFinishedGoods(finishedGoodsResult.data || []);
     setLogs(logsResult.data || []);
@@ -67,98 +65,99 @@ export default function ConsumptionPage() {
 
   useDataRefresh(load, "consumption");
 
-const submitRaw = async (e) => {
-  e.preventDefault();
+  const submitRaw = async (e) => {
+    e.preventDefault();
 
-  const raw_material_id = Number(rawForm.raw_material_id);
-  const qty_used = Number(rawForm.qty_used);
-  const reason = rawForm.reason?.trim();
+    const raw_material_id = Number(rawForm.raw_material_id);
+    const qty_used = Number(rawForm.qty_used);
+    const reason = rawForm.reason?.trim();
 
-  if (!raw_material_id || !qty_used || qty_used <= 0 || !reason) {
-    return showToast({
-      tone: "error",
-      title: "Invalid input",
-      message: "Please fill all fields correctly.",
-    });
-  }
+    if (!raw_material_id || !qty_used || qty_used <= 0 || !reason) {
+      return showToast({
+        tone: "error",
+        title: "Invalid input",
+        message: "Please fill all fields correctly.",
+      });
+    }
 
-  try {
-    await api.logConsumption(
-      {
-        type: "RAW",
-        raw_material_id,
-        qty_used,
-        reason,
-      },
-      token
-    );
+    try {
+      await api.logConsumption(
+        {
+          type: "RAW",
+          raw_material_id,
+          qty_used,
+          reason,
+        },
+        token
+      );
 
-    setRawForm({ raw_material_id: "", qty_used: "", reason: "" });
-    await load();
-    announceDataRefresh("consumption");
+      setRawForm({ raw_material_id: "", qty_used: "", reason: "" });
+      await load();
+      announceDataRefresh("consumption");
 
-    showToast({
-      tone: "success",
-      title: "Success",
-      message: "Raw material consumption logged.",
-    });
-  } catch (err) {
-    console.log("RAW ERROR PAYLOAD ISSUE:", err);
-    showToast({
-      tone: "error",
-      title: "Failed",
-      message: err.message,
-    });
-  }
-};
+      showToast({
+        tone: "success",
+        title: "Success",
+        message: "Raw material consumption logged.",
+      });
+    } catch (err) {
+      console.log("RAW ERROR PAYLOAD ISSUE:", err);
+      showToast({
+        tone: "error",
+        title: "Failed",
+        message: err.message,
+      });
+    }
+  };
+
   // FINISHED submit
   const submitFinished = async (e) => {
-  e.preventDefault();
+    e.preventDefault();
 
-  const finished_good_id = Number(finishedForm.finished_good_id);
-  const qty_used = Number(finishedForm.qty_used);
-  const reason = finishedForm.reason?.trim();
+    const finished_good_id = Number(finishedForm.finished_good_id);
+    const qty_used = Number(finishedForm.qty_used);
+    const reason = finishedForm.reason?.trim();
 
-  if (!finished_good_id || !qty_used || qty_used <= 0 || !reason) {
-    return showToast({
-      tone: "error",
-      title: "Invalid input",
-      message: "Please fill all fields correctly.",
-    });
-  }
+    if (!finished_good_id || !qty_used || qty_used <= 0 || !reason) {
+      return showToast({
+        tone: "error",
+        title: "Invalid input",
+        message: "Please fill all fields correctly.",
+      });
+    }
 
-  try {
-    await api.logConsumption(
-      {
-        type: "FINISHED",
-        finished_good_id,
-        qty_used,
-        reason,
-      },
-      token
-    );
+    try {
+      await api.logConsumption(
+        {
+          type: "FINISHED",
+          finished_good_id,
+          qty_used,
+          reason,
+        },
+        token
+      );
 
-    setFinishedForm({ finished_good_id: "", qty_used: "", reason: "" });
-    await load();
-    announceDataRefresh("consumption");
+      setFinishedForm({ finished_good_id: "", qty_used: "", reason: "" });
+      await load();
+      announceDataRefresh("consumption");
 
-    showToast({
-      tone: "success",
-      title: "Success",
-      message: "Finished goods updated.",
-    });
-  } catch (err) {
-    console.log("FINISHED ERROR PAYLOAD ISSUE:", err);
-    showToast({
-      tone: "error",
-      title: "Failed",
-      message: err.message,
-    });
-  }
-};
+      showToast({
+        tone: "success",
+        title: "Success",
+        message: "Finished goods updated.",
+      });
+    } catch (err) {
+      console.log("FINISHED ERROR PAYLOAD ISSUE:", err);
+      showToast({
+        tone: "error",
+        title: "Failed",
+        message: err.message,
+      });
+    }
+  };
+
   return (
     <div className="space-y-6">
-
       {/* RAW MATERIAL SECTION */}
       {canLog && (
         <SectionCard
@@ -366,29 +365,39 @@ const submitRaw = async (e) => {
       </SectionCard>
 
       {/* HISTORY */}
-      <SectionCard title="History" icon="stock">
-        {/* <DataTable
+      <SectionCard title="Consumption History" icon="stock">
+        <DataTable
           columns={[
+            { 
+              key: "type", 
+              label: "Type",
+              render: (row) => (
+                <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
+                  row.type === "RAW" 
+                    ? "bg-blue-100 text-blue-700" 
+                    : "bg-green-100 text-green-700"
+                }`}>
+                  {row.type === "RAW" ? "Raw Material" : "Finished Good"}
+                </span>
+              )
+            },
             { key: "name", label: "Item" },
             { key: "article_code", label: "Code" },
-            { key: "qty_used", label: "Used" },
+            { 
+              key: "qty_used", 
+              label: "Quantity Used",
+              render: (row) => `${formatNumber(row.qty_used)} ${row.unit || "pcs"}`
+            },
             { key: "reason", label: "Reason" },
-            { key: "created_at", label: "Date", type: "date" },
+            { 
+              key: "created_at", 
+              label: "Date", 
+              type: "date" 
+            },
           ]}
           rows={logs}
-        /> */}
-        <DataTable
-                  columns={[
-                    { key: "name", label: "Material" },
-                    { key: "qty_added", label: "Added", render: (row) => `${formatNumber(row.qty_added)} ${row.unit}` },
-                    { key: "qty_remaining", label: "Remaining", render: (row) => `${formatNumber(row.qty_remaining)} ${row.unit}` },
-                    { key: "notes", label: "Notes" },
-                    { key: "purchased_at", label: "Purchased At", render: (row) => formatDate(row.purchased_at) },
-                  ]}
-                  rows={batches}
-                />
+        />
       </SectionCard>
-
     </div>
   );
 }

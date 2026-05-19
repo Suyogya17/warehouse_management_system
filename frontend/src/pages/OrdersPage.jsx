@@ -355,15 +355,15 @@ const deliveryNoteNumber =
 
           .header {
             text-align: center;
-            font-size: 30px;
+            font-size: 20px;
             font-weight: bold;
-            margin-bottom: 20px;
+            margin-bottom: 10px;
           }
 
           .top-grid {
             width: 100%;
             border-collapse: collapse;
-            margin-bottom: 20px;
+            margin-bottom: 10px;
           }
 
           .top-grid td {
@@ -379,14 +379,14 @@ const deliveryNoteNumber =
 
           table.items th {
             border: 1px solid black;
-            padding: 8px;
+            padding: 1px;
             background: #f3f3f3;
           }
 
           .totals {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 14px;
+            margin-top: 4px;
           }
 
           .totals td {
@@ -425,35 +425,39 @@ const deliveryNoteNumber =
         <table class="top-grid">
           <tr>
             <td width="60%">
-              <strong>Dated</strong><br/><br/>
+              <strong>Dated</strong><br/>
 
               Nepali Date: ${nepaliDate}<br/>
               English Date: ${englishDate}<br/>
               Time: ${currentTime}
-              <br/><br/>
-
-              <strong>Transport Name:</strong><br/>
+              <br/>
+              <strong>Transport Name:</strong>
               ${escapeHtml(order.transport_name || "-")}
+              <br/>
+
+              <strong>Gate Pass No:</strong>
+              <br/>
+
             </td>
 
             <td width="40%">
               <strong>Delivery Note No:</strong> ${deliveryNoteNumber}
-              <br/><br/>
+              <br/>
 
-              <strong>Created By:</strong><br/>
+              <strong>Created By:</strong>
               ${escapeHtml(order.created_by_name || "-")}
 
-              <br/><br/>
+              <br/>
 
-              <strong>Customer Name:</strong><br/>
+              <strong>Customer Name:</strong>
               ${escapeHtml(order.customer_name)}
-              <br/><br/>
+              <br/>
 
-              <strong>Address:</strong><br/>
+              <strong>Address:</strong>
               ${escapeHtml(order.customer_address || "-")}
-              <br/><br/>
+              <br/>
 
-              <strong>PAN Number:</strong><br/>
+              <strong>PAN Number:</strong>
               ${escapeHtml(order.pan_number || "-")}
             </td>
           </tr>
@@ -462,10 +466,10 @@ const deliveryNoteNumber =
         <table class="items">
           <thead>
             <tr>
-              <th width="8%">SN</th>
+              <th width="2%">SN</th>
               <th>Description of Goods</th>
-              <th width="16%">Carton</th>
-              <th width="20%">Pairs</th>
+              <th width="10%">Carton</th>
+              <th width="10%">Pairs</th>
             </tr>
           </thead>
 
