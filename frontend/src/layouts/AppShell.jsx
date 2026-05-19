@@ -22,8 +22,6 @@ const navByRole = {
     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
     { to: "/summary", label: "Summary", icon: "hidden" },
     { to: "/users", label: "Users", icon: "users" },
-    
-    
   ],
 
   CO_ADMIN: [
@@ -35,26 +33,22 @@ const navByRole = {
     { to: "/formulas", label: "Formulas", icon: "formulas" },
     { to: "/production", label: "Production", icon: "production" },
     { to: "/orders", label: "Orders", icon: "orders" },
-    { to:   "/stock", label: "Stock", icon: "stock" },
+    { to: "/stock", label: "Stock", icon: "stock" },
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
     { to: "/summary", label: "Summary", icon: "hidden" },
-    
-
   ],
 
   MEMBER: [
     { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/finished-goods-member", label: "Our Products", icon: "finishedGoods" },
-    // { to: "/order-member", label: "Order", icon: "cart" },
-    //  { to: "/on-hold-member", label: "On Hold", icon: "hidden" },
-     { to: "/stock-member", label: "Stock", icon: "stock" },
-     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
-     { to: "/summary", label: "Summary", icon: "hidden" },
+    { to: "/stock-member", label: "Stock", icon: "stock" },
+    { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
+    { to: "/summary", label: "Summary", icon: "hidden" },
   ],
 
-   USER: [
+  USER: [
     { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/finished-goods", label: "Our Products", icon: "finishedGoods" },
     { to: "/order-customer", label: "Order", icon: "cart" },
@@ -64,6 +58,24 @@ const navByRole = {
     { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/elder-finished", label: "Our Products", icon: "finishedGoods" },
   ],
+};
+
+const formatNotificationTime = (isoString) => {
+  if (!isoString) return "";
+  const date = new Date(isoString);
+  if (isNaN(date.getTime())) return "";
+
+  const now = new Date();
+  const isToday =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+
+  const timeStr = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  if (isToday) return timeStr;
+
+  return `${date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${timeStr}`;
 };
 
 export default function AppShell() {
@@ -198,9 +210,16 @@ export default function AppShell() {
                     notification.read ? "bg-white" : "bg-indigo-50/70"
                   }`}
                 >
-                  <p className="text-sm font-semibold text-slate-900">
-                    {notification.title}
-                  </p>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm font-semibold text-yellow-600">
+                      {notification.title}
+                    </p>
+                    {notification.createdAt && (
+                      <span className="shrink-0 text-[10px] text-red-700 mt-0.5">
+                        {formatNotificationTime(notification.createdAt)}
+                      </span>
+                    )}
+                  </div>
                   <p className="mt-1 text-xs leading-5 text-slate-500">
                     {notification.message}
                   </p>

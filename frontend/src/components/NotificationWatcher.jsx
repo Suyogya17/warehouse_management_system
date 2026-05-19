@@ -20,15 +20,22 @@ const writeSnapshot = (key, value) => {
   localStorage.setItem(key, JSON.stringify(value));
 };
 
+const formatTime = (dateStr) => {
+  const date = dateStr ? new Date(dateStr) : new Date();
+  if (isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
 const getOrderItemSummary = (order) =>
   (order.items || [])
     .slice(0, 2)
     .map((item) => `${item.product_name} (${Number(item.qty_ordered || 0)} ${item.unit || "pairs"})`)
     .join(", ");
 
-const getStatusMessage = (status, reason) => {
-  if (status === "CANCELLED" && reason) return `Cancelled: ${reason}`;
-  return `Status changed to ${String(status || "").toLowerCase()}.`;
+const getStatusMessage = (status, reason, updatedAt) => {
+  const time = updatedAt ? ` at ${formatTime(updatedAt)}` : "";
+  if (status === "CANCELLED" && reason) return `Cancelled: ${reason}${time}`;
+  return `Status changed to ${String(status || "").toLowerCase()}${time}.`;
 };
 
 export default function NotificationWatcher({ user, token, onNotify }) {
@@ -108,10 +115,11 @@ export default function NotificationWatcher({ user, token, onNotify }) {
         .sort((a, b) => Number(a.id) - Number(b.id));
 
       newOrders.forEach((order) => {
+        const time = formatTime(order.created_at || order.createdAt);
         const notification = {
           tone: "info",
           title: "New order placed",
-          message: `${order.created_by_name || order.customer_name || "User"} ordered ${getOrderItemSummary(order) || "new items"}.`,
+          message: `${order.created_by_name || order.customer_name || "User"} ordered ${getOrderItemSummary(order) || "new items"}${time ? ` at ${time}` : ""}.`,
         };
 
         showToast({
@@ -159,7 +167,11 @@ export default function NotificationWatcher({ user, token, onNotify }) {
           const notification = {
             tone: order.status === "CANCELLED" ? "warning" : "info",
             title: `Order #${order.id} updated`,
-            message: getStatusMessage(order.status, order.cancellation_reason),
+            message: getStatusMessage(
+              order.status,
+              order.cancellation_reason,
+              order.updated_at || order.updatedAt
+            ),
           };
 
           showToast({
@@ -180,10 +192,11 @@ export default function NotificationWatcher({ user, token, onNotify }) {
         const newProducts = products.filter((product) => !seenProducts.has(Number(product.id)));
 
         newProducts.forEach((product) => {
+          const time = formatTime(product.created_at || product.createdAt);
           const notification = {
             tone: "success",
             title: "New product available",
-            message: `${product.name || "Product"}${product.article_code ? ` (${product.article_code})` : ""} is now available.`,
+            message: `${product.name || "Product"}${product.article_code ? ` (${product.article_code})` : ""} is now available${time ? ` at ${time}` : ""}.`,
           };
 
           showToast({

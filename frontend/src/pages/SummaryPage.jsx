@@ -8,9 +8,10 @@ import { useToast } from "../context/ToastContext";
 import { api } from "../services/api";
 import { formatNumber } from "../utils/format";
 
-const TRACKED_STATUSES = ["CONFIRMED", "PACKED", "DELIVERED", "CANCELLED"];
+const TRACKED_STATUSES = ["PENDING","CONFIRMED", "PACKED", "DELIVERED", "CANCELLED"];
 
 const statusTone = {
+  PENDING: "calm",
   CONFIRMED: "calm",
   PACKED:    "calm",
   DELIVERED: "success",
@@ -93,6 +94,7 @@ export default function SummaryPage() {
               product_name:    productName,
               article_code:    item.article_code || "-",
               unit:            item.unit || "pairs",
+              PENDING: emptyStatusTotals(),
               CONFIRMED: emptyStatusTotals(),
               PACKED:    emptyStatusTotals(),
               DELIVERED: emptyStatusTotals(),
@@ -114,9 +116,9 @@ export default function SummaryPage() {
       .map((row) => ({
         ...row,
         total_pairs:
-          row.CONFIRMED.pairs + row.PACKED.pairs + row.DELIVERED.pairs + row.CANCELLED.pairs,
+         row.PENDING.pairs + row.CONFIRMED.pairs + row.PACKED.pairs + row.DELIVERED.pairs + row.CANCELLED.pairs,
         total_cartons:
-          row.CONFIRMED.cartons + row.PACKED.cartons + row.DELIVERED.cartons + row.CANCELLED.cartons,
+         row.PENDING.pairs + row.CONFIRMED.cartons + row.PACKED.cartons + row.DELIVERED.cartons + row.CANCELLED.cartons,
       }))
       .sort((a, b) => {
         const u = a.created_by_name.localeCompare(b.created_by_name);
@@ -149,6 +151,7 @@ export default function SummaryPage() {
           return acc;
         },
         {
+          PENDING: { pairs: 0, cartons: 0 },
           CONFIRMED: { pairs: 0, cartons: 0 },
           PACKED:    { pairs: 0, cartons: 0 },
           DELIVERED: { pairs: 0, cartons: 0 },
@@ -194,6 +197,16 @@ export default function SummaryPage() {
     { key: "created_by_name", label: "Created By" },
     { key: "product_name",    label: "Product" },
     { key: "article_code",    label: "Article" },
+    {
+      key: "pending",
+      label: "Pending",
+      render: (row) => (
+        <div className="space-y-2">
+          <StatusBadge tone={statusTone.pending}>PENDING</StatusBadge>
+          {formatQty(row.PENDING, row.unit)}
+        </div>
+      ),
+    },
     {
       key: "confirmed",
       label: "Confirmed",
@@ -251,7 +264,7 @@ export default function SummaryPage() {
     <div className="space-y-6">
 
       {/* ── STAT CARDS ── */}
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <StatCard label="Confirmed Pairs" value={formatNumber(pageTotals.CONFIRMED.pairs)} tone="calm"  icon="orders"  />
         <StatCard label="Packed Pairs"    value={formatNumber(pageTotals.PACKED.pairs)}    tone="calm"  icon="check"   />
         <StatCard label="Delivered Pairs" value={formatNumber(pageTotals.DELIVERED.pairs)} tone="calm"  icon="check"   />
@@ -332,7 +345,12 @@ export default function SummaryPage() {
                 <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-indigo-400">
                   Totals — {filteredRows.length} row{filteredRows.length !== 1 ? "s" : ""}
                 </p>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
+
+                  <div className="rounded-xl bg-white border border-slate-200 px-3 py-2.5 space-y-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">PENDING</p>
+                    {formatTotalQty(pageTotals.PENDING)}
+                  </div>
 
                   <div className="rounded-xl bg-white border border-slate-200 px-3 py-2.5 space-y-1">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Confirmed</p>
