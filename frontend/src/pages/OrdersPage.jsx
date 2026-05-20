@@ -245,6 +245,12 @@ const deliveryNoteNumber =
       pairs,
       pairsPerCarton,
       cartons,
+
+       // ADD THIS
+    product_size:
+      item.product_size ||
+      product?.size ||
+      "-",
     };
   });
 
@@ -265,6 +271,10 @@ const deliveryNoteNumber =
         <tr>
           <td style="border:1px solid black;padding:6px;text-align:center;">
             ${index + 1}
+          </td>
+
+           <td style="border:1px solid black;padding:6px;">
+            ${escapeHtml(item.product_size)}
           </td>
 
           <td style="border:1px solid black;padding:6px;">
@@ -467,6 +477,7 @@ const deliveryNoteNumber =
           <thead>
             <tr>
               <th width="2%">SN</th>
+              <th width="8%">Size</th>
               <th>Description of Goods</th>
               <th width="10%">Carton</th>
               <th width="10%">Pairs</th>

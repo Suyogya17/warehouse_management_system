@@ -437,36 +437,23 @@ export default function FinishedGoodsUserPage() {
           )}
         </button>
 
-        <div className="flex justify-between gap-2">
-          <button
-            onClick={() => setSort((prev) => (prev === "newest" ? "oldest" : "newest"))}
-            className={`flex px-4 py-2.5 border rounded-xl font-medium transition-all
-            ${
-              sort === "newest"
-                ? "bg-red-600 text-white border-red-300"
-                : "bg-red-500 text-white  hover:bg-slate-50 border-slate-300"
-            }`}
-          >
-            {sort === "newest" ? "Newest" : "Oldest"}
-          </button>
-
-          <button
-            onClick={() => setShowFilters((prev) => !prev)}
-            className={`flex px-2 py-2 border rounded-xl font-medium transition-all flex items-center justify-center gap-2
-            ${
-              showFilters
-                ? "bg-red-600 text-white border-red-300"
-                : "text-slate-700 hover:bg-slate-50 border-slate-300"
-            }`}
-          >
-            <Filter size={16} />
-            <span>Filter</span>
-          </button>
-        </div>
+       <div className="flex justify-between gap-2">
+  <button
+    onClick={() => setSort((prev) => (prev === "newest" ? "oldest" : "newest"))}
+    className={`flex px-4 py-2.5 border rounded-xl font-medium transition-all
+    ${
+      sort === "newest"
+        ? "bg-red-600 text-white border-red-300"
+        : "bg-red-500 text-white hover:bg-slate-50 border-slate-300"
+    }`}
+  >
+    {sort === "newest" ? "Newest" : "Oldest"}
+  </button>
+</div>
       </div>
 
       {/* FILTERS */}
-      {showFilters && (
+    
         <SectionCard title="Filters">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <input
@@ -502,13 +489,12 @@ export default function FinishedGoodsUserPage() {
 
             <button
               onClick={() => setFilters({ search: "", size: "", stock: "all" })}
-              className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition-all"
+              className="px-4 py-2 mx-10 bg-black text-white rounded-xl text-sm font-medium hover:bg-slate-200 transition-all"
             >
               Clear
             </button>
           </div>
         </SectionCard>
-      )}
 
       {/* COUNT */}
       <div className="text-sm text-slate-600">
