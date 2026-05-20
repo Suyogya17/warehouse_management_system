@@ -220,7 +220,11 @@ export default function ElderFinishedGoods() {
   const [cartLoaded, setCartLoaded] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [sort, setSort] = useState("newest");
-  const [filters, setFilters] = useState({ search: "", size: "", stock: "all" });
+  const [filters, setFilters] = useState({
+  search: "",
+  size: "",
+  stock: "all",
+});
   const [currentPage, setCurrentPage] = useState(1);
 
   const productsPerPage = 12;
@@ -302,17 +306,25 @@ export default function ElderFinishedGoods() {
           // FIX: Filter by available_qty (reserved-aware), not raw quantity
           const availableQty = getAvailableQty(item);
           const matchStock =
-            filters.stock === "all"
-              ? true
-              : filters.stock === "low"
-              ? availableQty > 0 && availableQty < 10
-              : availableQty >= 10;
-
+        filters.stock === "all"
+          ? true
+          : filters.stock === "available"
+          ? availableQty > 0
+          : filters.stock === "out"
+          ? availableQty > 0 && availableQty < 1
+          : true;
           return matchSearch && matchSize && matchStock;
           
         })
       )
-      .filter((variants) => variants.length > 0)
+      .filter((variants) => {
+  // hide fully out-of-stock groups by default
+  if (filters.stock === "all") {
+    return variants.some((v) => getAvailableQty(v) > 0);
+  }
+
+  return variants.length > 0;
+})
       .sort((a, b) => {
         const dateA = new Date(a[0]?.created_at || 0);
         const dateB = new Date(b[0]?.created_at || 0);
@@ -445,26 +457,12 @@ export default function ElderFinishedGoods() {
             }`}
           >
             {sort === "newest" ? "Newest" : "Oldest"}
-          </button>
-
-          <button
-            onClick={() => setShowFilters((prev) => !prev)}
-            className={`flex px-2 py-2 border rounded-xl font-medium transition-all flex items-center justify-center gap-2
-            ${
-              showFilters
-                ? "bg-red-600 text-white border-red-300"
-                : "text-slate-700 hover:bg-slate-50 border-slate-300"
-            }`}
-          >
-            <Filter size={16} />
-            <span>Filter</span>
-          </button>
+          </button> 
         </div>
       </div>
 
       {/* FILTERS */}
-      {showFilters && (
-        <SectionCard title="Filters">
+         <SectionCard title="Filters">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <input
               type="text"
@@ -488,14 +486,14 @@ export default function ElderFinishedGoods() {
             </select>
 
             <select
-              value={filters.stock}
-              onChange={(e) => setFilters((f) => ({ ...f, stock: e.target.value }))}
-              className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            >
-              <option value="all">All Stock</option>
-              <option value="available">In Stock</option>
-              <option value="low">Low Stock</option>
-            </select>
+  value={filters.stock}
+  onChange={(e) => setFilters((f) => ({ ...f, stock: e.target.value }))}
+  className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+>
+  <option value="all">Available Products</option>
+  <option value="available">In Stock</option>
+  <option value="out">Out of Stock</option>
+</select>
 
             <button
               onClick={() => setFilters({ search: "", size: "", stock: "all" })}
@@ -505,7 +503,6 @@ export default function ElderFinishedGoods() {
             </button>
           </div>
         </SectionCard>
-      )}
 
       {/* COUNT */}
       <div className="text-sm text-slate-600">

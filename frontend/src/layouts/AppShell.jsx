@@ -55,7 +55,6 @@ const navByRole = {
   ],
 
   ELDER: [
-    { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/elder-finished", label: "Our Products", icon: "finishedGoods" },
   ],
 };
