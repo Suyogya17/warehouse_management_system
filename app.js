@@ -12,6 +12,7 @@ const formulaRoutes = require("./routes/formulaRoutes");
 const productionRoutes = require("./routes/productionRoutes");
 const permissionRoutes = require("./routes/permissionRoutes");
 const orderRoutes = require("./routes/orderRoutes");
+const stockAdjustmentRoutes = require("./routes/stockAdjustments");
 
 const app = express();
 
@@ -85,6 +86,7 @@ app.use("/api/formulas", formulaRoutes);
 app.use("/api/productions", productionRoutes);
 app.use("/api/permissions", permissionRoutes);
 app.use("/api/orders", orderRoutes);
+app.use('/api/stock-adjustments', stockAdjustmentRoutes);
 
 /* ─────────────────────────────
    ROOT ENDPOINT

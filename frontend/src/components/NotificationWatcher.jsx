@@ -115,11 +115,11 @@ export default function NotificationWatcher({ user, token, onNotify }) {
         .sort((a, b) => Number(a.id) - Number(b.id));
 
       newOrders.forEach((order) => {
-        const time = formatTime(order.created_at || order.createdAt);
+        const time = formatTime(order.order_placed_at || order.created_at || order.createdAt);
         const notification = {
           tone: "info",
           title: "New order placed",
-          message: `${order.created_by_name || order.customer_name || "User"} ordered ${getOrderItemSummary(order) || "new items"}${time ? ` at ${time}` : ""}.`,
+          message: `${order.created_by_name || order.customer_name || "User"} placed an order at ${time}. Items: ${getOrderItemSummary(order)}.`,
         };
 
         showToast({

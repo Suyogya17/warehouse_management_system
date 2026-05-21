@@ -241,4 +241,22 @@ export const api = {
 
   deleteOrder: (id, token) =>
     apiRequest(`/orders/${id}`, { method: "DELETE" }, token),
+
+  getStockAdjustments: (token, finished_good_id) =>
+  apiRequest(
+    `/stock-adjustments${finished_good_id ? `?finished_good_id=${finished_good_id}` : ''}`,
+    {},
+    token
+  ),
+
+createStockAdjustment: (token, payload) =>
+  apiRequest(
+    '/stock-adjustments',
+    { method: 'POST', body: JSON.stringify(payload) },
+    token
+  ),
+
+deleteStockAdjustment: (id, token) =>
+  apiRequest(`/stock-adjustments/${id}`, { method: 'DELETE' }, token),
 };
+

@@ -26,6 +26,7 @@ export default function ProductLedgerPage() {
   const [loading,       setLoading]       = useState(true);
   const [selectedProduct, setSelectedProduct] = useState("");
   const [search,   setSearch]   = useState("");
+  const [adjustments, setAdjustments] = useState([]); 
   const [fromDate, setFromDate] = useState("");
   const [toDate,   setToDate]   = useState("");
 
@@ -33,14 +34,16 @@ export default function ProductLedgerPage() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const [fgRes, prodRes, ordersRes] = await Promise.all([
+      const [fgRes, prodRes, ordersRes, adjRes] = await Promise.all([
         api.getFinishedGoods(token),
         api.getProductionHistory(token),
         api.getOrders(token),
+        api.getStockAdjustments(token),
       ]);
       setFinishedGoods(fgRes.data   || fgRes   || []);
       setProductions(  prodRes.data || prodRes || []);
       setOrders(       ordersRes.data || ordersRes || []);
+      setAdjustments(  adjRes.data  || adjRes  || []);
     } catch (error) {
       showToast({ tone: "error", title: "Ledger failed", message: error.message || "Could not load ledger data." });
     } finally {
@@ -69,24 +72,27 @@ const allEntries = useMemo(() => {
   // Production → IN
   productions
     .filter((p) => {
-      const fgId =
-        p.finished_good_id ??
-        p.finishedGoodId ??
-        p.fg_id ??
-        p.product_id ??
-        p.finished_good?.id ??
-        p.finishedGood?.id;
+  const fgId =
+    p.finished_good_id ??
+    p.finishedGoodId ??
+    p.fg_id ??
+    p.product_id ??
+    p.finished_good?.id ??
+    p.finishedGood?.id;
 
-      if (fgId !== undefined && fgId !== null) {
-        return String(fgId) === String(selectedProduct);
-      }
+  // Match by ID if present
+  if (fgId !== undefined && fgId !== null) {
+    if (String(fgId) === String(selectedProduct)) return true;
+  }
 
-      if (p.finished_good_name && product) {
-        return p.finished_good_name === (product.name || product.product_name);
-      }
+  // ALSO try name match as a fallback (catches records where ID is set
+  // but points to a different field, or name is the only reliable key)
+  if (p.finished_good_name && product) {
+    return p.finished_good_name === (product.name || product.product_name);
+  }
 
-      return false;
-    })
+  return false;
+})
     .forEach((p) => {
       const rawDate = p.produced_at || p.created_at || p.date || p.production_date;
       const qty = Number(
@@ -103,6 +109,23 @@ const allEntries = useMemo(() => {
         qty_out:     0,
       });
     });
+
+        // Stock Adjustments → IN or OUT
+      adjustments
+        .filter((a) => String(a.finished_good_id) === String(selectedProduct))
+        .forEach((a) => {
+          const qty = Number(a.qty);
+          if (!a.adjusted_at || qty === 0) return;
+          entries.push({
+            date:        toDateInputValue(new Date(a.adjusted_at)),
+            raw:         new Date(a.adjusted_at),
+            type:        qty > 0 ? "IN" : "OUT",
+            description: a.finished_good_name || "Stock Adjustment",
+            reference:   a.reason || "Manual Adjustment",
+            qty_in:      qty > 0 ? qty  : 0,
+            qty_out:     qty < 0 ? -qty : 0,
+          });
+        });
 
   // Orders → OUT
   orders
@@ -161,7 +184,7 @@ const allEntries = useMemo(() => {
     balance += e.qty_in - e.qty_out;
     return { ...e, balance };
   });
-}, [selectedProduct, productions, orders, finishedGoods]);
+}, [selectedProduct, productions, orders, finishedGoods, adjustments]);
 
 
 
@@ -316,10 +339,12 @@ const allEntries = useMemo(() => {
     <div className="text-xs text-yellow-700 space-y-1">
       <p>Selected Product ID: <strong>{selectedProduct}</strong></p>
       <p>Total Productions in system: <strong>{productions.length}</strong></p>
-      <p>Productions for this product: <strong>{productions.filter((p) => {
-        const fgId = p.finished_good_id ?? p.finishedGoodId ?? p.finished_good?.id;
-        return String(fgId) === String(selectedProduct);
-      }).length}</strong></p>
+      <p>Productions matched (ID OR name): <strong>{productions.filter((p) => {
+  const fgId = p.finished_good_id ?? p.finishedGoodId ?? p.finished_good?.id;
+  const product = finishedGoods.find(fg => String(fg.id) === String(selectedProduct));
+  return String(fgId) === String(selectedProduct) ||
+    (p.finished_good_name && p.finished_good_name === product?.name);
+}).length}</strong></p>
       <p>Total Orders: <strong>{orders.filter(o => ACTIVE_STATUSES.includes(o.status)).length}</strong></p>
       <p>Order items for this product: <strong>{
         orders.filter(o => ACTIVE_STATUSES.includes(o.status))

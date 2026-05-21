@@ -444,8 +444,9 @@ const deliveryNoteNumber =
               <strong>Transport Name:</strong>
               ${escapeHtml(order.transport_name || "-")}
               <br/>
-
               <strong>Gate Pass No:</strong>
+              <br/>
+              <strong>Bill No:</strong>
               <br/>
 
             </td>

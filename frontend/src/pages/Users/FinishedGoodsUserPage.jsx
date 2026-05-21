@@ -24,22 +24,32 @@ const getAvailableQty = (product) =>
 
 function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
   const [selectedVariant, setSelectedVariant] = useState(
-  variants?.find((v) => getAvailableQty(v) > 0) || variants?.[0] || null
-);
+    variants?.find((v) => getAvailableQty(v) > 0) || variants?.[0] || null
+  );
+  const [lightbox, setLightbox] = useState(false);
+
+  // ✅ Fix 1 — prevent body scroll when lightbox is open (mobile Chrome)
+  useEffect(() => {
+    if (lightbox) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [lightbox]);
 
   useEffect(() => {
     if (!variants?.length) {
       setSelectedVariant(null);
       return;
     }
-
     setSelectedVariant((current) => {
       const refreshedCurrent = variants.find(
         (variant) => Number(variant.id) === Number(current?.id)
       );
-
       if (refreshedCurrent) return refreshedCurrent;
-
       return variants.find((variant) => getAvailableQty(variant) > 0) || variants[0];
     });
   }, [variants]);
@@ -47,18 +57,12 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
   if (!selectedVariant) return null;
 
   const isInCart = cartProductIds.has(Number(selectedVariant.id));
-
-  // FIX: Use available_qty (display_stock - reserved) for all stock UI.
-  // This comes from /orders/availability and reflects real reservations.
-  const availableQty = getAvailableQty(selectedVariant);
-
+    const availableQty = getAvailableQty(selectedVariant);
   const isLowStock = availableQty > 0 && availableQty < 10;
   const isOutOfStock = availableQty <= 0;
-
   const isNew =
     selectedVariant.created_at &&
     new Date(selectedVariant.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
   const cartons = selectedVariant.inner_boxes_per_outer_box
     ? Math.floor(availableQty / Number(selectedVariant.inner_boxes_per_outer_box))
     : 0;
@@ -71,11 +75,12 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
           <img
             loading="lazy"
             decoding="async"
-            width={400}        // add dimensions
+            width={400}
             height={300}
             src={`${APP_BASE_URL}${selectedVariant.image_url}`}
             alt={selectedVariant.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
+            onClick={() => setLightbox(true)}
+            className="w-full h-full object-cover group-hover:scale-105 transition duration-500 cursor-zoom-in"
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
@@ -92,7 +97,6 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
           ) : (
             <div />
           )}
-
           {isInCart && (
             <span className="bg-green-500 text-white text-[10px] sm:text-xs px-2 py-1 rounded-full font-semibold flex items-center gap-1">
               <Check size={12} />
@@ -120,7 +124,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
           </h3>
           <span
             className={`text-[10px] px-2 py-1 rounded-full font-semibold gap-2
-            ${
+               ${
               isOutOfStock
                 ? "bg-gray-100 text-gray-600"
                 : isLowStock
@@ -132,38 +136,36 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
           </span>
         </div>
 
-         {/* SIZE */}
+        {/* SIZE */}
         {selectedVariant.size && (
           <div className="text-xs text-slate-600">
             Size: <span className="font-semibold">{selectedVariant.size}</span>
           </div>
         )}
-        
+
         {/* COLOR VARIANTS */}
         {variants.length > 0 && (
-          <div className="flex flex-col  py-2">
+          <div className="flex flex-row py-2">
             <div className="flex scrollbar-hidden  overflow-x-auto px-1 ">
               {variants.filter((variant) => getAvailableQty(variant) > 0).map((variant) => (
-                <button
-                  key={variant.id}
-                  onClick={() => setSelectedVariant(variant)}
-                  className={`px-2.5 rounded-lg text-xs font-medium transition-all
-                  ${
-                    selectedVariant.id === variant.id
-                      ? "bg-indigo-500 text-white"
-                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                  }`}
-                >
-                  {variant.color}
-                </button>
-              ))}
+                  <button
+                    key={variant.id}
+                    onClick={() => setSelectedVariant(variant)}
+                    className={`px-2.5 rounded-lg text-xs font-medium transition-all
+                      ${
+                      selectedVariant.id === variant.id
+                        ? "bg-indigo-500 text-white"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    }`}
+                  >
+                    {variant.color}
+                  </button>
+                ))}
             </div>
           </div>
         )}
 
-       
-
-        {/* STOCK INFO — shows available (reserved-aware), not raw physical */}
+        {/* STOCK INFO */}
         <div className="bg-slate-50 rounded-xl p-3 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs text-slate-500">Available Stock</span>
@@ -171,7 +173,6 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
               {formatNumber(availableQty)} {selectedVariant.unit || "pcs"}
             </span>
           </div>
-
           {Number(selectedVariant.inner_boxes_per_outer_box) > 0 && (
             <div className="flex items-center justify-between border-t border-slate-200 pt-2">
               <span className="text-xs text-slate-500">Cartons</span>
@@ -183,12 +184,11 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
         </div>
 
         {/* ADD TO CART BUTTON */}
-        <div className="flex justify-center mt-auto pt-2 ">
+        <div className="flex justify-center mt-auto pt-2">
           <button
             onClick={() => onAddToCart(selectedVariant)}
             disabled={isOutOfStock}
-            className={`my-2 px-4 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all
-            ${
+            className={`my-2 px-4 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all ${
               isInCart
                 ? "bg-green-500 text-white hover:bg-green-600"
                 : isOutOfStock
@@ -210,6 +210,51 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
           </button>
         </div>
       </div>
+
+      {/* ✅ LIGHTBOX — outside overflow:hidden, with mobile Chrome fixes */}
+      {lightbox && selectedVariant.image_url && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
+          style={{ touchAction: "none" }}   // ✅ Fix 2 — prevent swipe-back on Android
+          onClick={() => setLightbox(false)}
+        >
+          <div
+            className="relative max-w-3xl w-full max-h-[90vh] flex items-center justify-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={`${APP_BASE_URL}${selectedVariant.image_url}`}
+              alt={selectedVariant.name}
+              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
+            />
+
+            {/* Product name bar */}
+            <div className="absolute bottom-0 left-0 right-0 bg-black/50 rounded-b-2xl px-4 py-3">
+              <p className="text-white font-semibold text-sm text-center">
+                {selectedVariant.article_code || selectedVariant.name}
+                {selectedVariant.color && (
+                  <span className="ml-2 text-slate-300 font-normal">
+                    · {selectedVariant.color}
+                  </span>
+                )}
+              </p>
+            </div>
+
+            {/* Close button */}
+            <button
+              onClick={() => setLightbox(false)}
+              className="absolute -top-4 -right-4 bg-white text-slate-800 rounded-full w-10 h-10 flex items-center justify-center shadow-lg hover:bg-slate-100 transition-all font-bold text-lg"
+            >
+              ✕
+            </button>
+          </div>
+
+          <p className="absolute bottom-4 text-white/40 text-xs">
+            Tap outside to close
+          </p>
+        </div>
+      )}
+
     </div>
   );
 }

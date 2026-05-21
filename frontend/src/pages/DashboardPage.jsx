@@ -9,17 +9,25 @@ import { useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber } from "../utils/format";
 
-// ─────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────
 const getAvailableQty = (product) =>
   Number(product?.available_qty ?? product?.display_quantity ?? product?.quantity ?? 0);
 
 // ─────────────────────────────────────────────────────────────
-// ProductCard — read-only, no cart
+// ProductCard — read-only, no cart, with lightbox
 // ─────────────────────────────────────────────────────────────
 function ProductCard({ variants = [] }) {
   const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
+  const [lightbox, setLightbox] = useState(false); // ✅ above early return
+
+  // ✅ prevent body scroll on mobile Chrome when lightbox is open
+  useEffect(() => {
+    if (lightbox) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => { document.body.style.overflow = ""; };
+  }, [lightbox]);
 
   useEffect(() => {
     if (!variants?.length) { setSelectedVariant(null); return; }
@@ -30,7 +38,7 @@ function ProductCard({ variants = [] }) {
     });
   }, [variants]);
 
-  if (!selectedVariant) return null;
+  if (!selectedVariant) return null; // ✅ safe now
 
   const availableQty = getAvailableQty(selectedVariant);
   const isLowStock   = availableQty > 0 && availableQty < 10;
@@ -38,19 +46,22 @@ function ProductCard({ variants = [] }) {
   const isNew =
     selectedVariant.created_at &&
     new Date(selectedVariant.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
   const cartons = selectedVariant.inner_boxes_per_outer_box
     ? Math.floor(availableQty / Number(selectedVariant.inner_boxes_per_outer_box))
     : 0;
 
   return (
     <div className="group flex flex-col rounded-2xl border border-slate-200 bg-white overflow-hidden hover:shadow-xl transition-all duration-300">
+
+      {/* IMAGE */}
       <div className="relative aspect-[4/3] bg-slate-100 overflow-hidden">
         {selectedVariant.image_url ? (
-          <img loading="lazy" decoding="async" width={400} height={300}
+          <img
+            loading="lazy" decoding="async" width={400} height={300}
             src={`${APP_BASE_URL}${selectedVariant.image_url}`}
             alt={selectedVariant.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
+            onClick={() => setLightbox(true)}
+            className="w-full h-full object-cover group-hover:scale-105 transition duration-500 cursor-zoom-in"
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
@@ -69,6 +80,7 @@ function ProductCard({ variants = [] }) {
         )}
       </div>
 
+      {/* CONTENT */}
       <div className="flex flex-col p-3 gap-2">
         <div className="flex items-start justify-between gap-2">
           <h3 className="flex-1 text-sm sm:text-base font-bold text-slate-900 line-clamp-2 leading-snug">
@@ -83,7 +95,7 @@ function ProductCard({ variants = [] }) {
           <div className="text-xs text-slate-600">Size: <span className="font-semibold">{selectedVariant.size}</span></div>
         )}
         {variants.length >= 1 && (
-          <div className="flex flex-wrap gap-1">
+          <div className="flex gap-1 overflow-x-auto whitespace-wrap">
             {variants.map((variant) => (
               <button key={variant.id} onClick={() => setSelectedVariant(variant)}
                 className={`px-2.5 py-0.5 rounded-lg text-xs font-medium transition-all
@@ -93,28 +105,75 @@ function ProductCard({ variants = [] }) {
             ))}
           </div>
         )}
-        <div className="bg-slate-50 rounded-xl p-3 space-y-2">
+       <div className=" rounded-xl p-3 space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-500">Available Stock</span>
+            <span className="text-xs font-bold text-indigo-900">Available pairs: </span>
             <span className="text-sm font-bold text-slate-900">{formatNumber(availableQty)} {selectedVariant.unit || "pcs"}</span>
           </div>
           {Number(selectedVariant.inner_boxes_per_outer_box) > 0 && (
-            <div className="flex items-center justify-between border-t border-slate-200 pt-2">
-              <span className="text-xs text-slate-500">Cartons</span>
-              <span className="text-sm font-bold text-indigo-600">{formatNumber(cartons)}</span>
+            <div className="flex items-center justify-between border-t border-amber-200 pt-2">
+              <span className="text-xs text-indigo-900">Cartons</span>
+              <span className="text-xs font-bold text-indigo-500">{formatNumber(cartons)}</span>
             </div>
           )}
         </div>
       </div>
+
+      {/* ✅ LIGHTBOX — outside overflow:hidden */}
+      {lightbox && selectedVariant.image_url && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
+          style={{ touchAction: "none" }}
+          onClick={() => setLightbox(false)}
+        >
+          <div
+            className="relative max-w-3xl w-full max-h-[90vh] flex items-center justify-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={`${APP_BASE_URL}${selectedVariant.image_url}`}
+              alt={selectedVariant.name}
+              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
+            />
+            <div className="absolute bottom-0 left-0 right-0 bg-black/50 rounded-b-2xl px-4 py-3">
+              <p className="text-white font-semibold text-sm text-center">
+                {selectedVariant.article_code || selectedVariant.name}
+                {selectedVariant.color && (
+                  <span className="ml-2 text-slate-300 font-normal">· {selectedVariant.color}</span>
+                )}
+              </p>
+            </div>
+            <button
+              onClick={() => setLightbox(false)}
+              className="absolute -top-4 -right-4 bg-white text-slate-800 rounded-full w-10 h-10 flex items-center justify-center shadow-lg hover:bg-slate-100 transition-all font-bold text-lg"
+            >
+              ✕
+            </button>
+          </div>
+          <p className="absolute bottom-4 text-white/40 text-xs">Tap outside to close</p>
+        </div>
+      )}
+
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────
-// OnHoldCard — with color variant selection
+// OnHoldCard — with lightbox
 // ─────────────────────────────────────────────────────────────
 function OnHoldCard({ variants = [] }) {
   const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
+  const [lightbox, setLightbox] = useState(false); // ✅ above early return
+
+  // ✅ prevent body scroll on mobile Chrome
+  useEffect(() => {
+    if (lightbox) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => { document.body.style.overflow = ""; };
+  }, [lightbox]);
 
   useEffect(() => {
     if (!variants?.length) { setSelectedVariant(null); return; }
@@ -125,41 +184,40 @@ function OnHoldCard({ variants = [] }) {
     });
   }, [variants]);
 
-  if (!selectedVariant) return null;
+  if (!selectedVariant) return null; // ✅ safe now
 
   const availableQty = Number(selectedVariant?.quantity || 0);
   const isNew =
     selectedVariant.created_at &&
     new Date(selectedVariant.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
   const cartons = selectedVariant.inner_boxes_per_outer_box
     ? Math.floor(availableQty / Number(selectedVariant.inner_boxes_per_outer_box))
     : 0;
 
   return (
     <div className="group flex flex-col rounded-2xl border border-amber-200 bg-white overflow-hidden hover:shadow-xl transition-all duration-300">
+
+      {/* IMAGE */}
       <div className="relative aspect-[4/3] bg-slate-100 overflow-hidden">
         {selectedVariant.image_url ? (
-          <img loading="lazy" decoding="async" width={400} height={300}
+          <img
+            loading="lazy" decoding="async" width={400} height={300}
             src={`${APP_BASE_URL}${selectedVariant.image_url}`}
             alt={selectedVariant.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition duration-500 opacity-60"
+            onClick={() => setLightbox(true)}
+            className="w-full h-full object-cover group-hover:scale-105 transition duration-500 opacity-60 cursor-zoom-in"
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
             <PackageIcon className="text-slate-400" size={42} />
           </div>
         )}
-        
-        {/* BADGES */}
         <div className="absolute top-2 left-2 right-2 flex items-start justify-between">
           {isNew ? (
             <span className="bg-indigo-500 text-white text-[10px] sm:text-xs px-2 py-1 rounded-full font-semibold opacity-80">NEW</span>
           ) : <div />}
         </div>
-        
-        {/* ON HOLD OVERLAY */}
-        <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+        <div className="absolute inset-0 bg-black/50 flex items-center justify-center pointer-events-none">
           <span className="bg-amber-500 text-white px-4 py-2 rounded-lg font-semibold text-sm flex items-center gap-2">
             <EyeOff size={14} />
             On Hold
@@ -167,6 +225,7 @@ function OnHoldCard({ variants = [] }) {
         </div>
       </div>
 
+      {/* CONTENT */}
       <div className="flex flex-col p-3 gap-2">
         <div className="flex items-start justify-between gap-2">
           <h3 className="flex-1 text-sm sm:text-base font-bold text-slate-900 line-clamp-2 leading-snug">
@@ -176,60 +235,82 @@ function OnHoldCard({ variants = [] }) {
             On Hold
           </span>
         </div>
-        
         {selectedVariant.size && (
           <div className="text-xs text-slate-600">Size: <span className="font-semibold">{selectedVariant.size}</span></div>
         )}
-        
-        {/* COLOR VARIANTS */}
         {variants.length >= 1 && (
-          <div className="flex flex-wrap gap-1">
+          <div className="flex gap-1">
             {variants.map((variant) => (
-              <button 
-                key={variant.id} 
-                onClick={() => setSelectedVariant(variant)}
+              <button key={variant.id} onClick={() => setSelectedVariant(variant)}
                 className={`px-2.5 py-0.5 rounded-lg text-xs font-medium transition-all
-                  ${selectedVariant.id === variant.id 
-                    ? "bg-amber-500 text-white" 
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                  }`}
-              >
+                  ${selectedVariant.id === variant.id
+                    ? "bg-amber-500 text-white"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>
                 {variant.color}
               </button>
             ))}
           </div>
         )}
-        
         {selectedVariant.sole_code && (
           <div className="text-xs text-slate-600">
             Sole: <span className="font-semibold">{selectedVariant.sole_code}</span>
           </div>
         )}
-        
         <div className="bg-amber-50 rounded-xl p-3 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs text-amber-600">Stock</span>
-            <span className="text-sm font-bold text-slate-900">
-              {formatNumber(availableQty)} {selectedVariant.unit || "pcs"}
-            </span>
+            <span className="text-sm font-bold text-slate-900">{formatNumber(availableQty)} {selectedVariant.unit || "pcs"}</span>
           </div>
-          
           {Number(selectedVariant.inner_boxes_per_outer_box) > 0 && (
             <div className="flex items-center justify-between border-t border-amber-200 pt-2">
               <span className="text-xs text-amber-600">Cartons</span>
-              <span className="text-sm font-bold text-amber-700">
-                {formatNumber(cartons)}
-              </span>
+              <span className="text-sm font-bold text-amber-700">{formatNumber(cartons)}</span>
             </div>
           )}
         </div>
       </div>
+
+      {/* ✅ LIGHTBOX — outside overflow:hidden */}
+      {lightbox && selectedVariant.image_url && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
+          style={{ touchAction: "none" }}
+          onClick={() => setLightbox(false)}
+        >
+          <div
+            className="relative max-w-3xl w-full max-h-[90vh] flex items-center justify-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={`${APP_BASE_URL}${selectedVariant.image_url}`}
+              alt={selectedVariant.name}
+              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
+            />
+            <div className="absolute bottom-0 left-0 right-0 bg-black/50 rounded-b-2xl px-4 py-3">
+              <p className="text-white font-semibold text-sm text-center">
+                {selectedVariant.article_code || selectedVariant.name}
+                {selectedVariant.color && (
+                  <span className="ml-2 text-slate-300 font-normal">· {selectedVariant.color}</span>
+                )}
+              </p>
+            </div>
+            <button
+              onClick={() => setLightbox(false)}
+              className="absolute -top-4 -right-4 bg-white text-slate-800 rounded-full w-10 h-10 flex items-center justify-center shadow-lg hover:bg-slate-100 transition-all font-bold text-lg"
+            >
+              ✕
+            </button>
+          </div>
+          <p className="absolute bottom-4 text-white/40 text-xs">Tap outside to close</p>
+        </div>
+      )}
+
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────
-// Reusable pagination bar
+// PaginationBar — unchanged
 // ─────────────────────────────────────────────────────────────
 function PaginationBar({ total, current, setPage }) {
   if (total <= 1) return null;
@@ -274,7 +355,7 @@ function PaginationBar({ total, current, setPage }) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// DashboardPage
+// DashboardPage — unchanged
 // ─────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { token, user } = useAuth();
@@ -300,73 +381,35 @@ export default function DashboardPage() {
   const isAdmin = user.role === "ADMIN" || user.role === "CO_ADMIN";
   const canViewDashboard = isAdmin || user.role === "MEMBER";
 
-const load = useCallback(async () => {
-  const requests = [];
+  const load = useCallback(async () => {
+    const requests = [];
+    requests.push(user.role !== "USER" ? api.getStockSummary(token) : Promise.resolve(null));
+    requests.push(api.getFinishedGoods(token));
+    requests.push(user.role === "ADMIN" ? api.getFormulas(token) : Promise.resolve({ data: [] }));
+    requests.push(user.role !== "USER" ? api.getProductionHistory(token) : Promise.resolve({ data: [] }));
+    requests.push(user.role !== "MEMBER" ? api.getConsumptionLogs(token) : Promise.resolve({ data: [] }));
+    requests.push(user.role !== "MEMBER" ? api.getOrders(token) : Promise.resolve({ data: [] }));
+    requests.push(isAdmin || user.role === "MEMBER" ? api.getAvailability(token) : Promise.resolve({ data: [] }));
+    requests.push(isAdmin ? api.getPermissions(token) : Promise.resolve({ data: [] }));
 
-  // 0 — stock summary
-  requests.push(user.role !== "USER"
-    ? api.getStockSummary(token)
-    : Promise.resolve(null)
-  );
+    const [stock, finishedGoods, formulas, production, consumption, orders, availability, permissions] =
+      await Promise.all(requests);
 
-  // 1 — finished goods
-  requests.push(api.getFinishedGoods(token));
-
-  // 2 — formulas
-  requests.push(user.role === "ADMIN"
-    ? api.getFormulas(token)
-    : Promise.resolve({ data: [] })
-  );
-
-  // 3 — production history
-  requests.push(user.role !== "USER"
-    ? api.getProductionHistory(token)
-    : Promise.resolve({ data: [] })
-  );
-
-  // 4 — consumption logs
-  requests.push(user.role !== "MEMBER"
-    ? api.getConsumptionLogs(token)
-    : Promise.resolve({ data: [] })
-  );
-
-  // 5 — orders
-  requests.push(user.role !== "MEMBER"
-    ? api.getOrders(token)
-    : Promise.resolve({ data: [] })
-  );
-
-  // 6 — availability (admin, co-admin, and member all need this for the product grid)
-  requests.push(isAdmin || user.role === "MEMBER"
-    ? api.getAvailability(token)
-    : Promise.resolve({ data: [] })
-  );
-
-  // 7 — permissions (admin only, for on-hold logic)
-  requests.push(isAdmin
-    ? api.getPermissions(token)
-    : Promise.resolve({ data: [] })
-  );
-
-  const [stock, finishedGoods, formulas, production, consumption, orders, availability, permissions] =
-    await Promise.all(requests);
-
-  setState({
-    stock,
-    finishedGoods: finishedGoods.data || [],
-    formulas:      formulas.data      || [],
-    production:    production.data    || [],
-    consumption:   consumption.data   || [],
-    orders:        orders.data        || [],
-    availability:  availability.data  || [],
-    permissions:   permissions.data   || [],
-  });
-}, [token, user.role, isAdmin]);
+    setState({
+      stock,
+      finishedGoods: finishedGoods.data || [],
+      formulas:      formulas.data      || [],
+      production:    production.data    || [],
+      consumption:   consumption.data   || [],
+      orders:        orders.data        || [],
+      availability:  availability.data  || [],
+      permissions:   permissions.data   || [],
+    });
+  }, [token, user.role, isAdmin]);
 
   useEffect(() => { load().catch(console.error); }, [load]);
   useDataRefresh(load, "dashboard");
 
-  // ── Stat values ───────────────────────────────────────────
   const lowStock      = state.stock?.low_stock_alerts?.length || 0;
   const finishedTotal = state.finishedGoods.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
   const rawTotal      = state.stock?.data?.reduce((sum, item) => sum + Number(item.quantity || 0), 0) || 0;
@@ -376,7 +419,6 @@ const load = useCallback(async () => {
   const confirmedOrders = userOrders.filter((o) => o.status === "CONFIRMED").length;
   const deliveredOrders = userOrders.filter((o) => o.status === "DELIVERED").length;
 
-  // ── Group availability by article_code ────────────────────
   const groupedProducts = useMemo(() => {
     const groups = {};
     state.availability.forEach((item) => {
@@ -391,7 +433,6 @@ const load = useCallback(async () => {
     return Object.values(groups);
   }, [state.availability]);
 
-  // ── Filter finished goods ─────────────────────────────────
   const filteredProducts = useMemo(() => {
     return groupedProducts
       .map((variants) =>
@@ -400,14 +441,12 @@ const load = useCallback(async () => {
             !search ||
             item.name?.toLowerCase().includes(search.toLowerCase()) ||
             item.article_code?.toLowerCase().includes(search.toLowerCase());
-
           const qty = getAvailableQty(item);
           const matchStock =
             stockFilter === "all"         ? true
             : stockFilter === "available" ? qty >= 1
             : stockFilter === "out"       ? qty <= 0
-            : qty > 0 && qty < 10;        // low
-
+            : qty > 0 && qty < 10;
           return matchSearch && matchStock;
         })
       )
@@ -415,16 +454,13 @@ const load = useCallback(async () => {
       .sort((a, b) => new Date(b[0]?.created_at || 0) - new Date(a[0]?.created_at || 0));
   }, [groupedProducts, search, stockFilter]);
 
-  // ── On Hold products with grouping ───────────
   const onHoldProducts = useMemo(() => {
     const q = onHoldSearch.trim().toLowerCase();
-
     const deniedKeys = new Set(
       state.permissions
         .filter((p) => Number(p.can_view) === 0)
         .map((p) => `${Number(p.user_id)}:${Number(p.finished_good_id)}`)
     );
-
     const activeProductIds = new Set();
     state.permissions.forEach((p) => {
       const key = `${Number(p.user_id)}:${Number(p.finished_good_id)}`;
@@ -432,7 +468,6 @@ const load = useCallback(async () => {
         activeProductIds.add(Number(p.finished_good_id));
       }
     });
-
     const onHoldItems = state.finishedGoods
       .filter((product) => !activeProductIds.has(Number(product.id)))
       .filter((product) => {
@@ -445,8 +480,6 @@ const load = useCallback(async () => {
           (product.size         || "").toLowerCase().includes(q)
         );
       });
-
-    // Group by article_code
     const groups = {};
     onHoldItems.forEach((item) => {
       const key =
@@ -457,20 +490,17 @@ const load = useCallback(async () => {
       if (!groups[key]) groups[key] = [];
       groups[key].push(item);
     });
-
     return Object.values(groups);
   }, [state.permissions, state.finishedGoods, onHoldSearch]);
 
   useEffect(() => { setCurrentPage(1); }, [search, stockFilter]);
   useEffect(() => { setOnHoldPage(1); }, [onHoldSearch]);
 
-  // ── Pagination ────────────────────────────────────────────
-  const totalPages     = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE);
-  const onHoldTotal    = Math.ceil(onHoldProducts.length / PRODUCTS_PER_PAGE);
+  const totalPages        = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE);
+  const onHoldTotal       = Math.ceil(onHoldProducts.length / PRODUCTS_PER_PAGE);
   const paginatedProducts = filteredProducts.slice((currentPage - 1) * PRODUCTS_PER_PAGE, currentPage * PRODUCTS_PER_PAGE);
   const paginatedOnHold   = onHoldProducts.slice((onHoldPage - 1) * PRODUCTS_PER_PAGE, onHoldPage * PRODUCTS_PER_PAGE);
 
-  // ─────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
       <PageHeader
@@ -480,11 +510,10 @@ const load = useCallback(async () => {
         icon="dashboard"
       />
 
-      {/* ── STAT CARDS ── */}
+      {/* STAT CARDS */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {user.role === "USER" ? (
           <>
-          
             <StatCard label="Catalog Status"   value="Active"                        tone="default" icon="finishedGoods" />
             <StatCard label="Pending Orders"   value={formatNumber(pendingOrders)}   tone="alert"   icon="orders" />
             <StatCard label="Confirmed Orders" value={formatNumber(confirmedOrders)} tone="calm"    icon="check" />
@@ -492,23 +521,21 @@ const load = useCallback(async () => {
           </>
         ) : (
           <>
-            <StatCard label="Raw Material Stock"            value={formatNumber(rawTotal)}       tone="calm"  icon="materials" />
-            <StatCard label="Finished Goods Stock In Pairs" value={formatNumber(finishedTotal)}  tone="calm"  icon="finishedGoods" />
-            {/* <StatCard label="Low Stock Alerts"              value={formatNumber(lowStock)}        tone={lowStock ? "alert" : "default"} icon={lowStock ? "warning" : "check"} /> */}
+            <StatCard label="Raw Material Stock"            value={formatNumber(rawTotal)}      tone="calm"    icon="materials" />
+            <StatCard label="Finished Goods Stock In Pairs" value={formatNumber(finishedTotal)} tone="calm"    icon="finishedGoods" />
             <StatCard label="Production Runs"               value={formatNumber(state.production.length)} tone="default" icon="production" />
             <StatCard label="Active Orders"
               value={formatNumber(state.orders.filter((o) => !["DELIVERED", "CANCELLED"].includes(o.status)).length)}
               tone="alert" icon="orders"
             />
             {isAdmin && (
-              <StatCard label="On Hold Products" 
-              value={formatNumber(onHoldProducts.length)} tone="alert" icon="hidden" />
+              <StatCard label="On Hold Products" value={formatNumber(onHoldProducts.length)} tone="alert" icon="hidden" />
             )}
           </>
         )}
       </div>
 
-      {/* ── FINISHED GOODS GRID ── */}
+      {/* FINISHED GOODS GRID */}
       {canViewDashboard && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -525,7 +552,6 @@ const load = useCallback(async () => {
                 className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
                 <option value="all">All Stock</option>
                 <option value="available">In Stock</option>
-                {/* <option value="low">Low Stock</option> */}
                 <option value="out">Out of Stock</option>
               </select>
               {(search || stockFilter !== "all") && (
@@ -536,7 +562,6 @@ const load = useCallback(async () => {
               )}
             </div>
           </div>
-
           {paginatedProducts.length ? (
             <>
               <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
@@ -552,7 +577,7 @@ const load = useCallback(async () => {
         </div>
       )}
 
-      {/* ── ON HOLD GRID ── */}
+      {/* ON HOLD GRID */}
       {canViewDashboard && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -574,7 +599,6 @@ const load = useCallback(async () => {
               )}
             </div>
           </div>
-
           {paginatedOnHold.length ? (
             <>
               <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
