@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Button from "../components/Button";
 import DataTable from "../components/DataTable";
-import { Field, SelectInput, TextAreaInput, TextInput } from "../components/Field";
+import { Field, TextAreaInput, TextInput } from "../components/Field";
 import SectionCard from "../components/SectionCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { api } from "../services/api";
 import { formatDate, formatNumber } from "../utils/format";
+import Select from "react-select";
 
 const emptyWarehouseForm = { name: "" };
 const emptyAdjustForm = {
@@ -22,6 +23,21 @@ const emptyTransferForm = {
   to_warehouse_id: "",
   quantity: "",
   notes: "",
+};
+
+const selectStyles = {
+  control: (base) => ({
+    ...base,
+    minHeight: "44px",
+    borderRadius: "12px",
+    borderColor: "#d1d5db",
+    boxShadow: "none",
+    fontSize: "14px",
+  }),
+  menuPortal: (base) => ({
+    ...base,
+    zIndex: 9999,
+  }),
 };
 
 export default function WareHousePage() {
@@ -148,17 +164,23 @@ export default function WareHousePage() {
     }
   };
 
-  const productOptions = finishedGoods.map((item) => (
-    <option key={item.id} value={item.id}>
-      {item.name} {item.article_code ? `(${item.article_code})` : ""}
-    </option>
-  ));
+  const productOptions = finishedGoods.map((item) => ({
+    value: String(item.id),
+    label: `${item.name}${item.article_code ? ` (${item.article_code})` : ""}`,
+  }));
 
-  const warehouseOptions = activeWarehouses.map((item) => (
-    <option key={item.id} value={item.id}>
-      {item.name}
-    </option>
-  ));
+  const warehouseOptions = activeWarehouses.map((item) => ({
+    value: String(item.id),
+    label: item.name,
+  }));
+
+  const movementTypeOptions = [
+    { value: "ADJUSTMENT_IN", label: "Add stock" },
+    { value: "ADJUSTMENT_OUT", label: "Remove stock" },
+  ];
+
+  const findOption = (options, value) =>
+    options.find((option) => option.value === String(value)) || null;
 
   return (
     <div className="space-y-6">
@@ -282,33 +304,45 @@ export default function WareHousePage() {
           >
             <form className="grid gap-4 p-5 md:grid-cols-2" onSubmit={submitAdjustment}>
               <Field label="Product">
-                <SelectInput
-                  value={adjustForm.finished_good_id}
-                  onChange={(event) => setAdjustForm((current) => ({ ...current, finished_good_id: event.target.value }))}
-                  required
-                >
-                  <option value="">Select product</option>
-                  {productOptions}
-                </SelectInput>
+                <Select
+                  options={productOptions}
+                  value={findOption(productOptions, adjustForm.finished_good_id)}
+                  onChange={(selected) =>
+                    setAdjustForm((current) => ({ ...current, finished_good_id: selected?.value || "" }))
+                  }
+                  placeholder="Search product..."
+                  isClearable
+                  menuPortalTarget={document.body}
+                  menuPosition="fixed"
+                  styles={selectStyles}
+                />
               </Field>
               <Field label="Warehouse">
-                <SelectInput
-                  value={adjustForm.warehouse_id}
-                  onChange={(event) => setAdjustForm((current) => ({ ...current, warehouse_id: event.target.value }))}
-                  required
-                >
-                  <option value="">Select warehouse</option>
-                  {warehouseOptions}
-                </SelectInput>
+                <Select
+                  options={warehouseOptions}
+                  value={findOption(warehouseOptions, adjustForm.warehouse_id)}
+                  onChange={(selected) =>
+                    setAdjustForm((current) => ({ ...current, warehouse_id: selected?.value || "" }))
+                  }
+                  placeholder="Search warehouse..."
+                  isClearable
+                  menuPortalTarget={document.body}
+                  menuPosition="fixed"
+                  styles={selectStyles}
+                />
               </Field>
               <Field label="Type">
-                <SelectInput
-                  value={adjustForm.movement_type}
-                  onChange={(event) => setAdjustForm((current) => ({ ...current, movement_type: event.target.value }))}
-                >
-                  <option value="ADJUSTMENT_IN">Add stock</option>
-                  <option value="ADJUSTMENT_OUT">Remove stock</option>
-                </SelectInput>
+                <Select
+                  options={movementTypeOptions}
+                  value={findOption(movementTypeOptions, adjustForm.movement_type)}
+                  onChange={(selected) =>
+                    setAdjustForm((current) => ({ ...current, movement_type: selected?.value || "ADJUSTMENT_IN" }))
+                  }
+                  placeholder="Select type..."
+                  menuPortalTarget={document.body}
+                  menuPosition="fixed"
+                  styles={selectStyles}
+                />
               </Field>
               <Field label="Quantity">
                 <TextInput
@@ -347,34 +381,46 @@ export default function WareHousePage() {
         >
           <form className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-5" onSubmit={submitTransfer}>
             <Field label="Product">
-              <SelectInput
-                value={transferForm.finished_good_id}
-                onChange={(event) => setTransferForm((current) => ({ ...current, finished_good_id: event.target.value }))}
-                required
-              >
-                <option value="">Select product</option>
-                {productOptions}
-              </SelectInput>
+              <Select
+                options={productOptions}
+                value={findOption(productOptions, transferForm.finished_good_id)}
+                onChange={(selected) =>
+                  setTransferForm((current) => ({ ...current, finished_good_id: selected?.value || "" }))
+                }
+                placeholder="Search product..."
+                isClearable
+                menuPortalTarget={document.body}
+                menuPosition="fixed"
+                styles={selectStyles}
+              />
             </Field>
             <Field label="From">
-              <SelectInput
-                value={transferForm.from_warehouse_id}
-                onChange={(event) => setTransferForm((current) => ({ ...current, from_warehouse_id: event.target.value }))}
-                required
-              >
-                <option value="">Source warehouse</option>
-                {warehouseOptions}
-              </SelectInput>
+              <Select
+                options={warehouseOptions}
+                value={findOption(warehouseOptions, transferForm.from_warehouse_id)}
+                onChange={(selected) =>
+                  setTransferForm((current) => ({ ...current, from_warehouse_id: selected?.value || "" }))
+                }
+                placeholder="Source warehouse..."
+                isClearable
+                menuPortalTarget={document.body}
+                menuPosition="fixed"
+                styles={selectStyles}
+              />
             </Field>
             <Field label="To">
-              <SelectInput
-                value={transferForm.to_warehouse_id}
-                onChange={(event) => setTransferForm((current) => ({ ...current, to_warehouse_id: event.target.value }))}
-                required
-              >
-                <option value="">Destination warehouse</option>
-                {warehouseOptions}
-              </SelectInput>
+              <Select
+                options={warehouseOptions}
+                value={findOption(warehouseOptions, transferForm.to_warehouse_id)}
+                onChange={(selected) =>
+                  setTransferForm((current) => ({ ...current, to_warehouse_id: selected?.value || "" }))
+                }
+                placeholder="Destination warehouse..."
+                isClearable
+                menuPortalTarget={document.body}
+                menuPosition="fixed"
+                styles={selectStyles}
+              />
             </Field>
             <Field label="Quantity">
               <TextInput
