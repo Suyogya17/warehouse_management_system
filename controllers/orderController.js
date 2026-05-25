@@ -572,6 +572,83 @@ const getReservedByProduct = async (executor, productIds = []) => {
   );
 };
 
+const allocateWarehouseStockForDelivery = async (client, item, userId) => {
+  let remaining = Number(item.qty_ordered || 0);
+  const allocations = [];
+
+  const warehouseStock = await client.query(
+    `SELECT fgws.*, w.name AS warehouse_name
+     FROM finished_good_warehouse_stock fgws
+     JOIN warehouses w ON w.id = fgws.warehouse_id
+     WHERE fgws.finished_good_id = ?
+       AND fgws.quantity > 0
+     ORDER BY fgws.updated_at ASC, fgws.id ASC
+     FOR UPDATE`,
+    [item.finished_good_id]
+  );
+
+  const totalWarehouseQty = warehouseStock.rows.reduce(
+    (sum, row) => sum + Number(row.quantity || 0),
+    0
+  );
+
+  if (totalWarehouseQty < remaining) {
+    const error = new Error('Not enough warehouse stock to deliver this order');
+    error.statusCode = 422;
+    error.shortage = {
+      product_name: item.product_name,
+      ordered_qty: Number(item.qty_ordered),
+      warehouse_stock: totalWarehouseQty,
+    };
+    throw error;
+  }
+
+  for (const stock of warehouseStock.rows) {
+    if (remaining <= 0) break;
+
+    const available = Number(stock.quantity || 0);
+    const deduct = Math.min(available, remaining);
+
+    await client.query(
+      `UPDATE finished_good_warehouse_stock
+       SET quantity = quantity - ?, updated_by = ?
+       WHERE id = ?`,
+      [deduct, userId, stock.id]
+    );
+
+    await client.query(
+      `INSERT INTO order_item_warehouse_allocations
+         (order_item_id, finished_good_id, warehouse_id, quantity, created_by)
+       VALUES (?, ?, ?, ?, ?)`,
+      [item.id, item.finished_good_id, stock.warehouse_id, deduct, userId]
+    );
+
+    await client.query(
+      `INSERT INTO finished_good_warehouse_movements
+         (finished_good_id, warehouse_id, quantity, movement_type, reference_type, reference_id, notes, created_by)
+       VALUES (?, ?, ?, 'ORDER_OUT', 'order', ?, ?, ?)`,
+      [
+        item.finished_good_id,
+        stock.warehouse_id,
+        deduct,
+        item.order_id,
+        `Delivered order #${item.order_id}`,
+        userId,
+      ]
+    );
+
+    allocations.push({
+      warehouse_id: stock.warehouse_id,
+      warehouse_name: stock.warehouse_name,
+      quantity: deduct,
+    });
+
+    remaining -= deduct;
+  }
+
+  return allocations;
+};
+
 // ─── GET ALL ORDERS ───────────────────────────────
 const getAll = async (req, res, next) => {
   try {
@@ -617,6 +694,31 @@ const getAll = async (req, res, next) => {
         orderParams
       );
       items = itemResult.rows;
+    }
+
+    if (items.length) {
+      const itemIds = items.map((item) => item.id);
+      const { clause, params: itemParams } = buildInClause(itemIds);
+      const allocationResult = await query(
+        `SELECT oiwa.*,
+                w.name AS warehouse_name
+         FROM order_item_warehouse_allocations oiwa
+         JOIN warehouses w ON w.id = oiwa.warehouse_id
+         WHERE oiwa.order_item_id IN ${clause}
+         ORDER BY oiwa.id`,
+        itemParams
+      );
+
+      const allocationsByItemId = allocationResult.rows.reduce((acc, allocation) => {
+        acc[allocation.order_item_id] = acc[allocation.order_item_id] || [];
+        acc[allocation.order_item_id].push(allocation);
+        return acc;
+      }, {});
+
+      items = items.map((item) => ({
+        ...item,
+        warehouse_allocations: allocationsByItemId[item.id] || [],
+      }));
     }
 
     const grouped = items.reduce((acc, item) => {
@@ -948,6 +1050,21 @@ const updateStatus = async (req, res, next) => {
       }
 
       for (const item of itemsRes.rows) {
+        try {
+          await allocateWarehouseStockForDelivery(client, item, req.user.id);
+        } catch (err) {
+          if (err.statusCode === 422) {
+            await client.query('ROLLBACK');
+            return res.status(422).json({
+              success: false,
+              message: err.message,
+              shortages: [err.shortage],
+            });
+          }
+
+          throw err;
+        }
+
         const { clause: fgClause, params: fgParams } = buildInClause([item.finished_good_id]);
         await client.query(
           `UPDATE finished_goods

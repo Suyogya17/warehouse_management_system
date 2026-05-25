@@ -1,4 +1,4 @@
-  import { useCallback, useEffect, useState } from "react";
+  import { useCallback, useEffect, useMemo, useState } from "react";
   import Button from "../components/Button";
   import SectionCard from "../components/SectionCard";
   import DataTable from "../components/DataTable";
@@ -20,16 +20,23 @@
     const canRun = ["ADMIN", "CO_ADMIN"].includes(user.role);
     const [formulas, setFormulas] = useState([]);
     const [history, setHistory] = useState([]);
+    const [warehouses, setWarehouses] = useState([]);
     const [checkResult, setCheckResult] = useState(null);
     const [nextStep, setNextStep] = useState(null);
     const [form, setForm] = useState({ formula_id: "", qty_to_produce: "", notes: "" });  
+    const [warehouseAllocations, setWarehouseAllocations] = useState([{ warehouse_id: "", quantity: "" }]);
     const [editingHistory, setEditingHistory] = useState(null);
     const [deleteHistoryId, setDeleteHistoryId] = useState(null);
 
     const load = useCallback(async () => {
-      const [formulasResult, historyResult] = await Promise.all([api.getFormulas(token), api.getProductionHistory(token)]);
+      const [formulasResult, historyResult, warehousesResult] = await Promise.all([
+        api.getFormulas(token),
+        api.getProductionHistory(token),
+        api.getWarehouses(token),
+      ]);
       setFormulas(formulasResult.data || []);
       setHistory(historyResult.data || []);
+      setWarehouses(warehousesResult.data || []);
     }, [token]);
 
     useEffect(() => {
@@ -39,6 +46,25 @@
     useDataRefresh(load, "production");
 
     const hasValidProductionInput = Number(form.formula_id) > 0 && Number(form.qty_to_produce) > 0;
+    const isSplitWarehouseAllocation = warehouseAllocations.length > 1;
+    const normalizedWarehouseAllocations = useMemo(
+      () =>
+        warehouseAllocations
+          .map((item) => ({
+            warehouse_id: Number(item.warehouse_id),
+            quantity:
+              warehouseAllocations.length === 1
+                ? Number(form.qty_to_produce)
+                : Number(item.quantity),
+          }))
+          .filter((item) => item.warehouse_id > 0 && item.quantity > 0),
+      [form.qty_to_produce, warehouseAllocations]
+    );
+    const allocatedQty = normalizedWarehouseAllocations.reduce((sum, item) => sum + item.quantity, 0);
+    const hasValidWarehouseAllocation =
+      Number(form.qty_to_produce) > 0 &&
+      normalizedWarehouseAllocations.length > 0 &&
+      Math.abs(allocatedQty - Number(form.qty_to_produce)) < 0.001;
 
 
     const selectedFormula = formulas.find((item) => String(item.id) === String(form.formula_id));
@@ -46,7 +72,32 @@
       hasValidProductionInput &&
       checkResult?.can_produce &&
       Number(checkResult?.qty_to_produce) === Number(form.qty_to_produce) &&
-      String(form.formula_id) === String(checkResult?.formula_id || form.formula_id);
+      String(form.formula_id) === String(checkResult?.formula_id || form.formula_id) &&
+      hasValidWarehouseAllocation;
+
+    const updateWarehouseAllocation = (index, key, value) => {
+      setWarehouseAllocations((current) =>
+        current.map((item, itemIndex) => (itemIndex === index ? { ...item, [key]: value } : item))
+      );
+    };
+
+    const addWarehouseAllocation = () => {
+      setWarehouseAllocations((current) => [
+        ...current.map((item, index) =>
+          current.length === 1 && index === 0 && !item.quantity
+            ? { ...item, quantity: form.qty_to_produce }
+            : item
+        ),
+        { warehouse_id: "", quantity: "" },
+      ]);
+    };
+
+    const removeWarehouseAllocation = (index) => {
+      setWarehouseAllocations((current) => {
+        const next = current.filter((_, itemIndex) => itemIndex !== index);
+        return next.length ? next : [{ warehouse_id: "", quantity: "" }];
+      });
+    };
 
     const checkStock = async () => {
       if (!hasValidProductionInput) {
@@ -100,7 +151,13 @@
       }
 
       if (!canSubmitProduction) {
-        showToast({ tone: "error", title: "Check stock first", message: "Run Check stock first, then run production while the checked quantity is still selected." });
+        showToast({
+          tone: "error",
+          title: hasValidWarehouseAllocation ? "Check stock first" : "Warehouse allocation needed",
+          message: hasValidWarehouseAllocation
+            ? "Run Check stock first, then run production while the checked quantity is still selected."
+            : "Warehouse allocation total must equal the quantity you are producing.",
+        });
         return;
       }
 
@@ -110,6 +167,7 @@
             formula_id: Number(form.formula_id),
             qty_to_produce: Number(form.qty_to_produce),
             notes: form.notes,
+            warehouse_allocations: normalizedWarehouseAllocations,
           },
           token
         );
@@ -124,6 +182,7 @@
           ],
         });
         setForm({ formula_id: "", qty_to_produce: "", notes: "" });
+        setWarehouseAllocations([{ warehouse_id: "", quantity: "" }]);
         await load();
         announceDataRefresh("production");
       } catch (err) {
@@ -202,6 +261,7 @@ const filteredHistory = history.filter((row) => {
     row.production_id?.toString().includes(term) ||
     row.formula_name?.toLowerCase().includes(term) ||
     row.finished_good_name?.toLowerCase().includes(term) ||
+    row.warehouse_names?.toLowerCase().includes(term) ||
     row.produced_by_name?.toLowerCase().includes(term) ||
     row.status?.toLowerCase().includes(term)
   );
@@ -296,6 +356,78 @@ const filteredHistory = history.filter((row) => {
                   onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}
                 />
               </Field>
+              </div>
+              <div className="md:col-span-2 xl:col-span-2 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="font-semibold text-slate-900">Warehouse allocation</p>
+                  {isSplitWarehouseAllocation ? (
+                    <div className="text-sm font-semibold text-slate-700">
+                      {formatNumber(allocatedQty)} / {formatNumber(form.qty_to_produce || 0)}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2">
+                  {warehouseAllocations.map((allocation, index) => (
+                    <div
+                      key={index}
+                      className={`grid gap-2 ${isSplitWarehouseAllocation ? "md:grid-cols-[1fr_120px_auto]" : "md:grid-cols-[1fr_auto]"}`}
+                    >
+                      <Field label={index === 0 ? "Warehouse" : ""}>
+                        <SelectInput
+                          value={allocation.warehouse_id}
+                          onChange={(event) => updateWarehouseAllocation(index, "warehouse_id", event.target.value)}
+                          required
+                        >
+                          <option value="">Select warehouse</option>
+                          {warehouses.map((warehouse) => (
+                            <option key={warehouse.id} value={warehouse.id}>
+                              {warehouse.name}
+                            </option>
+                          ))}
+                        </SelectInput>
+                      </Field>
+                      {isSplitWarehouseAllocation ? (
+                        <Field label={index === 0 ? "Qty" : ""}>
+                          <TextInput
+                            type="number"
+                            min="1"
+                            step="0.01"
+                            value={allocation.quantity}
+                            onChange={(event) => updateWarehouseAllocation(index, "quantity", event.target.value)}
+                            required
+                          />
+                        </Field>
+                      ) : null}
+                      <div className={index === 0 ? "flex items-end" : "flex items-center"}>
+                        {isSplitWarehouseAllocation ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            icon="delete"
+                            onClick={() => removeWarehouseAllocation(index)}
+                          >
+                            Remove
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <Button type="button" size="sm" variant="secondary" icon="plus" onClick={addWarehouseAllocation}>
+                    Split to another warehouse
+                  </Button>
+                  {!hasValidWarehouseAllocation && Number(form.qty_to_produce) > 0 ? (
+                    <span className="text-sm font-medium text-red-600">
+                      {isSplitWarehouseAllocation
+                        ? "Split total must equal pairs to produce."
+                        : "Select a warehouse."}
+                    </span>
+                  ) : null}
+                </div>
               </div>
               <div className="md:col-span-2 xl:col-span-4 flex flex-wrap items-center gap-3">
                 <Button type="button" variant="secondary" icon="stock" onClick={checkStock} disabled={!hasValidProductionInput}>
@@ -397,58 +529,9 @@ const filteredHistory = history.filter((row) => {
 
       { key: "status", label: "Status" },
    {
-  key: "notes",
-  label: "Warehouse Name",
-  render: (row) => {
-    const isEditing = editingHistory?.production_id === row.production_id;
-
-    return (
-      <div className="flex items-center justify-between gap-2">
-        {isEditing ? (
-          <input
-            className="w-full rounded border px-2 py-1 text-sm"
-            value={editingHistory.notes}
-            onChange={(e) =>
-              setEditingHistory((prev) => ({
-                ...prev,
-                notes: e.target.value,
-              }))
-            }
-          />
-        ) : (
-          <span>{row.notes || "-"}</span>
-        )}
-
-        {canRun && (
-          <div className="flex gap-2">
-            {isEditing ? (
-              <>
-                <Button size="sm" icon="check" onClick={saveHistoryEdit}>
-                  Save
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setEditingHistory(null)}
-                >
-                  Cancel
-                </Button>
-              </>
-            ) : (
-              <Button
-                size="sm"
-                variant="secondary"
-                icon="edit"
-                onClick={() => startEditHistory(row)}
-              >
-                Edit
-              </Button>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  },
+  key: "warehouse_names",
+  label: "Warehouse",
+  render: (row) => row.warehouse_names || "-",
 }
 
       // {

@@ -46,6 +46,70 @@ const calculateNeeded = (input, formula, qtyToProduce, packaging) => {
   return Number(input.quantity_needed) * Number(qtyToProduce) / Number(formula.output_qty);
 };
 
+const normalizeWarehouseAllocations = (allocations = []) =>
+  Array.isArray(allocations)
+    ? allocations
+        .map((item) => ({
+          warehouse_id: Number(item.warehouse_id),
+          quantity: Number(item.quantity),
+        }))
+        .filter((item) => item.warehouse_id > 0 && item.quantity > 0)
+    : [];
+
+const validateWarehouseAllocations = async (client, allocations, qtyToProduce) => {
+  if (!allocations.length) return;
+
+  const totalAllocated = allocations.reduce((sum, item) => sum + item.quantity, 0);
+  if (Math.abs(totalAllocated - Number(qtyToProduce)) > 0.001) {
+    const error = new Error('Warehouse allocation must equal produced quantity.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const warehouseIds = [...new Set(allocations.map((item) => item.warehouse_id))];
+  const placeholders = warehouseIds.map(() => '?').join(',');
+  const warehouses = await client.query(
+    `SELECT id
+     FROM warehouses
+     WHERE id IN (${placeholders}) AND is_active = 1 AND deleted_at IS NULL`,
+    warehouseIds
+  );
+
+  if (warehouses.rows.length !== warehouseIds.length) {
+    const error = new Error('One or more warehouses were not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+};
+
+const saveProductionWarehouseAllocations = async (client, production, finishedGoodId, allocations, userId) => {
+  for (const allocation of allocations) {
+    await client.query(
+      `INSERT INTO finished_good_warehouse_stock
+         (finished_good_id, warehouse_id, quantity, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         quantity = quantity + VALUES(quantity),
+         updated_by = VALUES(updated_by)`,
+      [finishedGoodId, allocation.warehouse_id, allocation.quantity, userId, userId]
+    );
+
+    await client.query(
+      `INSERT INTO finished_good_warehouse_movements
+         (finished_good_id, warehouse_id, quantity, movement_type, reference_type, reference_id, notes, created_by)
+       VALUES (?, ?, ?, 'PRODUCTION_IN', 'production', ?, ?, ?)`,
+      [
+        finishedGoodId,
+        allocation.warehouse_id,
+        allocation.quantity,
+        production.id,
+        production.notes || null,
+        userId,
+      ]
+    );
+  }
+};
+
 // ─── STEP 1: CHECK STOCK (dry run — does NOT deduct anything) ─────────────────
 /**
  * POST /api/production/check
@@ -145,6 +209,7 @@ const runProduction = async (req, res, next) => {
     await client.query('BEGIN');
 
     const { formula_id, qty_to_produce, notes } = req.body;
+    const warehouseAllocations = normalizeWarehouseAllocations(req.body.warehouse_allocations);
     const supportsConsumptionBasis = await hasColumn('formula_inputs', 'consumption_basis');
     const supportsInnerBoxPerPair = await hasColumn('finished_goods', 'inner_box_per_pair');
     const supportsInnerBoxesPerOuterBox = await hasColumn('finished_goods', 'inner_boxes_per_outer_box');
@@ -169,6 +234,8 @@ const runProduction = async (req, res, next) => {
     }
     const formula = formulaRes.rows[0];
     const packaging = getPackagingSummary(formula, qty_to_produce);
+
+    await validateWarehouseAllocations(client, warehouseAllocations, qty_to_produce);
 
     // ── Load formula inputs ───────────────────────────────────────────────────
     const inputsRes = await client.query(
@@ -289,6 +356,16 @@ const runProduction = async (req, res, next) => {
       [fgNewQty, formula.fg_id]
     );
 
+    if (warehouseAllocations.length) {
+      await saveProductionWarehouseAllocations(
+        client,
+        { ...production, notes },
+        formula.fg_id,
+        warehouseAllocations,
+        req.user.id
+      );
+    }
+
     await client.query('COMMIT');
 
     // ── Audit log ─────────────────────────────────────────────────────────────
@@ -312,6 +389,7 @@ const runProduction = async (req, res, next) => {
       },
       materials_consumed: consumptionSummary,
       packaging,
+      warehouse_allocations: warehouseAllocations,
     });
   } catch (err) {
     await client.query('ROLLBACK');

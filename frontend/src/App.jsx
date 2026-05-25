@@ -20,6 +20,7 @@ import NotFoundPage from "./pages/NotFoundPage";
 import CustomerOrdersPage from "./pages/Users/CustomerOrdersPage";
 import ElderFinishedPage from "./pages/Elder/ElderFinishedPage";
 import StockPage from "./pages/StockPage";
+import WareHousePage from "./pages/WareHousePage";
 import MemberFinishedPage from "./pages/Member/MemberFinishedGoodPage";
 import MemberStockPage from "./pages/Member/MemberStockPage";
 import MemberOrderPage from "./pages/Member/MemberOrderPage";
@@ -124,6 +125,15 @@ export default function App() {
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               <StockPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="warehouses"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER"]}>
+              <WareHousePage />
             </ProtectedRoute>
           }
         />

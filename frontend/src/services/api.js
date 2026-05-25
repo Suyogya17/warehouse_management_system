@@ -258,5 +258,53 @@ createStockAdjustment: (token, payload) =>
 
 deleteStockAdjustment: (id, token) =>
   apiRequest(`/stock-adjustments/${id}`, { method: 'DELETE' }, token),
-};
 
+  getWarehouses: (token, includeInactive = false) =>
+    apiRequest(`/warehouses${includeInactive ? "?include_inactive=1" : ""}`, {}, token),
+
+  createWarehouse: (payload, token) =>
+    apiRequest(
+      "/warehouses",
+      { method: "POST", body: JSON.stringify(payload) },
+      token
+    ),
+
+  updateWarehouse: (id, payload, token) =>
+    apiRequest(
+      `/warehouses/${id}`,
+      { method: "PUT", body: JSON.stringify(payload) },
+      token
+    ),
+
+  deleteWarehouse: (id, token) =>
+    apiRequest(`/warehouses/${id}`, { method: "DELETE" }, token),
+
+  getWarehouseStock: (token, search = "") =>
+    apiRequest(
+      `/warehouses/stock${search ? `?search=${encodeURIComponent(search)}` : ""}`,
+      {},
+      token
+    ),
+
+  adjustWarehouseStock: (payload, token) =>
+    apiRequest(
+      "/warehouses/adjust",
+      { method: "POST", body: JSON.stringify(payload) },
+      token
+    ),
+
+  transferWarehouseStock: (payload, token) =>
+    apiRequest(
+      "/warehouses/transfer",
+      { method: "POST", body: JSON.stringify(payload) },
+      token
+    ),
+
+  getWarehouseMovements: (token, params = {}) => {
+    const query = new URLSearchParams(
+      Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== "")
+    ).toString();
+
+    return apiRequest(`/warehouses/movements${query ? `?${query}` : ""}`, {}, token);
+  },
+};
