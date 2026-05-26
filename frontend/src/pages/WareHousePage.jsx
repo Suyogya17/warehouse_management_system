@@ -40,6 +40,15 @@ const selectStyles = {
   }),
 };
 
+const escapeExcelCell = (value) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+const noScroll = (e) => e.target.blur();
+
 export default function WareHousePage() {
   const { token, user } = useAuth();
   const { showToast } = useToast();
@@ -70,7 +79,7 @@ export default function WareHousePage() {
 
     setWarehouses(warehouseResult.data || []);
     setFinishedGoods(finishedResult.data || []);
-    setStockRows(stockResult.data || []);
+    setStockRows((stockResult.data || []).filter((row) => Number(row.quantity) > 0));
     setMovements(movementResult.data || []);
   }, [search, token]);
 
@@ -83,6 +92,51 @@ export default function WareHousePage() {
       });
     });
   }, [load, showToast]);
+
+  // Merge TRANSFER_IN / TRANSFER_OUT pairs into a single row
+  const mergedMovements = useMemo(() => {
+    const out = [];
+    const seen = new Set();
+
+    for (const m of movements) {
+      if (seen.has(m.id)) continue;
+
+      if (m.movement_type === "TRANSFER_OUT" || m.movement_type === "TRANSFER_IN") {
+        const partnerType =
+          m.movement_type === "TRANSFER_OUT" ? "TRANSFER_IN" : "TRANSFER_OUT";
+
+        const partner = movements.find(
+          (p) =>
+            p.id !== m.id &&
+            p.finished_good_id === m.finished_good_id &&
+            p.quantity === m.quantity &&
+            p.created_at === m.created_at &&
+            p.movement_type === partnerType &&
+            !seen.has(p.id)
+        );
+
+        if (partner) {
+          const outRow = m.movement_type === "TRANSFER_OUT" ? m : partner;
+          const inRow = m.movement_type === "TRANSFER_IN" ? m : partner;
+          seen.add(m.id);
+          seen.add(partner.id);
+          out.push({
+            ...m,
+            movement_type: "TRANSFER",
+            from_warehouse_name: outRow.warehouse_name,
+            to_warehouse_name: inRow.warehouse_name,
+            _merged: true,
+          });
+          continue;
+        }
+      }
+
+      seen.add(m.id);
+      out.push(m);
+    }
+
+    return out;
+  }, [movements]);
 
   const saveWarehouse = async (event) => {
     event.preventDefault();
@@ -182,6 +236,95 @@ export default function WareHousePage() {
   const findOption = (options, value) =>
     options.find((option) => option.value === String(value)) || null;
 
+  const selectedTransferStock = useMemo(() => {
+    if (!transferForm.finished_good_id || !transferForm.from_warehouse_id) {
+      return null;
+    }
+
+    return stockRows.find(
+      (row) =>
+        String(row.finished_good_id) === String(transferForm.finished_good_id) &&
+        String(row.warehouse_id) === String(transferForm.from_warehouse_id)
+    );
+  }, [stockRows, transferForm.finished_good_id, transferForm.from_warehouse_id]);
+
+  const exportWarehouseStock = () => {
+    if (!stockRows.length) {
+      showToast({
+        tone: "error",
+        title: "Nothing to export",
+        message: "No warehouse stock rows are available for the current filter.",
+      });
+      return;
+    }
+
+    const columns = [
+      ["Product", "product_name"],
+      ["Article", "article_code"],
+      ["Color", "color"],
+      ["Size", "size"],
+      ["Warehouse", "warehouse_name"],
+      ["Qty", "quantity"],
+      ["Unit", "unit"],
+      ["Total Stock", "total_product_quantity"],
+      ["Updated By", "updated_by_name"],
+      ["Updated At", "updated_at"],
+    ];
+
+    const headerHtml = columns
+      .map(([label]) => `<th>${escapeExcelCell(label)}</th>`)
+      .join("");
+    const rowsHtml = stockRows
+      .map((row) => {
+        const cells = columns
+          .map(([, key]) => {
+            const value = key === "updated_at" ? formatDate(row[key]) : row[key];
+            return `<td>${escapeExcelCell(value)}</td>`;
+          })
+          .join("");
+        return `<tr>${cells}</tr>`;
+      })
+      .join("");
+
+    const workbookHtml = `
+      <html>
+        <head>
+          <meta charset="UTF-8" />
+          <style>
+            table { border-collapse: collapse; }
+            th, td { border: 1px solid #d9d9d9; padding: 6px; }
+            th { background: #f3f4f6; font-weight: 700; }
+          </style>
+        </head>
+        <body>
+          <table>
+            <thead><tr>${headerHtml}</tr></thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </body>
+      </html>
+    `;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([workbookHtml], {
+      type: "application/vnd.ms-excel;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `warehouse-stock-${today}.xls`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showToast({
+      tone: "success",
+      title: "Excel exported",
+      message: `${stockRows.length} warehouse stock row${stockRows.length === 1 ? "" : "s"} exported.`,
+    });
+  };
+
   return (
     <div className="space-y-6">
       <SectionCard
@@ -198,9 +341,14 @@ export default function WareHousePage() {
                 placeholder="Search ABC, article code, color, size, or warehouse..."
               />
             </Field>
-            <Button variant="secondary" icon="stock" onClick={load}>
-              Refresh
-            </Button>
+            <div className="flex flex-wrap gap-3">
+              <Button variant="secondary" icon="download" onClick={exportWarehouseStock}>
+                Export Excel
+              </Button>
+              <Button variant="secondary" icon="stock" onClick={load}>
+                Refresh
+              </Button>
+            </div>
           </div>
 
           <DataTable
@@ -236,33 +384,6 @@ export default function WareHousePage() {
             subtitle="Add physical locations where finished goods are kept."
             icon="box"
           >
-            <form className="space-y-4 p-5" onSubmit={saveWarehouse}>
-              <Field label="Warehouse name">
-                <TextInput
-                  value={warehouseForm.name}
-                  onChange={(event) => setWarehouseForm({ name: event.target.value })}
-                  placeholder="Warehouse 1"
-                  required
-                />
-              </Field>
-              <div className="flex flex-wrap gap-3">
-                <Button type="submit" icon="check">
-                  {editingWarehouse ? "Save warehouse" : "Create warehouse"}
-                </Button>
-                {editingWarehouse ? (
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      setEditingWarehouse(null);
-                      setWarehouseForm(emptyWarehouseForm);
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                ) : null}
-              </div>
-            </form>
-
             <div className="border-t border-slate-100 p-5">
               <DataTable
                 columns={[
@@ -283,7 +404,6 @@ export default function WareHousePage() {
                         </Button>
                         {Number(row.is_active) === 1 ? (
                           <Button size="sm" variant="danger" icon="delete" onClick={() => deactivateWarehouse(row)}>
-                            Deactivate
                           </Button>
                         ) : null}
                       </div>
@@ -351,6 +471,7 @@ export default function WareHousePage() {
                   step="0.01"
                   value={adjustForm.quantity}
                   onChange={(event) => setAdjustForm((current) => ({ ...current, quantity: event.target.value }))}
+                  onWheel={noScroll}
                   required
                 />
               </Field>
@@ -429,6 +550,7 @@ export default function WareHousePage() {
                 step="0.01"
                 value={transferForm.quantity}
                 onChange={(event) => setTransferForm((current) => ({ ...current, quantity: event.target.value }))}
+                onWheel={noScroll}
                 required
               />
             </Field>
@@ -438,6 +560,17 @@ export default function WareHousePage() {
                 onChange={(event) => setTransferForm((current) => ({ ...current, notes: event.target.value }))}
               />
             </Field>
+
+            {selectedTransferStock && (
+              <div className="text-sm text-slate-600 -mt-2">
+                Available stock:{" "}
+                <span className="font-semibold text-slate-900">
+                  {formatNumber(selectedTransferStock.quantity)}{" "}
+                  {selectedTransferStock.unit || "pairs"}
+                </span>
+              </div>
+            )}
+
             <div className="md:col-span-2 xl:col-span-5">
               <Button type="submit" icon="arrowRight">
                 Transfer stock
@@ -455,9 +588,16 @@ export default function WareHousePage() {
         <div className="p-5">
           <DataTable
             columns={[
-              { key: "created_at", label: "Date", type: "date", render: (row) => formatDate(row.created_at) },
+              { key: "created_at", label: "Date", render: (row) => formatDate(row.created_at) },
               { key: "product_name", label: "Product" },
-              { key: "warehouse_name", label: "Warehouse" },
+              {
+                key: "warehouse_name",
+                label: "Warehouse",
+                render: (row) =>
+                  row._merged
+                    ? `${row.from_warehouse_name} → ${row.to_warehouse_name}`
+                    : row.warehouse_name,
+              },
               { key: "movement_type", label: "Type" },
               {
                 key: "quantity",
@@ -467,7 +607,7 @@ export default function WareHousePage() {
               { key: "created_by_name", label: "By" },
               { key: "notes", label: "Notes" },
             ]}
-            rows={movements}
+            rows={mergedMovements}
             emptyTitle="No movement history"
             emptyDescription="Warehouse changes will appear here after production, adjustment, or transfer."
           />

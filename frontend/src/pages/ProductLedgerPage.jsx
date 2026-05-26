@@ -5,7 +5,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { api } from "../services/api";
 import { formatNumber } from "../utils/format";
- import Select from "react-select";
+import Select from "react-select";
 
 const toDateInputValue = (date = new Date()) => {
   const year  = date.getFullYear();
@@ -15,6 +15,7 @@ const toDateInputValue = (date = new Date()) => {
 };
 
 const ACTIVE_STATUSES = ["CONFIRMED", "PACKED", "DELIVERED"];
+const WAREHOUSE_ADJUSTMENT_TYPES = ["ADJUSTMENT_IN", "ADJUSTMENT_OUT"];
 
 export default function ProductLedgerPage() {
   const { token }     = useAuth();
@@ -26,7 +27,8 @@ export default function ProductLedgerPage() {
   const [loading,       setLoading]       = useState(true);
   const [selectedProduct, setSelectedProduct] = useState("");
   const [search,   setSearch]   = useState("");
-  const [adjustments, setAdjustments] = useState([]); 
+  const [adjustments, setAdjustments] = useState([]);
+  const [warehouseMovements, setWarehouseMovements] = useState([]);
   const [fromDate, setFromDate] = useState("");
   const [toDate,   setToDate]   = useState("");
 
@@ -52,6 +54,43 @@ export default function ProductLedgerPage() {
   }, [token, showToast]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!selectedProduct) {
+      setWarehouseMovements([]);
+      return;
+    }
+
+    let isActive = true;
+
+    const loadWarehouseMovements = async () => {
+      try {
+        const movementRes = await api.getWarehouseMovements(token, {
+          finished_good_id: selectedProduct,
+          limit: 500,
+        });
+
+        if (isActive) {
+          setWarehouseMovements(movementRes.data || movementRes || []);
+        }
+      } catch (error) {
+        if (isActive) {
+          setWarehouseMovements([]);
+          showToast({
+            tone: "error",
+            title: "Warehouse movements failed",
+            message: error.message || "Could not load warehouse movement data.",
+          });
+        }
+      }
+    };
+
+    loadWarehouseMovements();
+
+    return () => {
+      isActive = false;
+    };
+  }, [selectedProduct, token, showToast]);
 
   // ── product options ───────────────────────────────────────
   const productOptions = useMemo(() =>
@@ -127,6 +166,32 @@ const allEntries = useMemo(() => {
           });
         });
 
+  // Warehouse manual adjustments → IN or OUT. Transfers are intentionally
+  // skipped because they do not change total product stock.
+  warehouseMovements
+    .filter((movement) =>
+      String(movement.finished_good_id) === String(selectedProduct) &&
+      WAREHOUSE_ADJUSTMENT_TYPES.includes(movement.movement_type)
+    )
+    .forEach((movement) => {
+      const qty = Number(movement.quantity || 0);
+      const rawDate = movement.created_at || movement.updated_at;
+      if (!rawDate || qty <= 0) return;
+
+      const isIn = movement.movement_type === "ADJUSTMENT_IN";
+      const warehouseName = movement.warehouse_name ? ` · ${movement.warehouse_name}` : "";
+
+      entries.push({
+        date:        toDateInputValue(new Date(rawDate)),
+        raw:         new Date(rawDate),
+        type:        isIn ? "IN" : "OUT",
+        description: movement.product_name || product?.name || "Warehouse Adjustment",
+        reference:   `${movement.notes || "Warehouse Adjustment"}${warehouseName}`,
+        qty_in:      isIn ? qty : 0,
+        qty_out:     isIn ? 0 : qty,
+      });
+    });
+
   // Orders → OUT
   orders
     .filter((o) => ACTIVE_STATUSES.includes(o.status))
@@ -149,30 +214,30 @@ const allEntries = useMemo(() => {
     });
 
   // ── Opening stock synthesis ──────────────────────────────
-  // If no production records exist, back-calculate from current qty + total OUT
+  // Back-calculate the stock that existed before the visible movement history
+  // so the final running balance reconciles with the current product quantity.
   const totalInSoFar  = entries.reduce((s, e) => s + e.qty_in,  0);
   const totalOutSoFar = entries.reduce((s, e) => s + e.qty_out, 0);
   const currentQty    = Number(product?.quantity ?? 0);
+  const impliedOpening = currentQty + totalOutSoFar - totalInSoFar;
 
-  if (totalInSoFar === 0 && (totalOutSoFar > 0 || currentQty > 0)) {
-    const impliedOpening = currentQty + totalOutSoFar;
-    if (impliedOpening > 0) {
-      const earliestRaw = entries.length > 0
-        ? entries.reduce((min, e) => e.raw < min ? e.raw : min, entries[0].raw)
-        : new Date();
-      const openingDate = new Date(earliestRaw);
-      openingDate.setDate(openingDate.getDate() - 1);
+  if (impliedOpening > 0) {
+    const earliestRaw = entries.length > 0
+      ? entries.reduce((min, e) => e.raw < min ? e.raw : min, entries[0].raw)
+      : new Date();
+    const openingDate = new Date(earliestRaw);
+    openingDate.setDate(openingDate.getDate() - 1);
 
-      entries.push({
-        date:        toDateInputValue(openingDate),
-        raw:         openingDate,
-        type:        "IN",
-        description: product?.name || "Opening Stock",
-        reference:   "Opening Stock",
-        qty_in:      impliedOpening,
-        qty_out:     0,
-      });
-    }
+    entries.push({
+      date:        toDateInputValue(openingDate),
+      raw:         openingDate,
+      type:        "IN",
+      description: product?.name || "Opening Stock",
+      reference:   "Opening Stock",
+      qty_in:      impliedOpening,
+      qty_out:     0,
+      isOpening:   true,
+    });
   }
 
   // Sort chronologically
@@ -184,7 +249,7 @@ const allEntries = useMemo(() => {
     balance += e.qty_in - e.qty_out;
     return { ...e, balance };
   });
-}, [selectedProduct, productions, orders, finishedGoods, adjustments]);
+}, [selectedProduct, productions, orders, finishedGoods, adjustments, warehouseMovements]);
 
 
 
@@ -215,8 +280,9 @@ const allEntries = useMemo(() => {
 
   // ── stats for the filtered window ────────────────────────
   const stats = useMemo(() => {
-    const totalIn  = filteredEntries.reduce((s, r) => s + r.qty_in,  0);
-    const totalOut = filteredEntries.reduce((s, r) => s + r.qty_out, 0);
+    const movementEntries = filteredEntries.filter((row) => !row.isOpening);
+    const totalIn  = movementEntries.reduce((s, r) => s + r.qty_in,  0);
+    const totalOut = movementEntries.reduce((s, r) => s + r.qty_out, 0);
 
     // Closing = last balance in filtered rows, or opening if no rows
     const lastEntry = filteredEntries[filteredEntries.length - 1];
@@ -281,7 +347,7 @@ const allEntries = useMemo(() => {
       {/* ── LEDGER TABLE ── */}
       <SectionCard
         title="Product Ledger"
-        subtitle="Stock movement per product — production IN and order OUT with running balance."
+        subtitle="Stock movement per product — production IN, warehouse adjustments, and order OUT with running balance."
         icon="ledger"
       >
         {/* FILTERS */}
@@ -332,48 +398,6 @@ const allEntries = useMemo(() => {
     }}
   />
 </div>
-{/* DEBUG INFO - Remove this after fixing */}
-{selectedProduct && !loading && (
-  <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
-    <p className="text-xs font-semibold text-yellow-800 mb-2">Debug Info:</p>
-    <div className="text-xs text-yellow-700 space-y-1">
-      <p>Selected Product ID: <strong>{selectedProduct}</strong></p>
-      <p>Total Productions in system: <strong>{productions.length}</strong></p>
-      <p>Productions matched (ID OR name): <strong>{productions.filter((p) => {
-  const fgId = p.finished_good_id ?? p.finishedGoodId ?? p.finished_good?.id;
-  const product = finishedGoods.find(fg => String(fg.id) === String(selectedProduct));
-  return String(fgId) === String(selectedProduct) ||
-    (p.finished_good_name && p.finished_good_name === product?.name);
-}).length}</strong></p>
-      <p>Total Orders: <strong>{orders.filter(o => ACTIVE_STATUSES.includes(o.status)).length}</strong></p>
-      <p>Order items for this product: <strong>{
-        orders.filter(o => ACTIVE_STATUSES.includes(o.status))
-          .flatMap(o => o.items || [])
-          .filter(item => String(item.finished_good_id) === String(selectedProduct))
-          .length
-      }</strong></p>
-      <p>Product name lookup: <strong>{finishedGoods.find(fg => String(fg.id) === String(selectedProduct))?.name}</strong></p>
-      
-      {/* Show sample production records */}
-      {productions.length > 0 && (
-        <details className="mt-2">
-          <summary className="cursor-pointer font-semibold">
-    ALL Production Records For This Product
-  </summary>
-
-  <pre className="mt-2 text-[10px] overflow-x-auto bg-white p-2 rounded">
-  {JSON.stringify(
-    productions.filter((p) =>
-      p.finished_good_name === (finishedGoods.find(fg => String(fg.id) === String(selectedProduct))?.name)
-    ).slice(0, 3),
-    null, 2
-  )}
-</pre>
-        </details>
-      )}
-    </div>
-  </div>
-)}
 
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-500">From</label>

@@ -57,7 +57,11 @@ const normalizeWarehouseAllocations = (allocations = []) =>
     : [];
 
 const validateWarehouseAllocations = async (client, allocations, qtyToProduce) => {
-  if (!allocations.length) return;
+  if (!allocations.length) {
+    const error = new Error('Select at least one warehouse for this production run.');
+    error.statusCode = 400;
+    throw error;
+  }
 
   const totalAllocated = allocations.reduce((sum, item) => sum + item.quantity, 0);
   if (Math.abs(totalAllocated - Number(qtyToProduce)) > 0.001) {

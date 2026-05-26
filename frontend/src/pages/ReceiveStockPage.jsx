@@ -11,18 +11,50 @@ import { api, APP_BASE_URL } from "../services/api";
 import { formatDate, formatNumber } from "../utils/format";
   import Select from "react-select";
 
+const selectStyles = {
+  control: (base) => ({
+    ...base,
+    minHeight: "44px",
+    borderRadius: "12px",
+    borderColor: "#d1d5db",
+    boxShadow: "none",
+  }),
+  menuPortal: (base) => ({
+    ...base,
+    zIndex: 9999,
+  }),
+};
+
 export default function ReceiveStockPage() {
   const { token } = useAuth();
   const { showToast } = useToast();
   const [materials, setMaterials] = useState([]);
+  const [finishedGoods, setFinishedGoods] = useState([]);
+  const [warehouses, setWarehouses] = useState([]);
   const [selectedId, setSelectedId] = useState("");
+  const [selectedFinishedHistoryId, setSelectedFinishedHistoryId] = useState("");
   const [batches, setBatches] = useState([]);
+  const [finishedPurchaseHistory, setFinishedPurchaseHistory] = useState([]);
   const [form, setForm] = useState({ raw_material_id: "", qty_added: "", notes: "" });
+  const [finishedForm, setFinishedForm] = useState({
+    finished_good_id: "",
+    warehouse_id: "",
+    qty_added: "",
+    notes: "",
+  });
   const selectedMaterial = materials.find((item) => String(item.id) === String(form.raw_material_id));
+  const selectedFinishedGood = finishedGoods.find((item) => String(item.id) === String(finishedForm.finished_good_id));
 
-  const loadMaterials = useCallback(async () => {
-    const result = await api.getRawMaterials(token);
-    setMaterials(result.data || []);
+  const loadPurchaseData = useCallback(async () => {
+    const [materialsResult, finishedGoodsResult, warehousesResult] = await Promise.all([
+      api.getRawMaterials(token),
+      api.getFinishedGoods(token),
+      api.getWarehouses(token),
+    ]);
+
+    setMaterials(materialsResult.data || []);
+    setFinishedGoods(finishedGoodsResult.data || []);
+    setWarehouses(warehousesResult.data || []);
   }, [token]);
 
   const loadBatches = useCallback(async (materialId) => {
@@ -35,15 +67,33 @@ export default function ReceiveStockPage() {
     setBatches(result.data || []);
   }, [token]);
 
+  const loadFinishedPurchaseHistory = useCallback(async (finishedGoodId) => {
+    const result = await api.getWarehouseMovements(token, {
+      finished_good_id: finishedGoodId || "",
+      movement_type: "ADJUSTMENT_IN",
+      limit: 100,
+    });
+
+    setFinishedPurchaseHistory(
+      (result.data || []).filter((row) =>
+        String(row.notes || "").toLowerCase().startsWith("finished goods purchase")
+      )
+    );
+  }, [token]);
+
   useEffect(() => {
-    loadMaterials().catch(console.error);
-  }, [loadMaterials]);
+    loadPurchaseData().catch(console.error);
+  }, [loadPurchaseData]);
 
   useEffect(() => {
     loadBatches(selectedId).catch(console.error);
   }, [loadBatches, selectedId]);
 
-  useDataRefresh(loadMaterials, "receive-stock");
+  useEffect(() => {
+    loadFinishedPurchaseHistory(selectedFinishedHistoryId).catch(console.error);
+  }, [loadFinishedPurchaseHistory, selectedFinishedHistoryId]);
+
+  useDataRefresh(loadPurchaseData, "receive-stock");
 
   const submit = async (event) => {
     event.preventDefault();
@@ -58,7 +108,7 @@ export default function ReceiveStockPage() {
       );
       const materialId = form.raw_material_id;
       setSelectedId(materialId);
-      await loadMaterials();
+      await loadPurchaseData();
       await loadBatches(materialId);
       announceDataRefresh("receive-stock");
       showToast({ tone: "success", title: "Stock received", message: "Material stock and batch history were refreshed." });
@@ -67,6 +117,60 @@ export default function ReceiveStockPage() {
       showToast({ tone: "error", title: "Receive stock failed", message: error.message });
     }
   };
+
+  const submitFinishedGoodsPurchase = async (event) => {
+    event.preventDefault();
+
+    try {
+      await api.adjustWarehouseStock(
+        {
+          finished_good_id: Number(finishedForm.finished_good_id),
+          warehouse_id: Number(finishedForm.warehouse_id),
+          quantity: Number(finishedForm.qty_added),
+          movement_type: "ADJUSTMENT_IN",
+          notes: finishedForm.notes
+            ? `Finished goods purchase: ${finishedForm.notes}`
+            : "Finished goods purchase",
+        },
+        token
+      );
+
+      const finishedGoodId = finishedForm.finished_good_id;
+      setSelectedFinishedHistoryId(finishedGoodId);
+      await loadPurchaseData();
+      await loadFinishedPurchaseHistory(finishedGoodId);
+      announceDataRefresh("receive-stock");
+      announceDataRefresh("stock");
+      showToast({
+        tone: "success",
+        title: "Finished goods received",
+        message: "Finished goods stock and warehouse quantity were updated.",
+      });
+      setFinishedForm({ finished_good_id: "", warehouse_id: "", qty_added: "", notes: "" });
+    } catch (error) {
+      showToast({ tone: "error", title: "Finished goods purchase failed", message: error.message });
+    }
+  };
+
+  const materialOptions = materials.map((item) => ({
+    value: String(item.id),
+    label: `${item.name} (${item.article_code})`,
+  }));
+
+  const finishedGoodOptions = finishedGoods.map((item) => ({
+    value: String(item.id),
+    label: `${item.name}${item.article_code ? ` (${item.article_code})` : ""}`,
+  }));
+
+  const warehouseOptions = warehouses
+    .filter((item) => Number(item.is_active) === 1 && !item.deleted_at)
+    .map((item) => ({
+      value: String(item.id),
+      label: item.name,
+    }));
+
+  const findOption = (options, value) =>
+    options.find((option) => option.value === String(value)) || null;
 
   return (
     <div className="space-y-6">
@@ -81,19 +185,9 @@ export default function ReceiveStockPage() {
         <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" onSubmit={submit}>
           <Field label="Raw material">
            <Select
-  options={materials.map((item) => ({
-    value: String(item.id),
-    label: `${item.name} (${item.article_code})`,
-  }))}
+  options={materialOptions}
 
-  value={
-    materials
-      .map((item) => ({
-        value: String(item.id),
-        label: `${item.name} (${item.article_code})`,
-      }))
-      .find((option) => option.value === String(form.raw_material_id)) || null
-  }
+  value={findOption(materialOptions, form.raw_material_id)}
 
   onChange={(selected) =>
     setForm((current) => ({
@@ -110,19 +204,7 @@ export default function ReceiveStockPage() {
   menuPortalTarget={document.body}
   menuPosition="fixed"
 
-  styles={{
-    control: (base) => ({
-      ...base,
-      minHeight: "44px",
-      borderRadius: "12px",
-      borderColor: "#d1d5db",
-      boxShadow: "none",
-    }),
-    menuPortal: (base) => ({
-      ...base,
-      zIndex: 9999,
-    }),
-  }}
+  styles={selectStyles}
 />
           </Field>
           <Field label="Quantity added">
@@ -206,6 +288,101 @@ export default function ReceiveStockPage() {
         </form>
       </SectionCard>
 
+      <SectionCard
+        title="Purchase finished goods"
+        subtitle="Receive ready products directly into a warehouse and increase finished-goods physical stock."
+        icon="finishedGoods"
+      >
+        <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" onSubmit={submitFinishedGoodsPurchase}>
+          <Field label="Finished good">
+            <Select
+              options={finishedGoodOptions}
+              value={findOption(finishedGoodOptions, finishedForm.finished_good_id)}
+              onChange={(selected) =>
+                setFinishedForm((current) => ({ ...current, finished_good_id: selected?.value || "" }))
+              }
+              placeholder="Search finished good..."
+              isClearable
+              isSearchable
+              className="text-sm"
+              menuPortalTarget={document.body}
+              menuPosition="fixed"
+              styles={selectStyles}
+            />
+          </Field>
+
+          <Field label="Warehouse">
+            <Select
+              options={warehouseOptions}
+              value={findOption(warehouseOptions, finishedForm.warehouse_id)}
+              onChange={(selected) =>
+                setFinishedForm((current) => ({ ...current, warehouse_id: selected?.value || "" }))
+              }
+              placeholder="Search warehouse..."
+              isClearable
+              isSearchable
+              className="text-sm"
+              menuPortalTarget={document.body}
+              menuPosition="fixed"
+              styles={selectStyles}
+            />
+          </Field>
+
+          <Field label="Quantity added">
+            <TextInput
+              type="number"
+              min="1"
+              value={finishedForm.qty_added}
+              onChange={(event) =>
+                setFinishedForm((current) => ({ ...current, qty_added: event.target.value }))
+              }
+              required
+            />
+          </Field>
+
+          <Field label="Notes">
+            <TextInput
+              value={finishedForm.notes}
+              onChange={(event) =>
+                setFinishedForm((current) => ({ ...current, notes: event.target.value }))
+              }
+              placeholder="Supplier, invoice, or delivery note"
+            />
+          </Field>
+
+          {selectedFinishedGood ? (
+            <div className="md:col-span-2 xl:col-span-4 rounded-3xl border border-emerald-100 bg-emerald-50/70 p-5">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl bg-white px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Selected product</p>
+                  <p className="mt-1 text-sm font-medium text-slate-900">{selectedFinishedGood.name}</p>
+                </div>
+                <div className="rounded-2xl bg-white px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Article</p>
+                  <p className="mt-1 text-sm font-medium text-slate-900">{selectedFinishedGood.article_code || "-"}</p>
+                </div>
+                <div className="rounded-2xl bg-white px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Current stock</p>
+                  <p className="mt-1 text-sm font-medium text-slate-900">
+                    {formatNumber(selectedFinishedGood.quantity)} {selectedFinishedGood.unit || "pairs"}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-white px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Receive in</p>
+                  <p className="mt-1 text-sm font-medium text-slate-900">{selectedFinishedGood.unit || "pairs"}</p>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="md:col-span-2 xl:col-span-4 flex items-center gap-3">
+            <Button type="submit" icon="plus">
+              Receive finished goods
+            </Button>
+          </div>
+        </form>
+      </SectionCard>
+
       <SectionCard title="Purchase batch history" subtitle="Review stock batches for any raw material." icon="stock">
         <div className="mb-5 max-w-sm">
           {/* <SelectInput
@@ -221,19 +398,9 @@ export default function ReceiveStockPage() {
           </SelectInput> */}
 
            <Select
-      options={materials.map((item) => ({
-        value: String(item.id),
-        label: `${item.name} (${item.article_code})`,
-      }))}
+      options={materialOptions}
 
-      value={
-        materials
-          .map((item) => ({
-            value: String(item.id),
-            label: `${item.name} (${item.article_code})`,
-          }))
-          .find((option) => option.value === String(selectedId)) || null
-      }
+      value={findOption(materialOptions, selectedId)}
 
       onChange={(selected) => setSelectedId(selected?.value || "")}
 
@@ -246,20 +413,7 @@ export default function ReceiveStockPage() {
       menuPortalTarget={document.body}
       menuPosition="fixed"
 
-      styles={{
-        control: (base) => ({
-          ...base,
-          minHeight: "44px",
-          borderRadius: "12px",
-          borderColor: "#d1d5db",
-          boxShadow: "none",
-        }),
-
-        menuPortal: (base) => ({
-          ...base,
-          zIndex: 9999,
-        }),
-      }}
+      styles={selectStyles}
     />
         </div>
 
@@ -272,6 +426,45 @@ export default function ReceiveStockPage() {
             { key: "purchased_at", label: "Purchased At", render: (row) => formatDate(row.purchased_at) },
           ]}
           rows={batches}
+        />
+      </SectionCard>
+
+      <SectionCard
+        title="Finished goods purchase history"
+        subtitle="Review ready-product purchases added directly into warehouses."
+        icon="finishedGoods"
+      >
+        <div className="mb-5 max-w-sm">
+          <Select
+            options={finishedGoodOptions}
+            value={findOption(finishedGoodOptions, selectedFinishedHistoryId)}
+            onChange={(selected) => setSelectedFinishedHistoryId(selected?.value || "")}
+            placeholder="Choose a finished good to view purchases"
+            isClearable
+            isSearchable
+            className="text-sm"
+            menuPortalTarget={document.body}
+            menuPosition="fixed"
+            styles={selectStyles}
+          />
+        </div>
+
+        <DataTable
+          columns={[
+            { key: "product_name", label: "Finished Good" },
+            { key: "warehouse_name", label: "Warehouse" },
+            {
+              key: "quantity",
+              label: "Added",
+              render: (row) => `${formatNumber(row.quantity)} ${row.unit || "pairs"}`,
+            },
+            { key: "created_by_name", label: "Added By" },
+            { key: "notes", label: "How Added" },
+            { key: "created_at", label: "Added At", render: (row) => formatDate(row.created_at) },
+          ]}
+          rows={finishedPurchaseHistory}
+          emptyTitle="No finished goods purchases"
+          emptyDescription="Finished goods added from the purchase form will appear here."
         />
       </SectionCard>
     </div>

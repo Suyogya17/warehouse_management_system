@@ -24,6 +24,7 @@ const paths = {
   color: "M12 3c-3 3.3-6 6.6-6 10a6 6 0 0 0 12 0c0-3.4-3-6.7-6-10z",
   size: "M7 7h10M7 17h10M7 7v10M17 7v10",
   stock: "M5 19h14M7 16V9m5 7V5m5 11v-4",
+  download: "M12 3v12m0 0 5-5m-5 5-5-5M5 21h14",
   arrowRight: "M5 12h14M13 6l6 6-6 6",
   spark: "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z",
   permission: "M12 3l7 4v5c0 4.5-3 8.7-7 10-4-1.3-7-5.5-7-10V7z",
