@@ -180,25 +180,12 @@ export default function OrdersPage() {
   }, [availability, stockSearch]);
 
   const deliveryNoteNumbersByOrderId = useMemo(() => {
-    const printableOrders = orders
-      .filter((order) => PRINTABLE_DELIVERY_STATUSES.includes(order.status))
-      .sort((a, b) => {
-        const aDate = new Date(a.confirmed_at || a.created_at).getTime();
-        const bDate = new Date(b.confirmed_at || b.created_at).getTime();
-        if (aDate !== bDate) return aDate - bDate;
-        return Number(a.id) - Number(b.id);
-      });
-
-    return new Map(
-      printableOrders.map((order, index) => {
-        const orderId = Number(order.id);
-        if (orderId >= 25) {
-          return [orderId, `DN-${1940 + orderId}`];
-        }
-        return [orderId, `DN-${1001 + index}`];
-      })
-    );
-  }, [orders]);
+  return new Map(
+    orders
+      .filter((order) => order.delivery_note_number)
+      .map((order) => [Number(order.id), order.delivery_note_number])
+  );
+}, [orders]);
 
   const escapeHtml = (value) =>
     String(value ?? "")
@@ -249,10 +236,9 @@ export default function OrdersPage() {
     const currentTime = now.toLocaleTimeString();
 
     const deliveryNoteNumber =
-      deliveryNoteNumbersByOrderId.get(Number(order.id)) ||
-      (Number(order.id) >= 25
-        ? `DN-${1940 + Number(order.id)}`
-        : `DN-${1000 + Number(order.id)}`);
+  order.delivery_note_number ||
+  deliveryNoteNumbersByOrderId.get(Number(order.id)) ||
+  "-";
 
     const printableItems = (order.items || []).map((item) => {
       const product = availabilityById.get(String(item.finished_good_id));
@@ -883,8 +869,9 @@ export default function OrdersPage() {
               label: "Confirmed By / DN",
               render: (row) => {
                 const deliveryNoteNumber =
-                  deliveryNoteNumbersByOrderId.get(Number(row.id)) ||
-                  `DN-${1940 + row.id}`;
+  row.delivery_note_number ||
+  deliveryNoteNumbersByOrderId.get(Number(row.id)) ||
+  "-";
                 return (
                   <>
                     {row.confirmed_by_name || "-"}

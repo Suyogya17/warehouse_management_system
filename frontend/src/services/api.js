@@ -199,8 +199,12 @@ export const api = {
 
   getOrders: (token) => apiRequest("/orders", {}, token),
 
-  getAvailability: (token) =>
-    apiRequest("/orders/availability", {}, token),
+  getAvailability: (token, options = {}) =>
+    apiRequest(
+      `/orders/availability${options.includeHidden ? "?include_hidden=1" : ""}`,
+      {},
+      token
+    ),
 
   createOrder: (payload, token) =>
     apiRequest(

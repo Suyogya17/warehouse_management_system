@@ -19,7 +19,7 @@ export default function StockPage() {
   const [stockFilter, setStockFilter] = useState("all");
 
   const load = useCallback(async () => {
-    const result = await api.getAvailability(token);
+    const result = await api.getAvailability(token, { includeHidden: true });
     setAvailability(result.data || []);
   }, [token]);
 
@@ -107,6 +107,15 @@ export default function StockPage() {
                 key: "available_qty",
                 label: "Available",
                 render: (row) => `${formatNumber(row.available_qty)} ${row.unit}`,
+              },
+              {
+                key: "visibility",
+                label: "Visibility",
+                render: (row) => (
+                  <StatusBadge tone={Number(row.is_visible) === 1 ? "success" : "neutral"}>
+                    {Number(row.is_visible) === 1 ? "Displayed" : "On hold"}
+                  </StatusBadge>
+                ),
               },
               {
                 key: "status",

@@ -739,7 +739,13 @@ const getAll = async (req, res, next) => {
 // ─── GET AVAILABILITY ─────────────────────────────
 const getAvailability = async (req, res, next) => {
   try {
-    let sql = 'SELECT * FROM finished_goods WHERE is_deleted = 0 AND is_visible = 1';
+    const includeHidden =
+      req.query.include_hidden === '1' &&
+      ['ADMIN', 'CO_ADMIN'].includes(req.user.role);
+
+    let sql = `SELECT * FROM finished_goods WHERE is_deleted = 0${
+      includeHidden ? '' : ' AND is_visible = 1'
+    }`;
     const params = [];
 
     if (['USER', 'MEMBER', 'ELDER'].includes(req.user.role)) {
@@ -997,8 +1003,22 @@ const updateStatus = async (req, res, next) => {
     let updateParams = [status];
 
     if (status === 'CONFIRMED' && !order.confirmed_by) {
-      updateFields.push('confirmed_by = ?', 'confirmed_at = NOW()');
-      updateParams.push(req.user.id);
+      const lastDnRes = await client.query(
+        `SELECT delivery_note_number
+         FROM orders
+         WHERE status != 'CANCELLED'
+           AND delivery_note_number IS NOT NULL
+         ORDER BY CAST(SUBSTRING(delivery_note_number, 4) AS UNSIGNED) DESC
+         LIMIT 1
+         FOR UPDATE`
+      );
+      const lastDnNumber = Number(
+        String(lastDnRes.rows[0]?.delivery_note_number || '').replace('DN-', '')
+      );
+      const nextDN = order.delivery_note_number || `DN-${(lastDnNumber || 1940) + 1}`;
+
+      updateFields.push('confirmed_by = ?', 'confirmed_at = NOW()', 'delivery_note_number = ?');
+      updateParams.push(req.user.id, nextDN);
     } else if (status === 'PACKED' && !order.packed_by) {
       updateFields.push('packed_by = ?', 'packed_at = NOW()');
       updateParams.push(req.user.id);
@@ -1022,18 +1042,9 @@ const updateStatus = async (req, res, next) => {
         oParams
       );
 
-      const productIds = itemsRes.rows.map((i) => i.finished_good_id);
-      const reservedMap = await getReservedByProduct(
-        (sql, p) => client.query(sql, p),
-        productIds
-      );
-
       const shortages = itemsRes.rows.filter((item) => {
         const physicalStock = Number(item.quantity || 0);
-        const totalReserved = reservedMap.get(item.finished_good_id) || 0;
-        const otherReserved = totalReserved - Number(item.qty_ordered);
-        const trueAvailable = physicalStock - otherReserved;
-        return Number(item.qty_ordered) > trueAvailable;
+        return physicalStock < Number(item.qty_ordered);
       });
 
       if (shortages.length) {
