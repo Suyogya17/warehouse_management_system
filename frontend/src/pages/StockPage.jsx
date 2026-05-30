@@ -15,6 +15,7 @@ export default function StockPage() {
   const { showToast } = useToast();
   const [availability, setAvailability] = useState([]);
   const [search, setSearch] = useState("");
+  const [searchId, setSearchId] = useState("");
   const [stockFilter, setStockFilter] = useState("all");
 
   const load = useCallback(async () => {
@@ -36,6 +37,7 @@ export default function StockPage() {
 
   const filteredAvailability = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const qId = searchId.trim().toLowerCase();
 
     return availability
       .filter((item) => {
@@ -43,6 +45,8 @@ export default function StockPage() {
 
         if (stockFilter === "available" && available <= 0) return false;
         if (stockFilter === "out" && available > 0) return false;
+
+        if (qId && !String(item.id || "").toLowerCase().includes(qId)) return false;
 
         if (!q) return true;
 
@@ -55,7 +59,7 @@ export default function StockPage() {
         );
       })
       .sort((a, b) => Number(b.available_qty || 0) - Number(a.available_qty || 0));
-  }, [availability, search, stockFilter]);
+  }, [availability, search, searchId, stockFilter]);
 
   const exportToExcel = () => {
     if (!filteredAvailability.length) {
@@ -68,6 +72,7 @@ export default function StockPage() {
     }
 
     const rows = filteredAvailability.map((item) => ({
+      "FG.ID": item.id || "",
       Product: item.name || "",
       Article: item.article_code || "",
       Color: item.color || "",
@@ -83,6 +88,7 @@ export default function StockPage() {
     const worksheet = XLSX.utils.json_to_sheet(rows);
 
     worksheet["!cols"] = [
+      { wch: 8  }, // FG.ID
       { wch: 32 }, // Product
       { wch: 14 }, // Article
       { wch: 14 }, // Color
@@ -119,7 +125,14 @@ export default function StockPage() {
 
       <SectionCard title="Products Availability" icon="stock">
         <div className="p-4">
-          <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_auto]">
+          <div className="mb-4 grid gap-3 md:grid-cols-[80px_minmax(0,1fr)_180px_auto]">
+            <input
+              type="text"
+              value={searchId}
+              onChange={(event) => setSearchId(event.target.value)}
+              placeholder="FG.ID..."
+              className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100"
+            />
             <input
               type="text"
               value={search}
@@ -146,8 +159,10 @@ export default function StockPage() {
 
           <DataTable
             columns={[
+              { key: "id", label: "FG.ID" },
               { key: "name", label: "Product" },
               { key: "article_code", label: "Article" },
+              { key: "size", label: "Size" },
               { key: "color", label: "Color" },
               {
                 key: "physical_stock",
