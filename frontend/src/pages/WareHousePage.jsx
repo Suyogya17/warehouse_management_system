@@ -325,6 +325,8 @@ export default function WareHousePage() {
     });
   };
 
+  const totalWarehouseStock = stockRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+
   return (
     <div className="space-y-6">
       <SectionCard
@@ -374,6 +376,12 @@ export default function WareHousePage() {
             emptyTitle="No warehouse stock found"
             emptyDescription="Run the SQL migration first, then add stock through production or manual adjustment."
           />
+           <div className="mt-3 flex justify-center px-2 pb-2">
+            <span className="text-sm text-slate-500">
+              Total stock:{" "}
+              <span className="font-medium text-green-700">{formatNumber(totalWarehouseStock)}</span>
+            </span>
+          </div>
         </div>
       </SectionCard>
 

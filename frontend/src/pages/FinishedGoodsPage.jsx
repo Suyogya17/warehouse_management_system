@@ -237,6 +237,7 @@ export default function FinishedGoodsPage() {
   });
 
   const isEmpty = filteredItems.length === 0;
+  const totalPairs = filteredItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -573,6 +574,13 @@ export default function FinishedGoodsPage() {
           ]}
           rows={filteredItems}
         />
+
+          <div className="mt-3 flex justify-center px-2">
+  <span className="text-sm text-slate-500">
+    Total pairs: <span className="font-medium text-slate-800">{formatNumber(totalPairs)}</span>
+  </span>
+</div>
+
       </SectionCard>
     </div>
   );

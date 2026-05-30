@@ -113,7 +113,9 @@ export default function StockPage() {
       message: `${rows.length} row${rows.length === 1 ? "" : "s"} exported.`,
     });
   };
-
+const totalPhysical  = filteredAvailability.reduce((sum, item) => sum + Number(item.physical_stock || 0), 0);
+const totalReserved  = filteredAvailability.reduce((sum, item) => sum + Number(item.reserved_qty  || 0), 0);
+const totalAvailable = filteredAvailability.reduce((sum, item) => sum + Number(item.available_qty || 0), 0);
   return (
     <div className="space-y-6">
       <PageHeader
@@ -202,6 +204,17 @@ export default function StockPage() {
             emptyTitle="No stock found"
             emptyDescription="Try a different search or stock filter."
           />
+         <div className="mt-3 flex justify-center gap-6 px-2">
+  <span className="text-sm text-slate-500">
+    Physical: <span className="font-medium text-slate-800">{formatNumber(totalPhysical)}</span>
+  </span>
+  <span className="text-sm text-slate-500">
+    Reserved: <span className="font-medium text-slate-800">{formatNumber(totalReserved)}</span>
+  </span>
+  <span className="text-sm text-slate-500">
+    Available: <span className="font-medium text-green-700">{formatNumber(totalAvailable)}</span>
+  </span>
+</div>
         </div>
       </SectionCard>
     </div>
