@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Filter,
   ShoppingCart,
   Plus,
   Check,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  X,
   Package as PackageIcon,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -27,6 +30,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
     variants?.find((v) => getAvailableQty(v) > 0) || variants?.[0] || null
   );
   const [lightbox, setLightbox] = useState(false);
+  const [touchStartX, setTouchStartX] = useState(null);
 
   // ✅ Fix 1 — prevent body scroll when lightbox is open (mobile Chrome)
   useEffect(() => {
@@ -54,10 +58,46 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
     });
   }, [variants]);
 
+  const galleryVariants = useMemo(
+    () => variants.filter((variant) => variant.image_url),
+    [variants]
+  );
+
+  const selectedGalleryIndex = useMemo(
+    () =>
+      Math.max(
+        0,
+        galleryVariants.findIndex(
+          (variant) => Number(variant.id) === Number(selectedVariant?.id)
+        )
+      ),
+    [galleryVariants, selectedVariant]
+  );
+
+  useEffect(() => {
+    if (!lightbox || galleryVariants.length <= 1) return;
+
+    const handleKeyDown = (event) => {
+      if (event.key === "ArrowLeft") {
+        const prevIndex =
+          (selectedGalleryIndex - 1 + galleryVariants.length) % galleryVariants.length;
+        setSelectedVariant(galleryVariants[prevIndex]);
+      }
+
+      if (event.key === "ArrowRight") {
+        const nextIndex = (selectedGalleryIndex + 1) % galleryVariants.length;
+        setSelectedVariant(galleryVariants[nextIndex]);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [galleryVariants, lightbox, selectedGalleryIndex]);
+
   if (!selectedVariant) return null;
 
   const isInCart = cartProductIds.has(Number(selectedVariant.id));
-    const availableQty = getAvailableQty(selectedVariant);
+  const availableQty = getAvailableQty(selectedVariant);
   const isLowStock = availableQty > 0 && availableQty < 10;
   const isOutOfStock = availableQty <= 0;
   const isNew =
@@ -66,6 +106,47 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
   const cartons = selectedVariant.inner_boxes_per_outer_box
     ? Math.floor(availableQty / Number(selectedVariant.inner_boxes_per_outer_box))
     : 0;
+  const selectedImageUrl = selectedVariant.image_url
+    ? `${APP_BASE_URL}${selectedVariant.image_url}`
+    : "";
+  const hasMultipleImages = galleryVariants.length > 1;
+  const goToGalleryImage = (direction) => {
+    if (!galleryVariants.length) return;
+    const nextIndex =
+      (selectedGalleryIndex + direction + galleryVariants.length) % galleryVariants.length;
+    setSelectedVariant(galleryVariants[nextIndex]);
+  };
+  const handleDownloadImage = async (event) => {
+    event.stopPropagation();
+    if (!selectedImageUrl) return;
+
+    const imageName = selectedVariant.article_code || selectedVariant.name || "product-image";
+    const fileName = `${imageName.replace(/[^\w-]+/g, "-")}.jpg`;
+
+    try {
+      const response = await fetch(selectedImageUrl);
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      window.open(selectedImageUrl, "_blank", "noopener,noreferrer");
+    }
+  };
+  const handleLightboxTouchEnd = (event) => {
+    if (touchStartX === null || !hasMultipleImages) return;
+
+    const deltaX = touchStartX - event.changedTouches[0].clientX;
+    if (Math.abs(deltaX) > 50) {
+      goToGalleryImage(deltaX > 0 ? 1 : -1);
+    }
+    setTouchStartX(null);
+  };
 
   return (
     <div className="group flex flex-col rounded-2xl border border-slate-200 bg-white overflow-hidden hover:shadow-xl transition-all duration-300">
@@ -217,16 +298,39 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
           style={{ touchAction: "none" }}   // ✅ Fix 2 — prevent swipe-back on Android
           onClick={() => setLightbox(false)}
+          onTouchStart={(event) => setTouchStartX(event.touches[0].clientX)}
+          onTouchEnd={handleLightboxTouchEnd}
         >
           <div
-            className="relative max-w-3xl w-full max-h-[90vh] flex items-center justify-center"
+            className="relative max-w-4xl w-full max-h-[90vh] flex items-center justify-center"
             onClick={(e) => e.stopPropagation()}
           >
             <img
-              src={`${APP_BASE_URL}${selectedVariant.image_url}`}
+              src={selectedImageUrl}
               alt={selectedVariant.name}
               className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
             />
+
+            {hasMultipleImages && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => goToGalleryImage(-1)}
+                  className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/90 text-slate-900 shadow-lg flex items-center justify-center hover:bg-white transition"
+                  aria-label="Previous image"
+                >
+                  <ChevronLeft size={24} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => goToGalleryImage(1)}
+                  className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/90 text-slate-900 shadow-lg flex items-center justify-center hover:bg-white transition"
+                  aria-label="Next image"
+                >
+                  <ChevronRight size={24} />
+                </button>
+              </>
+            )}
 
             {/* Product name bar */}
             <div className="absolute bottom-0 left-0 right-0 bg-black/50 rounded-b-2xl px-4 py-3">
@@ -240,18 +344,54 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
               </p>
             </div>
 
-            {/* Close button */}
-            <button
-              onClick={() => setLightbox(false)}
-              className="absolute -top-4 -right-4 bg-white text-slate-800 rounded-full w-10 h-10 flex items-center justify-center shadow-lg hover:bg-slate-100 transition-all font-bold text-lg"
-            >
-              ✕
-            </button>
+            <div className="absolute -top-4 -right-4 flex gap-2">
+              <button
+                type="button"
+                onClick={handleDownloadImage}
+                className="bg-white text-slate-800 rounded-full w-10 h-10 flex items-center justify-center shadow-lg hover:bg-slate-100 transition-all"
+                aria-label="Download image"
+              >
+                <Download size={18} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightbox(false)}
+                className="bg-white text-slate-800 rounded-full w-10 h-10 flex items-center justify-center shadow-lg hover:bg-slate-100 transition-all"
+                aria-label="Close image viewer"
+              >
+                <X size={20} />
+              </button>
+            </div>
           </div>
 
-          <p className="absolute bottom-4 text-white/40 text-xs">
-            Tap outside to close
-          </p>
+          {hasMultipleImages && (
+            <div
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 max-w-[92vw] overflow-x-auto"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center gap-2 rounded-full bg-black/40 px-3 py-2">
+                {galleryVariants.map((variant, index) => (
+                  <button
+                    type="button"
+                    key={variant.id}
+                    onClick={() => setSelectedVariant(variant)}
+                    className={`h-12 w-12 shrink-0 overflow-hidden rounded-lg border-2 ${
+                      index === selectedGalleryIndex
+                        ? "border-white"
+                        : "border-white/20 opacity-70"
+                    }`}
+                    aria-label={`View ${variant.color || variant.name}`}
+                  >
+                    <img
+                      src={`${APP_BASE_URL}${variant.image_url}`}
+                      alt={variant.name}
+                      className="h-full w-full object-cover"
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

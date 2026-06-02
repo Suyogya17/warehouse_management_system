@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Package as PackageIcon, EyeOff } from "lucide-react";
 
 import PageHeader from "../components/PageHeader";
+import ProductImageGallery from "../components/ProductImageGallery";
 import StatCard from "../components/StatCard";
 
 import { useAuth } from "../context/AuthContext";
@@ -17,17 +18,6 @@ const getAvailableQty = (product) =>
 // ─────────────────────────────────────────────────────────────
 function ProductCard({ variants = [] }) {
   const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
-  const [lightbox, setLightbox] = useState(false); // ✅ above early return
-
-  // ✅ prevent body scroll on mobile Chrome when lightbox is open
-  useEffect(() => {
-    if (lightbox) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-    return () => { document.body.style.overflow = ""; };
-  }, [lightbox]);
 
   useEffect(() => {
     if (!variants?.length) { setSelectedVariant(null); return; }
@@ -60,7 +50,6 @@ function ProductCard({ variants = [] }) {
             loading="lazy" decoding="async" width={400} height={300}
             src={`${APP_BASE_URL}${selectedVariant.image_url}`}
             alt={selectedVariant.name}
-            onClick={() => setLightbox(true)}
             className="w-full h-full object-cover group-hover:scale-105 transition duration-500 cursor-zoom-in"
           />
         ) : (
@@ -78,6 +67,11 @@ function ProductCard({ variants = [] }) {
             <span className="bg-red-500 text-white px-4 py-2 rounded-lg font-semibold text-sm">Out of Stock</span>
           </div>
         )}
+        <ProductImageGallery
+          variants={variants}
+          selectedVariant={selectedVariant}
+          onSelect={setSelectedVariant}
+        />
       </div>
 
       {/* CONTENT */}
@@ -119,41 +113,6 @@ function ProductCard({ variants = [] }) {
         </div>
       </div>
 
-      {/* ✅ LIGHTBOX — outside overflow:hidden */}
-      {lightbox && selectedVariant.image_url && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
-          style={{ touchAction: "none" }}
-          onClick={() => setLightbox(false)}
-        >
-          <div
-            className="relative max-w-3xl w-full max-h-[90vh] flex items-center justify-center"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <img
-              src={`${APP_BASE_URL}${selectedVariant.image_url}`}
-              alt={selectedVariant.name}
-              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
-            />
-            <div className="absolute bottom-0 left-0 right-0 bg-black/50 rounded-b-2xl px-4 py-3">
-              <p className="text-white font-semibold text-sm text-center">
-                {selectedVariant.article_code || selectedVariant.name}
-                {selectedVariant.color && (
-                  <span className="ml-2 text-slate-300 font-normal">· {selectedVariant.color}</span>
-                )}
-              </p>
-            </div>
-            <button
-              onClick={() => setLightbox(false)}
-              className="absolute -top-4 -right-4 bg-white text-slate-800 rounded-full w-10 h-10 flex items-center justify-center shadow-lg hover:bg-slate-100 transition-all font-bold text-lg"
-            >
-              ✕
-            </button>
-          </div>
-          <p className="absolute bottom-4 text-white/40 text-xs">Tap outside to close</p>
-        </div>
-      )}
-
     </div>
   );
 }
@@ -163,17 +122,6 @@ function ProductCard({ variants = [] }) {
 // ─────────────────────────────────────────────────────────────
 function OnHoldCard({ variants = [] }) {
   const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
-  const [lightbox, setLightbox] = useState(false); // ✅ above early return
-
-  // ✅ prevent body scroll on mobile Chrome
-  useEffect(() => {
-    if (lightbox) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-    return () => { document.body.style.overflow = ""; };
-  }, [lightbox]);
 
   useEffect(() => {
     if (!variants?.length) { setSelectedVariant(null); return; }
@@ -204,7 +152,6 @@ function OnHoldCard({ variants = [] }) {
             loading="lazy" decoding="async" width={400} height={300}
             src={`${APP_BASE_URL}${selectedVariant.image_url}`}
             alt={selectedVariant.name}
-            onClick={() => setLightbox(true)}
             className="w-full h-full object-cover group-hover:scale-105 transition duration-500 opacity-60 cursor-zoom-in"
           />
         ) : (
@@ -223,6 +170,11 @@ function OnHoldCard({ variants = [] }) {
             On Hold
           </span>
         </div>
+        <ProductImageGallery
+          variants={variants}
+          selectedVariant={selectedVariant}
+          onSelect={setSelectedVariant}
+        />
       </div>
 
       {/* CONTENT */}
@@ -269,41 +221,6 @@ function OnHoldCard({ variants = [] }) {
           )}
         </div>
       </div>
-
-      {/* ✅ LIGHTBOX — outside overflow:hidden */}
-      {lightbox && selectedVariant.image_url && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
-          style={{ touchAction: "none" }}
-          onClick={() => setLightbox(false)}
-        >
-          <div
-            className="relative max-w-3xl w-full max-h-[90vh] flex items-center justify-center"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <img
-              src={`${APP_BASE_URL}${selectedVariant.image_url}`}
-              alt={selectedVariant.name}
-              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
-            />
-            <div className="absolute bottom-0 left-0 right-0 bg-black/50 rounded-b-2xl px-4 py-3">
-              <p className="text-white font-semibold text-sm text-center">
-                {selectedVariant.article_code || selectedVariant.name}
-                {selectedVariant.color && (
-                  <span className="ml-2 text-slate-300 font-normal">· {selectedVariant.color}</span>
-                )}
-              </p>
-            </div>
-            <button
-              onClick={() => setLightbox(false)}
-              className="absolute -top-4 -right-4 bg-white text-slate-800 rounded-full w-10 h-10 flex items-center justify-center shadow-lg hover:bg-slate-100 transition-all font-bold text-lg"
-            >
-              ✕
-            </button>
-          </div>
-          <p className="absolute bottom-4 text-white/40 text-xs">Tap outside to close</p>
-        </div>
-      )}
 
     </div>
   );

@@ -10,6 +10,7 @@ import { useNavigate } from "react-router-dom";
 
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import ProductImageGallery from "../../components/ProductImageGallery";
 import SectionCard from "../../components/SectionCard";
 
 import { useAuth } from "../../context/AuthContext";
@@ -106,6 +107,11 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
             </span>
           </div>
         )}
+        <ProductImageGallery
+          variants={variants}
+          selectedVariant={selectedVariant}
+          onSelect={setSelectedVariant}
+        />
       </div>
 
       {/* CONTENT */}
