@@ -525,6 +525,7 @@
 
 // module.exports = { getAll, getAvailability, create, updateStatus };
 const { query, getClient } = require('../config/db');
+const { hasColumn } = require('../utils/schemaSupport');
 
 const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'PACKED'];
 const ALL_STATUSES = [...ACTIVE_RESERVATION_STATUSES, 'DELIVERED', 'CANCELLED'];
@@ -739,6 +740,7 @@ const getAll = async (req, res, next) => {
 // ─── GET AVAILABILITY ─────────────────────────────
 const getAvailability = async (req, res, next) => {
   try {
+    const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
     const includeHidden =
       req.query.include_hidden === '1' &&
       ['ADMIN', 'CO_ADMIN'].includes(req.user.role);
@@ -762,6 +764,10 @@ const getAvailability = async (req, res, next) => {
       )`;
       params.push(req.user.id, req.user.id);
     }
+
+    sql += supportsDisplayOrder
+      ? ' ORDER BY display_order ASC, article_code, color, id'
+      : ' ORDER BY article_code, color, id';
 
     const products = await query(sql, params);
     const productIds = products.rows.map((p) => p.id);

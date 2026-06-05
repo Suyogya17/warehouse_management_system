@@ -55,6 +55,7 @@ export default function WareHousePage() {
   const canManage = ["ADMIN", "CO_ADMIN"].includes(user?.role);
 
   const [search, setSearch] = useState("");
+  const [movementSearch, setMovementSearch] = useState("");
   const [warehouses, setWarehouses] = useState([]);
   const [finishedGoods, setFinishedGoods] = useState([]);
   const [stockRows, setStockRows] = useState([]);
@@ -137,6 +138,24 @@ export default function WareHousePage() {
 
     return out;
   }, [movements]);
+
+  // Filter merged movements by search query
+  const filteredMovements = useMemo(() => {
+    if (!movementSearch.trim()) return mergedMovements;
+    const q = movementSearch.toLowerCase();
+    return mergedMovements.filter((row) => {
+      const warehouse = row._merged
+        ? `${row.from_warehouse_name ?? ""} ${row.to_warehouse_name ?? ""}`.toLowerCase()
+        : (row.warehouse_name ?? "").toLowerCase();
+      return (
+        (row.product_name ?? "").toLowerCase().includes(q) ||
+        (row.movement_type ?? "").toLowerCase().includes(q) ||
+        (row.created_by_name ?? "").toLowerCase().includes(q) ||
+        warehouse.includes(q) ||
+        (row.notes ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [mergedMovements, movementSearch]);
 
   const saveWarehouse = async (event) => {
     event.preventDefault();
@@ -376,7 +395,7 @@ export default function WareHousePage() {
             emptyTitle="No warehouse stock found"
             emptyDescription="Run the SQL migration first, then add stock through production or manual adjustment."
           />
-           <div className="mt-3 flex justify-center px-2 pb-2">
+          <div className="mt-3 flex justify-center px-2 pb-2">
             <span className="text-sm text-slate-500">
               Total stock:{" "}
               <span className="font-medium text-green-700">{formatNumber(totalWarehouseStock)}</span>
@@ -593,7 +612,30 @@ export default function WareHousePage() {
         subtitle="Every warehouse add, remove, transfer, and production entry."
         icon="ledger"
       >
-        <div className="p-5">
+        <div className="p-5 space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <Field label="Search movements">
+              <TextInput
+                value={movementSearch}
+                onChange={(e) => setMovementSearch(e.target.value)}
+                placeholder="Search by product, type, created by, warehouse, or notes..."
+              />
+            </Field>
+            {movementSearch && (
+              <Button variant="secondary" onClick={() => setMovementSearch("")}>
+                Clear
+              </Button>
+            )}
+          </div>
+
+          {movementSearch && (
+            <p className="text-sm text-slate-500">
+              Showing{" "}
+              <span className="font-medium text-slate-700">{filteredMovements.length}</span>{" "}
+              of {mergedMovements.length} movements
+            </p>
+          )}
+
           <DataTable
             columns={[
               { key: "created_at", label: "Date", render: (row) => formatDate(row.created_at) },
@@ -615,9 +657,13 @@ export default function WareHousePage() {
               { key: "created_by_name", label: "By" },
               { key: "notes", label: "Notes" },
             ]}
-            rows={mergedMovements}
-            emptyTitle="No movement history"
-            emptyDescription="Warehouse changes will appear here after production, adjustment, or transfer."
+            rows={filteredMovements}
+            emptyTitle="No movements found"
+            emptyDescription={
+              movementSearch
+                ? "No movements match your search. Try a different term."
+                : "Warehouse changes will appear here after production, adjustment, or transfer."
+            }
           />
         </div>
       </SectionCard>

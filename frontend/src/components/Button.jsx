@@ -15,6 +15,12 @@ const sizes = {
   lg: "h-11 px-5 text-sm",
 };
 
+const iconOnlySizes = {
+  sm: "h-9 w-9 p-0",
+  md: "h-10 w-10 p-0",
+  lg: "h-11 w-11 p-0",
+};
+
 export default function Button({
   children,
   className = "",
@@ -28,12 +34,12 @@ export default function Button({
   return (
     <button
       type={type}
-      className={`inline-flex items-center justify-center gap-2 rounded-xl font-medium transition duration-200 ease-out focus-visible:outline-none focus-visible:ring-4 disabled:pointer-events-none disabled:opacity-60 ${variants[variant]} ${sizes[size]} ${className}`}
+      className={`inline-flex items-center justify-center gap-2 rounded-xl font-medium transition duration-200 ease-out focus-visible:outline-none focus-visible:ring-4 disabled:pointer-events-none disabled:opacity-60 ${variants[variant]} ${iconOnly ? iconOnlySizes[size] : sizes[size]} ${className}`}
       {...props}
     >
       {icon ? <Icon name={icon} className="h-4 w-4" /> : null}
       {iconOnly ? <span className="sr-only">{typeof children === "string" ? children : "Action"}</span> : null}
-      {children}
+      {iconOnly ? null : children}
     </button>
   );
 }

@@ -6,6 +6,7 @@ const { uploadMiddleware } = require('../middleware/upload');
 
 fgRouter.use(authenticate);
 fgRouter.get('/',       fgCtrl.getAll);
+fgRouter.put('/display-order', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDisplayOrder);
 fgRouter.get('/:id',    fgCtrl.getOne);
 fgRouter.post('/',      authorize('ADMIN', 'CO_ADMIN'), uploadMiddleware('image'), fgCtrl.create);
 fgRouter.put('/:id/visibility', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setVisibility);

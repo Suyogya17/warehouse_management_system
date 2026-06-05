@@ -1,4 +1,6 @@
+import * as XLSX from "xlsx";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Button from "../components/Button";
 import DataTable from "../components/DataTable";
 import SectionCard from "../components/SectionCard";
 import StatCard from "../components/StatCard";
@@ -6,7 +8,7 @@ import StatusBadge from "../components/StatusBadge";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { api } from "../services/api";
-import { formatNumber } from "../utils/format";
+import { formatDate, formatNumber } from "../utils/format";
 
 const TRACKED_STATUSES = ["PENDING","CONFIRMED", "PACKED", "DELIVERED", "CANCELLED"];
 
@@ -41,6 +43,24 @@ const isInRange = (dateStr, from, to) => {
   if (to   && dateStr > to)   return false;
   return true;
 };
+
+const escapeHtml = (value) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const formatOrderDateTimes = (dateTimes = []) =>
+  dateTimes.length ? dateTimes.map((value) => formatDate(value)).join(", ") : "-";
+
+const formatWarehouseTotals = (warehouseTotals = [], unit = "pairs") =>
+  warehouseTotals.length
+    ? warehouseTotals
+        .map((warehouse) => `${warehouse.name} (${formatNumber(warehouse.quantity)} ${unit})`)
+        .join(", ")
+    : "-";
 
 export default function SummaryPage() {
   const { token }     = useAuth();
@@ -94,6 +114,8 @@ export default function SummaryPage() {
               product_name:    productName,
               article_code:    item.article_code || "-",
               unit:            item.unit || "pairs",
+              order_date_times: new Map(),
+              warehouse_totals: new Map(),
               PENDING: emptyStatusTotals(),
               CONFIRMED: emptyStatusTotals(),
               PACKED:    emptyStatusTotals(),
@@ -106,6 +128,16 @@ export default function SummaryPage() {
           const statusTotals = row[order.status];
           const pairs        = Number(item.qty_ordered || 0);
 
+          if (order.created_at) {
+            row.order_date_times.set(order.created_at, new Date(order.created_at));
+          }
+          (item.warehouse_allocations || [])
+            .filter((warehouse) => Number(warehouse.quantity || 0) > 0)
+            .forEach((warehouse) => {
+              const warehouseName = warehouse.warehouse_name || "Unknown warehouse";
+              const currentQty = row.warehouse_totals.get(warehouseName) || 0;
+              row.warehouse_totals.set(warehouseName, currentQty + Number(warehouse.quantity || 0));
+            });
           statusTotals.pairs   += pairs;
           statusTotals.cartons += getItemCartons(item);
           statusTotals.orders.add(order.id);
@@ -115,10 +147,14 @@ export default function SummaryPage() {
     return Array.from(rowsByKey.values())
       .map((row) => ({
         ...row,
+        order_date_times: Array.from(row.order_date_times.values()).sort((a, b) => a - b),
+        warehouse_totals: Array.from(row.warehouse_totals.entries())
+          .map(([name, quantity]) => ({ name, quantity }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
         total_pairs:
          row.PENDING.pairs + row.CONFIRMED.pairs + row.PACKED.pairs + row.DELIVERED.pairs + row.CANCELLED.pairs,
         total_cartons:
-         row.PENDING.pairs + row.CONFIRMED.cartons + row.PACKED.cartons + row.DELIVERED.cartons + row.CANCELLED.cartons,
+         row.PENDING.cartons + row.CONFIRMED.cartons + row.PACKED.cartons + row.DELIVERED.cartons + row.CANCELLED.cartons,
       }))
       .sort((a, b) => {
         const u = a.created_by_name.localeCompare(b.created_by_name);
@@ -131,7 +167,12 @@ export default function SummaryPage() {
     const term = search.trim().toLowerCase();
     if (!term) return summaryRows;
     return summaryRows.filter((row) =>
-      [row.created_by_name, row.product_name, row.article_code].some((v) =>
+      [
+        row.created_by_name,
+        row.product_name,
+        row.article_code,
+        formatWarehouseTotals(row.warehouse_totals, row.unit),
+      ].some((v) =>
         String(v || "").toLowerCase().includes(term)
       )
     );
@@ -192,9 +233,215 @@ export default function SummaryPage() {
 
   const resetDates = () => { setFromDate(today); setToDate(today); };
 
+  const exportRows = useMemo(
+    () =>
+      filteredRows.map((row) => ({
+        "Created By": row.created_by_name,
+        "Date / Time": formatOrderDateTimes(row.order_date_times),
+        Warehouse: formatWarehouseTotals(row.warehouse_totals, row.unit),
+        Product: row.product_name,
+        Article: row.article_code,
+        Unit: row.unit,
+        "Pending Pairs": row.PENDING.pairs,
+        "Pending Cartons": row.PENDING.cartons,
+        "Confirmed Pairs": row.CONFIRMED.pairs,
+        "Confirmed Cartons": row.CONFIRMED.cartons,
+        "Packed Pairs": row.PACKED.pairs,
+        "Packed Cartons": row.PACKED.cartons,
+        "Delivered Pairs": row.DELIVERED.pairs,
+        "Delivered Cartons": row.DELIVERED.cartons,
+        "Cancelled Pairs": row.CANCELLED.pairs,
+        "Cancelled Cartons": row.CANCELLED.cartons,
+        "Total Pairs": row.total_pairs,
+        "Total Cartons": row.total_cartons,
+      })),
+    [filteredRows]
+  );
+
+  const dateRangeLabel =
+    fromDate && toDate
+      ? fromDate === toDate ? fromDate : `${fromDate} to ${toDate}`
+      : fromDate ? `From ${fromDate}`
+      : toDate ? `To ${toDate}`
+      : "All dates";
+
+  const handleExportExcel = () => {
+    if (!filteredRows.length) {
+      showToast({
+        tone: "error",
+        title: "Nothing to export",
+        message: "No summary rows match the current filter.",
+      });
+      return;
+    }
+
+    const rows = [
+      ...exportRows,
+      {},
+      {
+        "Created By": "Totals",
+        "Pending Pairs": pageTotals.PENDING.pairs,
+        "Pending Cartons": pageTotals.PENDING.cartons,
+        "Confirmed Pairs": pageTotals.CONFIRMED.pairs,
+        "Confirmed Cartons": pageTotals.CONFIRMED.cartons,
+        "Packed Pairs": pageTotals.PACKED.pairs,
+        "Packed Cartons": pageTotals.PACKED.cartons,
+        "Delivered Pairs": pageTotals.DELIVERED.pairs,
+        "Delivered Cartons": pageTotals.DELIVERED.cartons,
+        "Cancelled Pairs": pageTotals.CANCELLED.pairs,
+        "Cancelled Cartons": pageTotals.CANCELLED.cartons,
+        "Total Pairs": pageTotals.total_pairs,
+        "Total Cartons": pageTotals.total_cartons,
+      },
+    ];
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet["!cols"] = [
+      { wch: 18 }, { wch: 24 }, { wch: 28 }, { wch: 32 },
+      { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 16 },
+      { wch: 15 }, { wch: 17 }, { wch: 13 }, { wch: 15 },
+      { wch: 15 }, { wch: 17 }, { wch: 15 }, { wch: 17 },
+      { wch: 12 }, { wch: 14 },
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Order Summary");
+    XLSX.writeFile(workbook, `order-summary-${fromDate || "all"}-${toDate || "all"}.xlsx`);
+
+    showToast({
+      tone: "success",
+      title: "Excel exported",
+      message: `${filteredRows.length} row${filteredRows.length === 1 ? "" : "s"} exported.`,
+    });
+  };
+
+  const handlePrint = () => {
+    if (!filteredRows.length) {
+      showToast({
+        tone: "error",
+        title: "Nothing to print",
+        message: "No summary rows match the current filter.",
+      });
+      return;
+    }
+
+    const printWindow = window.open("", "_blank", "width=1100,height=800");
+    if (!printWindow) {
+      showToast({
+        tone: "error",
+        title: "Print blocked",
+        message: "Please allow popups for this site and try again.",
+      });
+      return;
+    }
+
+    const statusCells = (row) =>
+      TRACKED_STATUSES.map(
+        (status) => `
+          <td class="num">${formatNumber(row[status].pairs)}</td>
+          <td class="num muted">${formatNumber(row[status].cartons)}</td>
+        `
+      ).join("");
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Daily Order Summary</title>
+          <style>
+            body { font-family: Arial, sans-serif; color: #1e293b; padding: 24px; font-size: 11px; }
+            h1 { margin: 0 0 4px; font-size: 18px; }
+            .meta { margin: 0 0 16px; color: #64748b; }
+            table { width: 100%; border-collapse: collapse; }
+            th { background: #f8fafc; color: #64748b; font-size: 9px; padding: 7px; text-align: left; text-transform: uppercase; border-bottom: 2px solid #e2e8f0; }
+            td { padding: 7px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+            .num { text-align: right; white-space: nowrap; }
+            .muted { color: #64748b; }
+            tfoot td { font-weight: 700; background: #eef2ff; border-top: 2px solid #c7d2fe; }
+            @media print { body { padding: 0; } }
+          </style>
+        </head>
+        <body>
+          <h1>Daily Order Summary</h1>
+          <p class="meta">${escapeHtml(dateRangeLabel)} · ${filteredRows.length} row${filteredRows.length === 1 ? "" : "s"}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Created By</th>
+                <th>Date / Time</th>
+                <th>Warehouse</th>
+                <th>Product</th>
+                <th>Article</th>
+                <th>Unit</th>
+                ${TRACKED_STATUSES.map((status) => `<th class="num">${status}<br>Pairs</th><th class="num">${status}<br>Cartons</th>`).join("")}
+                <th class="num">Total<br>Pairs</th>
+                <th class="num">Total<br>Cartons</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filteredRows.map((row) => `
+                <tr>
+                  <td>${escapeHtml(row.created_by_name)}</td>
+                  <td>${escapeHtml(formatOrderDateTimes(row.order_date_times))}</td>
+                  <td>${escapeHtml(formatWarehouseTotals(row.warehouse_totals, row.unit))}</td>
+                  <td>${escapeHtml(row.product_name)}</td>
+                  <td>${escapeHtml(row.article_code)}</td>
+                  <td>${escapeHtml(row.unit)}</td>
+                  ${statusCells(row)}
+                  <td class="num">${formatNumber(row.total_pairs)}</td>
+                  <td class="num">${formatNumber(row.total_cartons)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colspan="6">Totals</td>
+                ${TRACKED_STATUSES.map((status) => `
+                  <td class="num">${formatNumber(pageTotals[status].pairs)}</td>
+                  <td class="num">${formatNumber(pageTotals[status].cartons)}</td>
+                `).join("")}
+                <td class="num">${formatNumber(pageTotals.total_pairs)}</td>
+                <td class="num">${formatNumber(pageTotals.total_cartons)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+    printWindow.close();
+  };
+
   // ── columns ───────────────────────────────────────────────
   const columns = [
     { key: "created_by_name", label: "Created By" },
+    {
+      key: "order_date_times",
+      label: "Date / Time",
+      render: (row) => (
+        <div className="max-w-48 space-y-1 text-xs text-slate-500">
+          {row.order_date_times.length
+            ? row.order_date_times.map((value) => <p key={value.toISOString()}>{formatDate(value)}</p>)
+            : <p>-</p>}
+        </div>
+      ),
+    },
+    {
+      key: "warehouse_totals",
+      label: "Warehouse",
+      render: (row) => (
+        <div className="max-w-48 space-y-1 text-xs text-slate-500">
+          {row.warehouse_totals.length
+            ? row.warehouse_totals.map((warehouse) => (
+                <p key={warehouse.name}>
+                  {warehouse.name} ({formatNumber(warehouse.quantity)} {row.unit})
+                </p>
+              ))
+            : <p>-</p>}
+        </div>
+      ),
+    },
     { key: "product_name",    label: "Product" },
     { key: "article_code",    label: "Article" },
     {
@@ -202,7 +449,7 @@ export default function SummaryPage() {
       label: "Pending",
       render: (row) => (
         <div className="space-y-2">
-          <StatusBadge tone={statusTone.pending}>PENDING</StatusBadge>
+          <StatusBadge tone={statusTone.PENDING}>PENDING</StatusBadge>
           {formatQty(row.PENDING, row.unit)}
         </div>
       ),
@@ -277,6 +524,16 @@ export default function SummaryPage() {
         title="Daily order summary"
         subtitle="Products grouped by created-by and product across the selected date range."
         icon="orders"
+        actions={
+          <>
+            <Button variant="secondary" icon="download" onClick={handleExportExcel}>
+              Export Excel
+            </Button>
+            <Button variant="secondary" icon="orders" onClick={handlePrint}>
+              Print
+            </Button>
+          </>
+        }
       >
         {/* FILTERS */}
         <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end">

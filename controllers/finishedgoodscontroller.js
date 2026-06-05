@@ -4,6 +4,15 @@ const { hasColumn } = require('../utils/schemaSupport');
 
 const getImagePath = (req) => (req.file ? `/uploads/${req.file.filename}` : null);
 
+const getFinishedGoodsOrderClause = async (alias = '') => {
+  const prefix = alias ? `${alias}.` : '';
+  const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
+
+  return supportsDisplayOrder
+    ? `ORDER BY ${prefix}display_order ASC, ${prefix}article_code, ${prefix}color, ${prefix}id`
+    : `ORDER BY ${prefix}article_code, ${prefix}color, ${prefix}id`;
+};
+
 // ─── LIST ALL ───────────────────────────────────────────────────────────────
 const getAll = async (req, res, next) => {
   try {
@@ -16,14 +25,14 @@ const getAll = async (req, res, next) => {
     let params = [];
 
     if (userRole === 'ADMIN' || userRole === 'CO_ADMIN') {
-      sql = `SELECT * FROM finished_goods WHERE 1=1`;
+      sql = `SELECT * FROM finished_goods WHERE is_deleted = 0`;
 
       if (article_code) {
         sql += ` AND article_code LIKE ?`;
         params.push(`%${article_code}%`);
       }
 
-      sql += ` ORDER BY article_code, color`;
+      sql += ` ${await getFinishedGoodsOrderClause()}`;
 
     } else if (userRole === 'USER' || userRole === 'MEMBER' || userRole === 'ELDER') {
       sql = `
@@ -34,6 +43,7 @@ const getAll = async (req, res, next) => {
         WHERE upp.user_id = ?
           AND upp.can_view = 1
           AND fg.is_visible = 1
+          AND fg.is_deleted = 0
           AND NOT EXISTS (
             SELECT 1 FROM user_product_permissions deny
             WHERE deny.finished_good_id = fg.id
@@ -49,7 +59,7 @@ const getAll = async (req, res, next) => {
         params.push(`%${article_code}%`);
       }
 
-      sql += ` ORDER BY fg.article_code, fg.color`;
+      sql += ` ${await getFinishedGoodsOrderClause('fg')}`;
 
     } else {
       return res.json({ success: true, count: 0, data: [] });
@@ -137,13 +147,23 @@ const create = async (req, res, next) => {
 
     const image_url = req.file ? `/uploads/${req.file.filename}` : null;
 
+    const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
+    let nextDisplayOrder = null;
+
+    if (supportsDisplayOrder) {
+      const orderRows = await query(
+        `SELECT COALESCE(MAX(display_order), 0) + 1 AS next_display_order FROM finished_goods`
+      );
+      nextDisplayOrder = orderRows[0]?.next_display_order || 1;
+    }
+
     const sql = `
       INSERT INTO finished_goods
       (name, article_code, sole_code, color, size, unit,
        quantity, min_quantity,
        inner_box_per_pair, inner_boxes_per_outer_box,
-       image_url, is_visible)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+       image_url, is_visible${supportsDisplayOrder ? ', display_order' : ''})
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0${supportsDisplayOrder ? ', ?' : ''})
     `;
 
     const params = [
@@ -159,6 +179,10 @@ const create = async (req, res, next) => {
       inner_boxes_per_outer_box ? Number(inner_boxes_per_outer_box) : null,
       image_url
     ];
+
+    if (supportsDisplayOrder) {
+      params.push(nextDisplayOrder);
+    }
 
     const rows = await query(sql, params);
 
@@ -300,11 +324,50 @@ const setVisibility = async (req, res, next) => {
   }
 };
 
+// ─── DISPLAY ORDER ─────────────────────────────────────────────────────────
+const setDisplayOrder = async (req, res, next) => {
+  try {
+    const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
+
+    if (!supportsDisplayOrder) {
+      return res.status(400).json({
+        success: false,
+        message: 'Product ordering is not enabled yet. Run sql/add-finished-good-display-order.sql first.',
+      });
+    }
+
+    const orderedIds = Array.isArray(req.body.ordered_ids)
+      ? req.body.ordered_ids.map((id) => Number(id)).filter((id) => id > 0)
+      : [];
+
+    if (!orderedIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'ordered_ids must contain at least one product id.',
+      });
+    }
+
+    await Promise.all(
+      orderedIds.map((id, index) =>
+        query(
+          `UPDATE finished_goods SET display_order = ? WHERE id = ? AND is_deleted = 0`,
+          [index + 1, id]
+        )
+      )
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getAll,
   getOne,
   create,
   update,
   remove,
-  setVisibility
+  setVisibility,
+  setDisplayOrder
 };

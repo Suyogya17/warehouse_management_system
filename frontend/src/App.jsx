@@ -27,6 +27,7 @@ import MemberOrderPage from "./pages/Member/MemberOrderPage";
 import OnHoldPage from "./pages/OnHoldPage";
 import SummaryPage from "./pages/SummaryPage";
 import ProductLedgerPage from "./pages/ProductLedgerPage";
+import ProductDisplayPage from "./pages/ProductDisplayPage";
 export default function App() {
   const { isAuthenticated, user } = useAuth();
 
@@ -188,6 +189,15 @@ export default function App() {
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               <PermissionsPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="product-display"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              <ProductDisplayPage />
             </ProtectedRoute>
           }
         />

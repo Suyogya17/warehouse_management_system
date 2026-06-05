@@ -129,6 +129,13 @@ export const api = {
       token
     ),
 
+  updateFinishedGoodDisplayOrder: (orderedIds, token) =>
+    apiRequest(
+      "/finished-goods/display-order",
+      { method: "PUT", body: JSON.stringify({ ordered_ids: orderedIds }) },
+      token
+    ),
+
   deleteFinishedGood: (id, token) =>
     apiRequest(`/finished-goods/${id}`, { method: "DELETE" }, token),
 

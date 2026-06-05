@@ -37,6 +37,7 @@ CREATE TABLE finished_goods (
   min_quantity DECIMAL(10,2) NOT NULL DEFAULT 5,
   image_url VARCHAR(255),
   is_visible TINYINT(1) NOT NULL DEFAULT 0,
+  display_order INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

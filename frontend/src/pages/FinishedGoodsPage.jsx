@@ -158,6 +158,14 @@ export default function FinishedGoodsPage() {
   };
 
   const remove = async (id) => {
+    const item = items.find((finishedGood) => Number(finishedGood.id) === Number(id));
+    const label = item?.article_code || item?.name || "this product";
+    const confirmed = window.confirm(
+      `Delete ${label}? This will hide it from the app but keep old orders and history safe.`
+    );
+
+    if (!confirmed) return;
+
     try {
       await api.deleteFinishedGood(id, token);
       setNextStep(null);
@@ -562,10 +570,13 @@ export default function FinishedGoodsPage() {
                   key: "actions",
                   label: "Actions",
                   render: (row) => (
-                    <div className="flex justify-end gap-2">
+                    <div className="flex flex-wrap justify-end gap-2">
                       <Button type="button" variant={row.is_visible ? "ghost" : "primary"} size="sm" icon={row.is_visible ? "eye" : "eyeOff"} onClick={() => toggleVisibility(row)} />
                       <Button type="button" variant="secondary" size="sm" icon="edit" onClick={() => startEdit(row)}>
                         Edit
+                      </Button>
+                      <Button type="button" variant="danger" size="sm" icon="delete" onClick={() => remove(row.id)}>
+                        Delete
                       </Button>
                     </div>
                   ),

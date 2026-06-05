@@ -22,6 +22,21 @@ import { formatNumber } from "../../utils/format";
 const getAvailableQty = (product) =>
   Number(product?.available_qty ?? product?.display_quantity ?? 0);
 
+const getGroupDisplayOrder = (variants = []) =>
+  Math.min(...variants.map((variant) => Number(variant.display_order || 999999)));
+
+const getNextSort = (current) => {
+  if (current === "display") return "newest";
+  if (current === "newest") return "oldest";
+  return "display";
+};
+
+const getSortLabel = (sort) => {
+  if (sort === "display") return "Display order";
+  if (sort !== "oldest") return "Newest";
+  return "Oldest";
+};
+
 function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
   const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
 
@@ -225,7 +240,7 @@ export default function FinishedGoodsUserPage() {
   const [cart, setCart] = useState([]);
   const [cartLoaded, setCartLoaded] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
-  const [sort, setSort] = useState("newest");
+  const [sort, setSort] = useState("display");
   const [filters, setFilters] = useState({ search: "", size: "", stock: "all" });
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -320,9 +335,13 @@ export default function FinishedGoodsUserPage() {
       )
       .filter((variants) => variants.length > 0)
       .sort((a, b) => {
+        if (sort === "display") {
+          return getGroupDisplayOrder(a) - getGroupDisplayOrder(b);
+        }
+
         const dateA = new Date(a[0]?.created_at || 0);
         const dateB = new Date(b[0]?.created_at || 0);
-        return sort === "newest" ? dateB - dateA : dateA - dateB;
+        return sort !== "oldest" ? dateB - dateA : dateA - dateB;
       });
   }, [groupedProducts, filters, sort]);
 
@@ -442,15 +461,15 @@ export default function FinishedGoodsUserPage() {
 
         <div className="flex justify-between gap-2">
           <button
-            onClick={() => setSort((prev) => (prev === "newest" ? "oldest" : "newest"))}
+            onClick={() => setSort((prev) => getNextSort(prev))}
             className={`flex px-4 py-2.5 border rounded-xl font-medium transition-all
             ${
-              sort === "newest"
+              sort !== "oldest"
                 ? "bg-red-600 text-white border-red-300"
                 : "bg-red-500 text-white  hover:bg-slate-50 border-slate-300"
             }`}
           >
-            {sort === "newest" ? "Newest" : "Oldest"}
+            {getSortLabel(sort)}
           </button>
 
           <button
