@@ -28,6 +28,16 @@ const getAvailableQty = (product) =>
 const getGroupDisplayOrder = (variants = []) =>
   Math.min(...variants.map((variant) => Number(variant.display_order || 999999)));
 
+const getArticleKey = (item) =>
+  item.article_code || item.name?.split("_")?.[0] || `product-${item.id}`;
+
+const sortByDisplayOrder = (a, b) => {
+  const orderDiff = Number(a.display_order || 999999) - Number(b.display_order || 999999);
+  if (orderDiff !== 0) return orderDiff;
+
+  return Number(a.id || 0) - Number(b.id || 0);
+};
+
 const getNextSort = (current) => {
   if (current === "display") return "newest";
   if (current === "newest") return "oldest";
@@ -469,21 +479,19 @@ export default function FinishedGoodsUserPage() {
   // ─── GROUP BY ARTICLE CODE ────────────────────────
 
   const groupedProducts = useMemo(() => {
-    const groups = {};
-    items.forEach((item) => {
-      const baseCode =
-        item.article_code ||
-        item.name?.split("_")?.slice(0, -1)?.join("_") ||
-        item.name ||
-        `product-${item.id}`;
+    const groups = new Map();
 
-      if (!groups[baseCode]) groups[baseCode] = [];
-      groups[baseCode].push(item);
+    items.forEach((item) => {
+      const baseCode = getArticleKey(item);
+
+      if (!groups.has(baseCode)) groups.set(baseCode, []);
+      groups.get(baseCode).push(item);
     });
-    return Object.values(groups);
+
+    return Array.from(groups.values())
+      .map((variants) => [...variants].sort(sortByDisplayOrder))
+      .sort((a, b) => getGroupDisplayOrder(a) - getGroupDisplayOrder(b));
   }, [items]);
-  console.log("RAW ITEMS:", items.length);
-  console.log("GROUPED:", groupedProducts.length);
 
   const sizes = [...new Set(items.map((i) => i.size).filter(Boolean))];
 
@@ -515,10 +523,16 @@ export default function FinishedGoodsUserPage() {
           
         })
       )
+      .map((variants) => variants.sort(sortByDisplayOrder))
       .filter((variants) => variants.some((v) => getAvailableQty(v) > 0))
       .sort((a, b) => {
         if (sort === "display") {
-          return getGroupDisplayOrder(a) - getGroupDisplayOrder(b);
+          const orderDiff = getGroupDisplayOrder(a) - getGroupDisplayOrder(b);
+          if (orderDiff !== 0) return orderDiff;
+
+          return String(a[0]?.article_code || a[0]?.name || "").localeCompare(
+            String(b[0]?.article_code || b[0]?.name || "")
+          );
         }
 
         const dateA = new Date(a[0]?.created_at || 0);

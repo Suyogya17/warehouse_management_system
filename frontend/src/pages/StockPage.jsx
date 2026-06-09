@@ -10,17 +10,37 @@ import { useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
 import { formatNumber } from "../utils/format";
 
+const getCartons = (quantity, item) => {
+  const pairs = Number(quantity || 0);
+  const pairsPerCarton = Number(item.inner_boxes_per_outer_box || 0);
+
+  return pairsPerCarton > 0 ? Math.floor(pairs / pairsPerCarton) : 0;
+};
+
+const formatWarehouses = (warehouses = [], unit = "pairs") =>
+  warehouses.length
+    ? warehouses
+        .map((warehouse) => `${warehouse.warehouse_name} (${formatNumber(warehouse.quantity)} ${unit})`)
+        .join(", ")
+    : "-";
+
 export default function StockPage() {
   const { token } = useAuth();
   const { showToast } = useToast();
   const [availability, setAvailability] = useState([]);
+  const [warehouseStock, setWarehouseStock] = useState([]);
   const [search, setSearch] = useState("");
   const [searchId, setSearchId] = useState("");
   const [stockFilter, setStockFilter] = useState("all");
 
   const load = useCallback(async () => {
-    const result = await api.getAvailability(token, { includeHidden: true });
-    setAvailability(result.data || []);
+    const [availabilityResult, warehouseStockResult] = await Promise.all([
+      api.getAvailability(token, { includeHidden: true }),
+      api.getWarehouseStock(token),
+    ]);
+
+    setAvailability(availabilityResult.data || []);
+    setWarehouseStock((warehouseStockResult.data || []).filter((row) => Number(row.quantity || 0) > 0));
   }, [token]);
 
   useEffect(() => {
@@ -34,6 +54,18 @@ export default function StockPage() {
   }, [load, showToast]);
 
   useDataRefresh(load, "stock");
+
+  const warehousesByProductId = useMemo(() => {
+    const groups = new Map();
+
+    warehouseStock.forEach((row) => {
+      const key = String(row.finished_good_id);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    });
+
+    return groups;
+  }, [warehouseStock]);
 
   const filteredAvailability = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -50,16 +82,22 @@ export default function StockPage() {
 
         if (!q) return true;
 
+        const warehouses = formatWarehouses(
+          warehousesByProductId.get(String(item.id)) || [],
+          item.unit || "pairs"
+        );
+
         return (
           (item.name || "").toLowerCase().includes(q) ||
           (item.article_code || "").toLowerCase().includes(q) ||
           (item.sole_code || "").toLowerCase().includes(q) ||
           (item.color || "").toLowerCase().includes(q) ||
-          (item.size || "").toLowerCase().includes(q)
+          (item.size || "").toLowerCase().includes(q) ||
+          warehouses.toLowerCase().includes(q)
         );
       })
       .sort((a, b) => Number(b.available_qty || 0) - Number(a.available_qty || 0));
-  }, [availability, search, searchId, stockFilter]);
+  }, [availability, search, searchId, stockFilter, warehousesByProductId]);
 
   const exportToExcel = () => {
     if (!filteredAvailability.length) {
@@ -75,11 +113,16 @@ export default function StockPage() {
       "FG.ID": item.id || "",
       Product: item.name || "",
       Article: item.article_code || "",
+      Warehouse: formatWarehouses(
+        warehousesByProductId.get(String(item.id)) || [],
+        item.unit || "pairs"
+      ),
       Color: item.color || "",
       Size: item.size || "",
       "Physical Stock": Number(item.physical_stock || 0),
       Reserved: Number(item.reserved_qty || 0),
       Available: Number(item.available_qty || 0),
+      CTN: getCartons(item.available_qty, item),
       Unit: item.unit || "",
       Visibility: Number(item.is_visible) === 1 ? "Displayed" : "On hold",
       Status: Number(item.available_qty || 0) > 0 ? "Available" : "Out",
@@ -91,11 +134,13 @@ export default function StockPage() {
       { wch: 8  }, // FG.ID
       { wch: 32 }, // Product
       { wch: 14 }, // Article
+      { wch: 30 }, // Warehouse
       { wch: 14 }, // Color
       { wch: 10 }, // Size
       { wch: 14 }, // Physical Stock
       { wch: 12 }, // Reserved
       { wch: 12 }, // Available
+      { wch: 10 }, // CTN
       { wch: 8  }, // Unit
       { wch: 12 }, // Visibility
       { wch: 12 }, // Status
@@ -116,6 +161,7 @@ export default function StockPage() {
 const totalPhysical  = filteredAvailability.reduce((sum, item) => sum + Number(item.physical_stock || 0), 0);
 const totalReserved  = filteredAvailability.reduce((sum, item) => sum + Number(item.reserved_qty  || 0), 0);
 const totalAvailable = filteredAvailability.reduce((sum, item) => sum + Number(item.available_qty || 0), 0);
+const totalAvailableCartons = filteredAvailability.reduce((sum, item) => sum + getCartons(item.available_qty, item), 0);
   return (
     <div className="space-y-6">
       <PageHeader
@@ -164,6 +210,18 @@ const totalAvailable = filteredAvailability.reduce((sum, item) => sum + Number(i
               { key: "id", label: "FG.ID" },
               { key: "name", label: "Product" },
               { key: "article_code", label: "Article" },
+              {
+                key: "warehouse",
+                label: "Warehouse",
+                render: (row) => (
+                  <div className="max-w-56 text-xs text-slate-500">
+                    {formatWarehouses(
+                      warehousesByProductId.get(String(row.id)) || [],
+                      row.unit || "pairs"
+                    )}
+                  </div>
+                ),
+              },
               { key: "size", label: "Size" },
               { key: "color", label: "Color" },
               {
@@ -180,6 +238,11 @@ const totalAvailable = filteredAvailability.reduce((sum, item) => sum + Number(i
                 key: "available_qty",
                 label: "Available",
                 render: (row) => `${formatNumber(row.available_qty)} ${row.unit}`,
+              },
+              {
+                key: "ctn",
+                label: "CTN",
+                render: (row) => formatNumber(getCartons(row.available_qty, row)),
               },
               {
                 key: "visibility",
@@ -213,6 +276,9 @@ const totalAvailable = filteredAvailability.reduce((sum, item) => sum + Number(i
   </span>
   <span className="text-sm text-slate-500">
     Available: <span className="font-medium text-green-700">{formatNumber(totalAvailable)}</span>
+  </span>
+  <span className="text-sm text-slate-500">
+    CTN: <span className="font-medium text-green-700">{formatNumber(totalAvailableCartons)}</span>
   </span>
 </div>
         </div>

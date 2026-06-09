@@ -49,6 +49,13 @@ const escapeExcelCell = (value) =>
 
 const noScroll = (e) => e.target.blur();
 
+const getCartons = (quantity, item) => {
+  const pairs = Number(quantity || 0);
+  const pairsPerCarton = Number(item.inner_boxes_per_outer_box || 0);
+
+  return pairsPerCarton > 0 ? Math.floor(pairs / pairsPerCarton) : 0;
+};
+
 export default function WareHousePage() {
   const { token, user } = useAuth();
   const { showToast } = useToast();
@@ -75,7 +82,7 @@ export default function WareHousePage() {
       api.getWarehouses(token, true),
       api.getFinishedGoods(token),
       api.getWarehouseStock(token, search),
-      api.getWarehouseMovements(token, { limit: 100 }),
+      api.getWarehouseMovements(token),
     ]);
 
     setWarehouses(warehouseResult.data || []);
@@ -284,6 +291,7 @@ export default function WareHousePage() {
       ["Size", "size"],
       ["Warehouse", "warehouse_name"],
       ["Qty", "quantity"],
+      ["CTN", "ctn"],
       ["Unit", "unit"],
       ["Total Stock", "total_product_quantity"],
       ["Updated By", "updated_by_name"],
@@ -297,7 +305,12 @@ export default function WareHousePage() {
       .map((row) => {
         const cells = columns
           .map(([, key]) => {
-            const value = key === "updated_at" ? formatDate(row[key]) : row[key];
+            const value =
+              key === "updated_at"
+                ? formatDate(row[key])
+                : key === "ctn"
+                ? getCartons(row.quantity, row)
+                : row[key];
             return `<td>${escapeExcelCell(value)}</td>`;
           })
           .join("");
@@ -345,6 +358,7 @@ export default function WareHousePage() {
   };
 
   const totalWarehouseStock = stockRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+  const totalWarehouseCartons = stockRows.reduce((sum, row) => sum + getCartons(row.quantity, row), 0);
 
   return (
     <div className="space-y-6">
@@ -385,6 +399,11 @@ export default function WareHousePage() {
                 render: (row) => `${formatNumber(row.quantity)} ${row.unit || "pairs"}`,
               },
               {
+                key: "ctn",
+                label: "CTN",
+                render: (row) => formatNumber(getCartons(row.quantity, row)),
+              },
+              {
                 key: "total_product_quantity",
                 label: "Total Stock",
                 render: (row) => `${formatNumber(row.total_product_quantity)} ${row.unit || "pairs"}`,
@@ -399,6 +418,10 @@ export default function WareHousePage() {
             <span className="text-sm text-slate-500">
               Total stock:{" "}
               <span className="font-medium text-green-700">{formatNumber(totalWarehouseStock)}</span>
+            </span>
+            <span className="ml-6 text-sm text-slate-500">
+              CTN:{" "}
+              <span className="font-medium text-green-700">{formatNumber(totalWarehouseCartons)}</span>
             </span>
           </div>
         </div>

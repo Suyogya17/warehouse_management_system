@@ -179,6 +179,7 @@ const getStock = async (req, res, next) => {
               fg.color,
               fg.size,
               fg.unit,
+              fg.inner_boxes_per_outer_box,
               fg.quantity AS total_product_quantity,
               w.name AS warehouse_name,
               created.name AS created_by_name,
@@ -219,9 +220,6 @@ const getMovements = async (req, res, next) => {
       params.push(String(req.query.movement_type).toUpperCase());
     }
 
-    const limit = Math.min(Number(req.query.limit || 100), 500);
-    const offset = Math.max(Number(req.query.offset || 0), 0);
-
     const result = await query(
       `SELECT m.*,
               fg.name AS product_name,
@@ -236,9 +234,8 @@ const getMovements = async (req, res, next) => {
        JOIN warehouses w ON w.id = m.warehouse_id
        LEFT JOIN users u ON u.id = m.created_by
        ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
-       ORDER BY m.created_at DESC, m.id DESC
-       LIMIT ? OFFSET ?`,
-      [...params, limit, offset]
+       ORDER BY m.created_at DESC, m.id DESC`,
+      params  // no limit/offset
     );
 
     return res.json({ success: true, count: result.rows.length, data: result.rows });
