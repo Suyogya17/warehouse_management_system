@@ -8,13 +8,28 @@ const STORAGE_KEY = "store-management-auth";
 const normalizeUser = (user) =>
   user ? { ...user, role: normalizeRole(user.role) } : user;
 
+const decodeJwtPayload = (token) => {
+  const payload = token?.split(".")?.[1];
+  if (!payload) return null;
+
+  const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
+
+  return JSON.parse(atob(padded));
+};
+
 export const AuthProvider = ({ children }) => {
   const [auth, setAuth] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (!saved) return { token: "", user: null };
 
-    const parsed = JSON.parse(saved);
-    return { ...parsed, user: normalizeUser(parsed.user) };
+    try {
+      const parsed = JSON.parse(saved);
+      return { ...parsed, user: normalizeUser(parsed.user) };
+    } catch {
+      localStorage.removeItem(STORAGE_KEY);
+      return { token: "", user: null };
+    }
   });
   const [loading, setLoading] = useState(false);
 
@@ -31,21 +46,23 @@ export const AuthProvider = ({ children }) => {
     return () => window.removeEventListener("store-management:auth-expired", handleExpiredAuth);
   }, []);
 
-   // =========================
-  // 🔥 AUTO LOGOUT (IMPORTANT)
-  // =========================
+  const logout = useCallback(() => {
+    setAuth({ token: "", user: null });
+    localStorage.removeItem(STORAGE_KEY);
+  }, []);
+
   useEffect(() => {
     if (!auth.token) return;
 
     try {
-      const payload = JSON.parse(atob(auth.token.split(".")[1]));
+      const payload = decodeJwtPayload(auth.token);
+      if (!payload?.exp) return;
+
       const expiry = payload.exp * 1000;
 
       const timeout = expiry - Date.now();
 
-      // already expired → logout immediately
       if (timeout <= 0) {
-        logout();
         return;
       }
 
@@ -54,10 +71,10 @@ export const AuthProvider = ({ children }) => {
       }, timeout);
 
       return () => clearTimeout(timer);
-    } catch (err) {
-      logout(); // invalid token → force logout
+    } catch {
+      // Let the backend remain the source of truth; api.js logs out on 401.
     }
-  }, [auth.token]);
+  }, [auth.token, logout]);
 
   // ✅ Wrap functions in useCallback to stabilize references
   const login = useCallback(async (email, password, expectedRole) => {
@@ -73,11 +90,6 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  const logout = useCallback(() => {
-    setAuth({ token: "", user: null });
-    localStorage.removeItem(STORAGE_KEY);
   }, []);
 
   const refreshProfile = useCallback(async () => {

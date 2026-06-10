@@ -9,6 +9,8 @@ import { useDataRefresh } from "../../hooks/useDataRefresh";
 import { api } from "../../services/api";
 import { formatNumber } from "../../utils/format";
 
+const getRawMaterialQty = (item) => Number(item.quantity ?? item.available_qty ?? 0);
+
 export default function MemberStockPage() {
   const { token } = useAuth();
   const { showToast } = useToast();
@@ -77,7 +79,7 @@ export default function MemberStockPage() {
 
     return rawMaterialAvailability
       .filter((item) => {
-        const available = Number(item.available_qty || 0);
+        const available = getRawMaterialQty(item);
 
         if (rawMaterialStockFilter === "available" && available <= 0) return false;
         if (rawMaterialStockFilter === "out" && available > 0) return false;
@@ -90,7 +92,7 @@ export default function MemberStockPage() {
           (item.color || "").toLowerCase().includes(q)
         );
       })
-      .sort((a, b) => Number(b.available_qty || 0) - Number(a.available_qty || 0));
+      .sort((a, b) => getRawMaterialQty(b) - getRawMaterialQty(a));
   }, [rawMaterialAvailability, rawMaterialSearch, rawMaterialStockFilter]);
 
   return (
@@ -193,8 +195,8 @@ export default function MemberStockPage() {
                 key: "status",
                 label: "Status",
                 render: (row) => (
-                  <StatusBadge tone={Number(row.available_qty || 0) > 0 ? "success" : "danger"}>
-                    {Number(row.available_qty || 0) > 0 ? "Available" : "Out"}
+                  <StatusBadge tone={getRawMaterialQty(row) > 0 ? "success" : "danger"}>
+                    {getRawMaterialQty(row) > 0 ? "Available" : "Out"}
                   </StatusBadge>
                 ),
               },

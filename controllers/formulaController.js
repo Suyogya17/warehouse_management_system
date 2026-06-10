@@ -50,17 +50,26 @@ const getAll = async (req, res, next) => {
        ORDER BY f.id`
     );
 
-    // Attach inputs to each formula
-    const withInputs = await Promise.all(
-      formulas.rows.map(async (formula) => {
-        const inputs = await query(
-          `${formulaInputSelect(supportsConsumptionBasis)}
-           WHERE fi.formula_id = ?
-           ORDER BY fi.id`,
-          [formula.id]
-        );
-        return { ...formula, inputs: inputs.rows };
-      })
+    const formulaIds = formulas.rows.map((formula) => formula.id);
+    const inputsByFormulaId = new Map();
+
+    if (formulaIds.length) {
+      const inputs = await query(
+        `${formulaInputSelect(supportsConsumptionBasis)}
+         WHERE fi.formula_id IN (?)
+         ORDER BY fi.formula_id, fi.id`,
+        [formulaIds]
+      );
+
+      inputs.rows.forEach((input) => {
+        const list = inputsByFormulaId.get(input.formula_id) || [];
+        list.push(input);
+        inputsByFormulaId.set(input.formula_id, list);
+      });
+    }
+
+    const withInputs = formulas.rows.map((formula) =>
+      ({ ...formula, inputs: inputsByFormulaId.get(formula.id) || [] })
     );
 
     return res.json({ success: true, count: withInputs.length, data: withInputs });

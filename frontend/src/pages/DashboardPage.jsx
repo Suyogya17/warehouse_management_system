@@ -299,18 +299,14 @@ export default function DashboardPage() {
   const canViewDashboard = isAdmin || user.role === "MEMBER";
 
   const load = useCallback(async () => {
-    const requests = [];
-    requests.push(user.role !== "USER" ? api.getStockSummary(token) : Promise.resolve(null));
-    requests.push(api.getFinishedGoods(token));
-    requests.push(user.role === "ADMIN" ? api.getFormulas(token) : Promise.resolve({ data: [] }));
-    requests.push(user.role !== "USER" ? api.getProductionHistory(token) : Promise.resolve({ data: [] }));
-    requests.push(user.role !== "MEMBER" ? api.getConsumptionLogs(token) : Promise.resolve({ data: [] }));
-    requests.push(user.role !== "MEMBER" ? api.getOrders(token) : Promise.resolve({ data: [] }));
-    requests.push(isAdmin || user.role === "MEMBER" ? api.getAvailability(token) : Promise.resolve({ data: [] }));
-    requests.push(isAdmin ? api.getPermissions(token) : Promise.resolve({ data: [] }));
-
-    const [stock, finishedGoods, formulas, production, consumption, orders, availability, permissions] =
-      await Promise.all(requests);
+    const stock = user.role !== "USER" ? await api.getStockSummary(token) : null;
+    const finishedGoods = await api.getFinishedGoods(token);
+    const formulas = user.role === "ADMIN" ? await api.getFormulas(token) : { data: [] };
+    const production = user.role !== "USER" ? await api.getProductionHistory(token) : { data: [] };
+    const consumption = user.role !== "MEMBER" ? await api.getConsumptionLogs(token) : { data: [] };
+    const orders = user.role !== "MEMBER" ? await api.getOrders(token) : { data: [] };
+    const availability = isAdmin || user.role === "MEMBER" ? await api.getAvailability(token) : { data: [] };
+    const permissions = isAdmin ? await api.getPermissions(token) : { data: [] };
 
     setState({
       stock,
