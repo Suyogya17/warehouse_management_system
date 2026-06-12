@@ -39,9 +39,9 @@ export default function ProductLedgerPage() {
       setLoading(true);
       const [fgRes, prodRes, ordersRes, adjRes] = await Promise.all([
         api.getFinishedGoods(token),
-        api.getProductionHistory(token),
-        api.getOrders(token),
-        api.getStockAdjustments(token),
+        api.getProductionHistory(token, { limit: 500, include_total: 0 }),
+        api.getOrders(token, { limit: 500 }),
+        api.getStockAdjustments(token, undefined, { limit: 500, include_total: 0 }),
       ]);
       setFinishedGoods(fgRes.data   || fgRes   || []);
       setProductions(  prodRes.data || prodRes || []);

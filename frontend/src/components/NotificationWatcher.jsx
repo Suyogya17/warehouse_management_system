@@ -3,7 +3,9 @@ import { api } from "../services/api";
 import { useToast } from "../context/ToastContext";
 import { normalizeRole } from "../utils/roles";
 
-const POLL_INTERVAL_MS = 30000;
+const POLL_INTERVAL_MS = 60000;
+const PRODUCT_POLL_INTERVAL_MS = 300000;
+const NOTIFICATION_ORDER_LIMIT = 50;
 const ADMIN_ROLES = ["ADMIN", "CO_ADMIN"];
 const CUSTOMER_ROLES = ["USER", "MEMBER", "ELDER"];
 
@@ -41,6 +43,8 @@ const getStatusMessage = (status, reason, updatedAt) => {
 export default function NotificationWatcher({ user, token, onNotify }) {
   const { showToast } = useToast();
   const audioContextRef = useRef(null);
+  const pollingRef = useRef(false);
+  const lastProductPollRef = useRef(0);
   const role = normalizeRole(user?.role);
 
   const playSound = useCallback(() => {
@@ -99,7 +103,7 @@ export default function NotificationWatcher({ user, token, onNotify }) {
     let cancelled = false;
 
     const checkAdminOrders = async () => {
-      const result = await api.getOrders(token);
+      const result = await api.getOrders(token, { limit: NOTIFICATION_ORDER_LIMIT });
       const orders = result.data || [];
       const snapshot = readSnapshot(orderSnapshotKey, null);
       const currentOrderIds = orders.map((order) => Number(order.id)).filter(Boolean);
@@ -134,13 +138,19 @@ export default function NotificationWatcher({ user, token, onNotify }) {
     };
 
     const checkCustomerUpdates = async () => {
+      const now = Date.now();
+      const shouldCheckProducts = now - lastProductPollRef.current >= PRODUCT_POLL_INTERVAL_MS;
       const [ordersResult, productsResult] = await Promise.all([
-        api.getOrders(token),
-        api.getAvailability(token),
+        api.getOrders(token, { limit: NOTIFICATION_ORDER_LIMIT }),
+        shouldCheckProducts ? api.getAvailability(token) : Promise.resolve(null),
       ]);
 
+      if (shouldCheckProducts) {
+        lastProductPollRef.current = now;
+      }
+
       const orders = ordersResult.data || [];
-      const products = productsResult.data || [];
+      const products = productsResult?.data || [];
       const orderSnapshot = readSnapshot(orderSnapshotKey, null);
       const productSnapshot = readSnapshot(productSnapshotKey, null);
 
@@ -185,9 +195,9 @@ export default function NotificationWatcher({ user, token, onNotify }) {
         writeSnapshot(orderSnapshotKey, { statuses: currentStatuses });
       }
 
-      if (!productSnapshot) {
+      if (shouldCheckProducts && !productSnapshot) {
         writeSnapshot(productSnapshotKey, { productIds: currentProductIds });
-      } else {
+      } else if (shouldCheckProducts) {
         const seenProducts = new Set(productSnapshot.productIds || []);
         const newProducts = products.filter((product) => !seenProducts.has(Number(product.id)));
 
@@ -212,6 +222,9 @@ export default function NotificationWatcher({ user, token, onNotify }) {
     };
 
     const checkNotifications = async () => {
+      if (document.visibilityState === "hidden" || pollingRef.current) return;
+      pollingRef.current = true;
+
       try {
         if (ADMIN_ROLES.includes(role)) {
           await checkAdminOrders();
@@ -220,6 +233,8 @@ export default function NotificationWatcher({ user, token, onNotify }) {
         }
       } catch (error) {
         if (!cancelled) console.error("Notification check failed:", error);
+      } finally {
+        pollingRef.current = false;
       }
     };
 

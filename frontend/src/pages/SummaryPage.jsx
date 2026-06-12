@@ -78,7 +78,7 @@ export default function SummaryPage() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const result = await api.getOrders(token);
+      const result = await api.getOrders(token, { limit: 500 });
       setOrders(result.data || []);
     } catch (error) {
       showToast({

@@ -96,30 +96,6 @@ export default function UserOrderPage() {
     localStorage.setItem("userCart", JSON.stringify(cart));
   }, [cart, cartLoaded]);
 
-  // ____DELIVERY NOTE NUMBER _________________________
-  
-  const deliveryNoteNumbersByOrderId = useMemo(() => {
-  const sorted = [...orders].sort((a, b) => {
-    const aDate = new Date(a.confirmed_at || a.created_at).getTime();
-    const bDate = new Date(b.confirmed_at || b.created_at).getTime();
-
-    if (aDate !== bDate) return aDate - bDate;
-    return Number(a.id) - Number(b.id);
-  });
-
-  return new Map(
-    sorted.map((order, index) => {
-      const orderId = Number(order.id);
-      // For order ID 25 and above, use new system: DN-1965, DN-1966, etc.
-      if (orderId >= 25) {
-        return [orderId, `DN-${1940 + orderId}`];
-      }
-      // For orders before ID 25, keep old sequential system
-      return [orderId, `DN-${1001 + index}`];
-    })
-  );
-}, [orders]);
-
   // ─── TOGGLE ORDER TYPE ────────────────────────────
 
   const toggleOrderBy = (id) => {
@@ -196,7 +172,7 @@ export default function UserOrderPage() {
     const fetchOrders = async () => {
       try {
         setLoadingOrders(true);
-        const res = await api.getOrders(token);
+        const res = await api.getOrders(token, { limit: 100 });
         setOrders(res.data || []);
       } catch (err) {
         showToast({
@@ -263,7 +239,7 @@ export default function UserOrderPage() {
       setCustomerName(""); setCustomerPhone(""); setCustomerAddress("");
       setPanNumber(""); setTransportName(""); setNotes(""); setErrors({});
 
-      const res = await api.getOrders(token);
+      const res = await api.getOrders(token, { limit: 100 });
       setOrders(res.data || []);
     } catch (err) {
       const shortages = err.data?.shortages;
@@ -588,9 +564,7 @@ export default function UserOrderPage() {
   key: "confirmed_by_name",
   label: "Confirmed By / DN",
   render: (row) => {
-    const deliveryNoteNumber =
-      deliveryNoteNumbersByOrderId.get(Number(row.id)) ||
-      `DN-${1000 + Number(row.id)}`;
+    const deliveryNoteNumber = row.delivery_note_number || "-";
 
     return (
       <>

@@ -31,7 +31,7 @@
     const load = useCallback(async () => {
       const [formulasResult, historyResult, warehousesResult] = await Promise.all([
         api.getFormulas(token),
-        api.getProductionHistory(token),
+        api.getProductionHistory(token, { limit: 100, include_total: 0 }),
         api.getWarehouses(token),
       ]);
       setFormulas(formulasResult.data || []);

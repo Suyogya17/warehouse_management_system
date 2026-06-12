@@ -1,17 +1,34 @@
 const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
+const { getPagination, shouldIncludeTotal } = require('../utils/pagination');
 
 // ─── LIST ALL LOGS ────────────────────────────────────────────────────────────
 const getAll = async (req, res, next) => {
   try {
+    const { limit, offset } = getPagination(req.query, { defaultLimit: 100, maxLimit: 500 });
+
     const result = await query(
       `SELECT cl.*, rm.name, rm.article_code, rm.color, rm.unit, u.name AS logged_by_name
        FROM consumption_logs cl
        JOIN raw_materials rm ON rm.id = cl.raw_material_id
        LEFT JOIN users u ON u.id = cl.logged_by
-       ORDER BY cl.created_at DESC`
+       ORDER BY cl.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [limit, offset]
     );
-    return res.json({ success: true, count: result.rows.length, data: result.rows });
+
+    const total = shouldIncludeTotal(req.query)
+      ? await query('SELECT COUNT(*) AS count FROM consumption_logs')
+      : null;
+
+    return res.json({
+      success: true,
+      total: total ? parseInt(total.rows[0].count, 10) : undefined,
+      count: result.rows.length,
+      limit,
+      offset,
+      data: result.rows,
+    });
   } catch (err) {
     next(err);
   }

@@ -51,7 +51,7 @@ export default function OrdersPage() {
   // ── single load function — fetches orders, availability, and warehouse stock ──
   const load = useCallback(async () => {
     const [ordersResult, availabilityResult, warehouseStockResult] = await Promise.all([
-      api.getOrders(token),
+      api.getOrders(token, { limit: 200 }),
       api.getAvailability(token),
       api.getWarehouseStock(token),
     ]);

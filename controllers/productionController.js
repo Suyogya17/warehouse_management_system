@@ -2,6 +2,7 @@ const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { productionHistorySelect } = require('../utils/queryBuilders');
 const { hasColumn } = require('../utils/schemaSupport');
+const { getPagination, shouldIncludeTotal } = require('../utils/pagination');
 
 const packagingSelect = (supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox) => `
   ${supportsInnerBoxPerPair ? 'fg.inner_box_per_pair' : 'CAST(1 AS DECIMAL(10,2)) AS inner_box_per_pair'},
@@ -409,7 +410,7 @@ const runProduction = async (req, res, next) => {
 // ─── PRODUCTION HISTORY ───────────────────────────────────────────────────────
 const getHistory = async (req, res, next) => {
   try {
-    const { limit = 50, offset = 0 } = req.query;
+    const { limit, offset } = getPagination(req.query, { defaultLimit: 50, maxLimit: 200 });
 
     const result = await query(
       `${productionHistorySelect}
@@ -418,12 +419,16 @@ const getHistory = async (req, res, next) => {
       [limit, offset]
     );
 
-    const total = await query('SELECT COUNT(*) AS count FROM production');
+    const total = shouldIncludeTotal(req.query)
+      ? await query('SELECT COUNT(*) AS count FROM production')
+      : null;
 
     return res.json({
       success: true,
-      total:   parseInt(total.rows[0].count),
+      total:   total ? parseInt(total.rows[0].count, 10) : undefined,
       count:   result.rows.length,
+      limit,
+      offset,
       data:    result.rows,
     });
   } catch (err) {

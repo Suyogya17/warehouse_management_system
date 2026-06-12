@@ -1,5 +1,6 @@
 const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
+const { getPagination, shouldIncludeTotal } = require('../utils/pagination');
 
 const ACTIVE_ROLES = ['ADMIN', 'CO_ADMIN'];
 const MOVEMENT_TYPES = new Set([
@@ -202,6 +203,7 @@ const getStock = async (req, res, next) => {
 
 const getMovements = async (req, res, next) => {
   try {
+    const { limit, offset } = getPagination(req.query, { defaultLimit: 100, maxLimit: 500 });
     const params = [];
     const filters = [];
 
@@ -234,11 +236,28 @@ const getMovements = async (req, res, next) => {
        JOIN warehouses w ON w.id = m.warehouse_id
        LEFT JOIN users u ON u.id = m.created_by
        ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
-       ORDER BY m.created_at DESC, m.id DESC`,
-      params  // no limit/offset
+       ORDER BY m.created_at DESC, m.id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
     );
 
-    return res.json({ success: true, count: result.rows.length, data: result.rows });
+    const total = shouldIncludeTotal(req.query)
+      ? await query(
+          `SELECT COUNT(*) AS count
+           FROM finished_good_warehouse_movements m
+           ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}`,
+          params
+        )
+      : null;
+
+    return res.json({
+      success: true,
+      total: total ? parseInt(total.rows[0].count, 10) : undefined,
+      count: result.rows.length,
+      limit,
+      offset,
+      data: result.rows,
+    });
   } catch (err) {
     next(err);
   }

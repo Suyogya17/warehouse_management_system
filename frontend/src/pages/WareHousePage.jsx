@@ -82,7 +82,7 @@ export default function WareHousePage() {
       api.getWarehouses(token, true),
       api.getFinishedGoods(token),
       api.getWarehouseStock(token, search),
-      api.getWarehouseMovements(token),
+      api.getWarehouseMovements(token, { limit: 100, include_total: 0 }),
     ]);
 
     setWarehouses(warehouseResult.data || []);

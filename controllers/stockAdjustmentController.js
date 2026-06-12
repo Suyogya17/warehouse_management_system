@@ -1,10 +1,12 @@
 const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
+const { getPagination, shouldIncludeTotal } = require('../utils/pagination');
 
 // GET /api/stock-adjustments
 const getAdjustments = async (req, res, next) => {
   try {
     const { finished_good_id } = req.query;
+    const { limit, offset } = getPagination(req.query, { defaultLimit: 100, maxLimit: 500 });
     let sql = `
       SELECT sa.*,
              fg.name AS finished_good_name,
@@ -19,10 +21,26 @@ const getAdjustments = async (req, res, next) => {
       sql += ' WHERE sa.finished_good_id = ?';
       params.push(finished_good_id);
     }
-    sql += ' ORDER BY sa.adjusted_at DESC';
+    sql += ' ORDER BY sa.adjusted_at DESC LIMIT ? OFFSET ?';
 
-    const result = await query(sql, params);
-    return res.json({ success: true, data: result.rows });
+    const result = await query(sql, [...params, limit, offset]);
+    const total = shouldIncludeTotal(req.query)
+      ? await query(
+          `SELECT COUNT(*) AS count
+           FROM stock_adjustments sa
+           ${finished_good_id ? 'WHERE sa.finished_good_id = ?' : ''}`,
+          finished_good_id ? [finished_good_id] : []
+        )
+      : null;
+
+    return res.json({
+      success: true,
+      total: total ? parseInt(total.rows[0].count, 10) : undefined,
+      count: result.rows.length,
+      limit,
+      offset,
+      data: result.rows,
+    });
   } catch (err) {
     next(err);
   }

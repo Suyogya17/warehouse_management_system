@@ -1,6 +1,12 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || "https://back.nepchawarehouse.com/api";
+const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 30000);
 
 export const APP_BASE_URL = API_BASE_URL.replace(/\/api$/, "");
+
+const buildQueryString = (params = {}) =>
+  new URLSearchParams(
+    Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== "")
+  ).toString();
 
 const buildHeaders = (token, isJson = true) => {
   const headers = {};
@@ -35,16 +41,30 @@ const parseResponse = async (response) => {
 
 export const apiRequest = async (path, options = {}, token) => {
   const isFormData = options.body instanceof FormData;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs || API_TIMEOUT_MS);
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      ...buildHeaders(token, options.body !== undefined && !isFormData),
-      ...(options.headers || {}),
-    },
-  });
+  try {
+    const { timeoutMs, ...fetchOptions } = options;
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...fetchOptions,
+      signal: controller.signal,
+      headers: {
+        ...buildHeaders(token, options.body !== undefined && !isFormData),
+        ...(options.headers || {}),
+      },
+    });
 
-  return parseResponse(response);
+    return parseResponse(response);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("Request timed out. Please try again.");
+    }
+
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 };
 
 export const api = {
@@ -161,8 +181,11 @@ export const api = {
   deleteFormula: (id, token) =>
     apiRequest(`/formulas/${id}`, { method: "DELETE" }, token),
 
-  getProductionHistory: (token) =>
-    apiRequest("/productions", {}, token),
+  getProductionHistory: (token, options = {}) => {
+    const query = buildQueryString(options);
+
+    return apiRequest(`/productions${query ? `?${query}` : ""}`, {}, token);
+  },
 
   checkProduction: (payload, token) =>
     apiRequest(
@@ -178,8 +201,11 @@ export const api = {
       token
     ),
 
-  getConsumptionLogs: (token) =>
-    apiRequest("/consumption", {}, token),
+  getConsumptionLogs: (token, options = {}) => {
+    const query = buildQueryString(options);
+
+    return apiRequest(`/consumption${query ? `?${query}` : ""}`, {}, token);
+  },
 
   logConsumption: (payload, token) =>
     apiRequest(
@@ -204,7 +230,11 @@ export const api = {
 
   getPermissions: (token) => apiRequest("/permissions", {}, token),
 
-  getOrders: (token) => apiRequest("/orders", {}, token),
+  getOrders: (token, options = {}) => {
+    const query = buildQueryString(options);
+
+    return apiRequest(`/orders${query ? `?${query}` : ""}`, {}, token);
+  },
 
   getAvailability: (token, options = {}) =>
     apiRequest(
@@ -253,12 +283,11 @@ export const api = {
   deleteOrder: (id, token) =>
     apiRequest(`/orders/${id}`, { method: "DELETE" }, token),
 
-  getStockAdjustments: (token, finished_good_id) =>
-  apiRequest(
-    `/stock-adjustments${finished_good_id ? `?finished_good_id=${finished_good_id}` : ''}`,
-    {},
-    token
-  ),
+  getStockAdjustments: (token, finished_good_id, options = {}) => {
+    const query = buildQueryString({ finished_good_id, ...options });
+
+    return apiRequest(`/stock-adjustments${query ? `?${query}` : ""}`, {}, token);
+  },
 
 createStockAdjustment: (token, payload) =>
   apiRequest(
@@ -312,9 +341,7 @@ deleteStockAdjustment: (id, token) =>
     ),
 
   getWarehouseMovements: (token, params = {}) => {
-    const query = new URLSearchParams(
-      Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== "")
-    ).toString();
+    const query = buildQueryString(params);
 
     return apiRequest(`/warehouses/movements${query ? `?${query}` : ""}`, {}, token);
   },

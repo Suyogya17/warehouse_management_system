@@ -51,7 +51,7 @@ export default function ConsumptionPage() {
       await Promise.all([
         api.getRawMaterials(token),
         api.getFinishedGoods(token),
-        api.getConsumptionLogs(token),
+        api.getConsumptionLogs(token, { limit: 100, include_total: 0 }),
       ]);
 
     setMaterials(materialsResult.data || []);

@@ -66,7 +66,6 @@ export default function FinishedGoodsPage() {
     const [goodsResult, materialsResult] = await Promise.all([
       api.getFinishedGoods(token),
       api.getRawMaterials(token),
-      api.getProductionHistory(token),
     ]);
     setItems(goodsResult.data || []);
     setMaterials(materialsResult.data || []);

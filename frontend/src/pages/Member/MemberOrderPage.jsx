@@ -52,7 +52,7 @@ export default function MemberOrdersPage() {
 
   const load = useCallback(async () => {
     try {
-      const result = await api.getOrders(token);
+      const result = await api.getOrders(token, { limit: 100 });
 
       setOrders(result.data || result || []);
     } catch (error) {
