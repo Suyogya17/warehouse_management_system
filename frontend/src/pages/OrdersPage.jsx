@@ -456,8 +456,8 @@ export default function OrdersPage() {
             <thead>
               <tr>
                 <th width="3%">SN</th>
-                <th width="7%">Size</th>
-                <th>Description of Goods</th>
+                <th width="9%">Size</th>
+                <th width="30%">Description of Goods</th>
                 <th width="9%">Warehouse</th>
                 <th width="9%">Carton</th>
                 <th width="10%">Pairs</th>
@@ -471,7 +471,7 @@ export default function OrdersPage() {
           <table class="totals">
             <tr>
               <td class="label" width="55%">Total</td>
-              // <td class="value" width="18%"></td>
+               <td class="value" width="18%"></td>
               <td class="value" width="16%">${formatPrintNumber(totalCartons)}</td>
               <td class="value" width="11%">${formatPrintNumber(totalPairs)} pairs</td>
             </tr>
@@ -488,7 +488,8 @@ export default function OrdersPage() {
             </div>
             <div>
               ___________________<br/>
-              Printed By (${escapeHtml(user?.name || "User")})
+              Printed By </br> 
+              (${escapeHtml(user?.name || "User")})
             </div>
           </div>
 

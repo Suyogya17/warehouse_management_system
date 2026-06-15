@@ -1,11 +1,12 @@
 const router = require('express').Router();
 const ctrl = require('../controllers/orderController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
+const { cacheResponse } = require('../middleware/cacheMiddleware');
 
 router.use(authenticate);
 
-router.get('/', ctrl.getAll);
-router.get('/availability', ctrl.getAvailability);
+router.get('/', cacheResponse(5000), ctrl.getAll);
+router.get('/availability', cacheResponse(5000), ctrl.getAvailability);
 router.post('/', authorize('ADMIN','CO_ADMIN', 'USER'), ctrl.create);
 router.put('/:id/status', authorize('ADMIN', 'CO_ADMIN'), ctrl.updateStatus);
 

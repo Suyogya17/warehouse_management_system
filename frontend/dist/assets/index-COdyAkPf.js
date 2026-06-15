@@ -375,8 +375,8 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
             <thead>
               <tr>
                 <th width="3%">SN</th>
-                <th width="7%">Size</th>
-                <th>Description of Goods</th>
+                <th width="9%">Size</th>
+                <th width="30%">Description of Goods</th>
                 <th width="9%">Warehouse</th>
                 <th width="9%">Carton</th>
                 <th width="10%">Pairs</th>
@@ -390,7 +390,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
           <table class="totals">
             <tr>
               <td class="label" width="55%">Total</td>
-              // <td class="value" width="18%"></td>
+               <td class="value" width="18%"></td>
               <td class="value" width="16%">${q(_)}</td>
               <td class="value" width="11%">${q(k)} pairs</td>
             </tr>
@@ -407,7 +407,8 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
             </div>
             <div>
               ___________________<br/>
-              Printed By (${M((s==null?void 0:s.name)||"User")})
+              Printed By </br> 
+              (${M((s==null?void 0:s.name)||"User")})
             </div>
           </div>
 

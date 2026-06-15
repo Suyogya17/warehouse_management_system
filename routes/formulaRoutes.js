@@ -1,14 +1,15 @@
 const router = require('express').Router();
 const ctrl = require('../controllers/formulaController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
+const { cacheResponse } = require('../middleware/cacheMiddleware');
 
 router.use(authenticate);
 
 // GET  /api/formulas          - list all formulas with inputs
-router.get('/',       ctrl.getAll);
+router.get('/',       cacheResponse(15000), ctrl.getAll);
 
 // GET  /api/formulas/:id      - single formula with inputs
-router.get('/:id',    ctrl.getOne);
+router.get('/:id',    cacheResponse(15000), ctrl.getOne);
 
 // POST /api/formulas          - create formula + inputs (ADMIN only)
 router.post('/',      authorize('ADMIN', 'CO_ADMIN'), ctrl.create);

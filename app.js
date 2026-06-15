@@ -3,6 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const path = require("path");
 const db = require("./config/db");
+const { clearCache } = require("./middleware/cacheMiddleware");
 
 const authRoutes = require("./routes/authRoutes");
 const stockRoutes = require("./routes/stockRoute");
@@ -52,6 +53,14 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
+
+app.use((req, res, next) => {
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+    clearCache();
+  }
+
+  next();
+});
 
 /* ─────────────────────────────
    HEALTH CHECK
