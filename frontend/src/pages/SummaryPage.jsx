@@ -102,15 +102,17 @@ export default function SummaryPage() {
       .filter((order) => TRACKED_STATUSES.includes(order.status))
       .forEach((order) => {
         const createdBy = order.created_by_name || "Unknown";
+        const customerName = order.customer_name || "Unknown customer";
 
         (order.items || []).forEach((item) => {
           const productName = item.product_name || "Unknown product";
-          const key = [createdBy, item.finished_good_id || productName].join("::");
+          const key = [createdBy, customerName, item.finished_good_id || productName].join("::");
 
           if (!rowsByKey.has(key)) {
             rowsByKey.set(key, {
               id:              key,
               created_by_name: createdBy,
+              customer_name:   customerName,
               product_name:    productName,
               article_code:    item.article_code || "-",
               unit:            item.unit || "pairs",
@@ -158,7 +160,9 @@ export default function SummaryPage() {
       }))
       .sort((a, b) => {
         const u = a.created_by_name.localeCompare(b.created_by_name);
-        return u !== 0 ? u : a.product_name.localeCompare(b.product_name);
+        if (u !== 0) return u;
+        const c = a.customer_name.localeCompare(b.customer_name);
+        return c !== 0 ? c : a.product_name.localeCompare(b.product_name);
       });
   }, [orders, fromDate, toDate]);
 
@@ -169,6 +173,7 @@ export default function SummaryPage() {
     return summaryRows.filter((row) =>
       [
         row.created_by_name,
+        row.customer_name,
         row.product_name,
         row.article_code,
         formatWarehouseTotals(row.warehouse_totals, row.unit),
@@ -237,6 +242,7 @@ export default function SummaryPage() {
     () =>
       filteredRows.map((row) => ({
         "Created By": row.created_by_name,
+        "Customer Name": row.customer_name,
         "Date / Time": formatOrderDateTimes(row.order_date_times),
         Warehouse: formatWarehouseTotals(row.warehouse_totals, row.unit),
         Product: row.product_name,
@@ -280,6 +286,7 @@ export default function SummaryPage() {
       {},
       {
         "Created By": "Totals",
+        "Customer Name": "",
         "Pending Pairs": pageTotals.PENDING.pairs,
         "Pending Cartons": pageTotals.PENDING.cartons,
         "Confirmed Pairs": pageTotals.CONFIRMED.pairs,
@@ -297,11 +304,11 @@ export default function SummaryPage() {
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
     worksheet["!cols"] = [
-      { wch: 18 }, { wch: 24 }, { wch: 28 }, { wch: 32 },
-      { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 16 },
-      { wch: 15 }, { wch: 17 }, { wch: 13 }, { wch: 15 },
-      { wch: 15 }, { wch: 17 }, { wch: 15 }, { wch: 17 },
-      { wch: 12 }, { wch: 14 },
+      { wch: 18 }, { wch: 22 }, { wch: 24 }, { wch: 28 },
+      { wch: 32 }, { wch: 14 }, { wch: 10 }, { wch: 14 },
+      { wch: 16 }, { wch: 15 }, { wch: 17 }, { wch: 13 },
+      { wch: 15 }, { wch: 15 }, { wch: 17 }, { wch: 15 },
+      { wch: 17 }, { wch: 12 }, { wch: 14 },
     ];
 
     const workbook = XLSX.utils.book_new();
@@ -367,6 +374,7 @@ export default function SummaryPage() {
             <thead>
               <tr>
                 <th>Created By</th>
+                <th>Customer</th>
                 <th>Date / Time</th>
                 <th>Warehouse</th>
                 <th>Product</th>
@@ -381,6 +389,7 @@ export default function SummaryPage() {
               ${filteredRows.map((row) => `
                 <tr>
                   <td>${escapeHtml(row.created_by_name)}</td>
+                  <td>${escapeHtml(row.customer_name)}</td>
                   <td>${escapeHtml(formatOrderDateTimes(row.order_date_times))}</td>
                   <td>${escapeHtml(formatWarehouseTotals(row.warehouse_totals, row.unit))}</td>
                   <td>${escapeHtml(row.product_name)}</td>
@@ -394,7 +403,7 @@ export default function SummaryPage() {
             </tbody>
             <tfoot>
               <tr>
-                <td colspan="6">Totals</td>
+                <td colspan="7">Totals</td>
                 ${TRACKED_STATUSES.map((status) => `
                   <td class="num">${formatNumber(pageTotals[status].pairs)}</td>
                   <td class="num">${formatNumber(pageTotals[status].cartons)}</td>
@@ -416,6 +425,7 @@ export default function SummaryPage() {
   // ── columns ───────────────────────────────────────────────
   const columns = [
     { key: "created_by_name", label: "Created By" },
+    { key: "customer_name", label: "Customer" },
     {
       key: "order_date_times",
       label: "Date / Time",
@@ -572,7 +582,7 @@ export default function SummaryPage() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search user, product, or article..."
+            placeholder="Search user, customer, product, or article..."
             className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100 md:max-w-sm md:ml-auto"
           />
         </div>

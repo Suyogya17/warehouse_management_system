@@ -21,15 +21,19 @@ import { useDataRefresh } from "../../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../../services/api";
 import { formatNumber } from "../../utils/format";
 
-const DISPLAY_CAP = 450;
 const getAvailableQty = (product) =>
-  Math.min(DISPLAY_CAP, Number(product?.available_qty ?? product?.display_quantity ?? 0));
+  Number(product?.display_stock ?? product?.available_qty ?? product?.display_quantity ?? 0);
 
 const getGroupDisplayOrder = (variants = []) =>
   Math.min(...variants.map((variant) => Number(variant.display_order || 999999)));
 
 const getArticleKey = (item) =>
   item.article_code || item.name?.split("_")?.[0] || `product-${item.id}`;
+
+const getSeriesName = (soleCode = "") =>
+  String(soleCode)
+    .replace(/[-_\s]*sole$/i, "")
+    .trim();
 
 const sortByDisplayOrder = (a, b) => {
   const orderDiff = Number(a.display_order || 999999) - Number(b.display_order || 999999);
@@ -431,9 +435,8 @@ export default function FinishedGoodsUserPage() {
   const [items, setItems] = useState([]);
   const [cart, setCart] = useState([]);
   const [cartLoaded, setCartLoaded] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
   const [sort, setSort] = useState("display");
-  const [filters, setFilters] = useState({ search: "", size: "", stock: "all" });
+  const [filters, setFilters] = useState({ search: "", size: "", stock: "all", series: "" });
   const [currentPage, setCurrentPage] = useState(1);
 
   const productsPerPage = 12;
@@ -464,7 +467,7 @@ export default function FinishedGoodsUserPage() {
   // This endpoint returns the same product list but enriched with:
   //   physical_stock  = raw warehouse quantity
   //   reserved_qty    = sum of all PENDING/CONFIRMED/PACKED orders
-  //   available_qty   = display_quantity - reserved_qty  ← what users can actually order
+  //   display_stock   = min(product visible pairs, physical_stock - reserved_qty)
   const load = useCallback(async () => {
     const result = await api.getAvailability(token);
     setItems(result.data || []);
@@ -494,6 +497,13 @@ export default function FinishedGoodsUserPage() {
   }, [items]);
 
   const sizes = [...new Set(items.map((i) => i.size).filter(Boolean))];
+  const seriesList = useMemo(
+    () =>
+      [...new Set(items.map((item) => getSeriesName(item.sole_code)).filter(Boolean))].sort(
+        (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+      ),
+    [items]
+  );
 
   // ─── FILTER & SORT ────────────────────────────────
 
@@ -509,6 +519,8 @@ export default function FinishedGoodsUserPage() {
             // console.log("Group sample:", groupedProducts[0]?.map(v => ({ name: v.name, available_qty: v.available_qty })));
 
           const matchSize = !filters.size || item.size === filters.size;
+          const matchSeries =
+            !filters.series || getSeriesName(item.sole_code) === filters.series;
 
           // FIX: Filter by available_qty (reserved-aware), not raw quantity
           const availableQty = getAvailableQty(item);
@@ -519,7 +531,7 @@ export default function FinishedGoodsUserPage() {
               ? availableQty > 0 && availableQty < 10
               : availableQty >= 10;
 
-          return matchSearch && matchSize && matchStock;
+          return matchSearch && matchSize && matchStock && matchSeries;
           
         })
       )
@@ -594,10 +606,8 @@ export default function FinishedGoodsUserPage() {
         // Raw physical stock (for reference / admin use)
         quantity: Number(product.physical_stock ?? product.quantity ?? 0),
 
-        // FIX: Store available_qty so UserOrderPage can enforce the correct
-        // ceiling (display_quantity - reserved) in updateQty and the + button.
-        // Without this, the cart page falls back to raw quantity (e.g. 1500)
-        // instead of the actual available amount (e.g. 420).
+        // Store the user-visible stock so the cart page enforces the same ceiling.
+        display_stock: availableQty,
         available_qty: availableQty,
       },
     };
@@ -696,6 +706,19 @@ export default function FinishedGoodsUserPage() {
             </select>
 
             <select
+              value={filters.series}
+              onChange={(e) => setFilters((f) => ({ ...f, series: e.target.value }))}
+              className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            >
+              <option value="">All Series</option>
+              {seriesList.map((series) => (
+                <option key={series} value={series}>
+                  {series}
+                </option>
+              ))}
+            </select>
+
+            <select
               value={filters.stock}
               onChange={(e) => setFilters((f) => ({ ...f, stock: e.target.value }))}
               className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
@@ -706,7 +729,7 @@ export default function FinishedGoodsUserPage() {
             </select>
 
             <button
-              onClick={() => setFilters({ search: "", size: "", stock: "all" })}
+              onClick={() => setFilters({ search: "", size: "", stock: "all", series: "" })}
               className="px-4 py-2 mx-10 bg-black text-white rounded-xl text-sm font-medium hover:bg-slate-200 transition-all"
             >
               Clear

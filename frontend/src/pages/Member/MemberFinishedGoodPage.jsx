@@ -20,7 +20,7 @@ import { api, APP_BASE_URL } from "../../services/api";
 import { formatNumber } from "../../utils/format";
 
 const getAvailableQty = (product) =>
-  Number(product?.available_qty ?? product?.display_quantity ?? 0);
+  Number(product?.display_stock ?? product?.available_qty ?? product?.display_quantity ?? 0);
 
 const getGroupDisplayOrder = (variants = []) =>
   Math.min(...variants.map((variant) => Number(variant.display_order || 999999)));
@@ -272,7 +272,7 @@ export default function FinishedGoodsUserPage() {
   // This endpoint returns the same product list but enriched with:
   //   physical_stock  = raw warehouse quantity
   //   reserved_qty    = sum of all PENDING/CONFIRMED/PACKED orders
-  //   available_qty   = display_quantity - reserved_qty  ← what users can actually order
+  //   display_stock   = min(product visible pairs, physical_stock - reserved_qty)
   const load = useCallback(async () => {
     const result = await api.getAvailability(token);
     setItems(result.data || []);
@@ -398,10 +398,8 @@ export default function FinishedGoodsUserPage() {
         // Raw physical stock (for reference / admin use)
         quantity: Number(product.physical_stock ?? product.quantity ?? 0),
 
-        // FIX: Store available_qty so UserOrderPage can enforce the correct
-        // ceiling (display_quantity - reserved) in updateQty and the + button.
-        // Without this, the cart page falls back to raw quantity (e.g. 1500)
-        // instead of the actual available amount (e.g. 420).
+        // Store the user-visible stock so the cart page enforces the same ceiling.
+        display_stock: availableQty,
         available_qty: availableQty,
       },
     };

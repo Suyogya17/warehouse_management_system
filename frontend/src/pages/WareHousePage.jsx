@@ -434,7 +434,37 @@ export default function WareHousePage() {
             subtitle="Add physical locations where finished goods are kept."
             icon="box"
           >
-            <div className="border-t border-slate-100 p-5">
+            <div className="space-y-5 border-t border-slate-100 p-5">
+              <form className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]" onSubmit={saveWarehouse}>
+                <Field label="Warehouse name">
+                  <TextInput
+                    value={warehouseForm.name}
+                    onChange={(event) =>
+                      setWarehouseForm((current) => ({ ...current, name: event.target.value }))
+                    }
+                    placeholder="Main warehouse, Store room, Branch A..."
+                    required
+                  />
+                </Field>
+                <div className="flex items-end gap-2">
+                  <Button type="submit" icon={editingWarehouse ? "check" : "plus"}>
+                    {editingWarehouse ? "Update" : "Create"}
+                  </Button>
+                  {editingWarehouse ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        setEditingWarehouse(null);
+                        setWarehouseForm(emptyWarehouseForm);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  ) : null}
+                </div>
+              </form>
+
               <DataTable
                 columns={[
                   { key: "name", label: "Warehouse" },

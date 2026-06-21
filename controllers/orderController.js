@@ -3,8 +3,13 @@ const { hasColumn } = require('../utils/schemaSupport');
 
 const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'PACKED'];
 const ALL_STATUSES = [...ACTIVE_RESERVATION_STATUSES, 'DELIVERED', 'CANCELLED'];
+const DEFAULT_DISPLAY_QUANTITY = 450;
 
-const DISPLAY_CAP = 450; // ← single source of truth for the display limit
+const getProductDisplayQuantity = (product) => {
+  const value = Number(product?.display_quantity);
+
+  return Number.isFinite(value) && value >= 0 ? value : DEFAULT_DISPLAY_QUANTITY;
+};
 
 // ─── BUILD IN CLAUSE (safe placeholder expansion) ──
 const buildInClause = (values = []) => {
@@ -218,6 +223,7 @@ const getAll = async (req, res, next) => {
 const getAvailability = async (req, res, next) => {
   try {
     const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
+    const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
     const includeHidden =
       req.query.include_hidden === '1' &&
       ['ADMIN', 'CO_ADMIN'].includes(req.user.role);
@@ -259,21 +265,23 @@ const getAvailability = async (req, res, next) => {
       data: products.rows.map((p) => {
         const reserved_qty = reserved.get(p.id) || 0;
         const physical_stock = Number(p.quantity || 0);
+        const display_quantity = supportsDisplayQuantity
+          ? getProductDisplayQuantity(p)
+          : DEFAULT_DISPLAY_QUANTITY;
 
         // Step 1: actual available = physical minus reserved
         const available_qty = Math.max(0, physical_stock - reserved_qty);
 
-        // Step 2: cap what user sees at 450
-        // e.g. physical=660, reserved=300 → available=360 → user sees 360
-        //      physical=800, reserved=100 → available=700 → user sees 450
-        const display_stock = Math.min(DISPLAY_CAP, available_qty);
+        // Step 2: cap what user sees at this product's display quantity
+        const display_stock = Math.min(display_quantity, available_qty);
 
         return {
           ...p,
           physical_stock,  // 660 — actual warehouse stock
           reserved_qty,    // 300 — orders in progress
           available_qty,   // 360 — actual available (physical - reserved)
-          display_stock,   // 360 — what user sees (capped at 450)
+          display_stock,   // 360 — what user sees after the per-product cap
+          display_quantity,
         };
       }),
     });
@@ -311,8 +319,10 @@ const create = async (req, res, next) => {
     const productIds = [...new Set(items.map((i) => i.finished_good_id))];
     const { clause, params } = buildInClause(productIds);
 
+    const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
+
     let productSql = `
-      SELECT id, name, quantity
+      SELECT id, name, quantity${supportsDisplayQuantity ? ', display_quantity' : ''}
       FROM finished_goods
       WHERE is_deleted = 0
         AND is_visible = 1
@@ -366,11 +376,14 @@ const create = async (req, res, next) => {
       const p = productMap.get(id);
       const physicalStock = Number(p.quantity ?? 0);
       const reservedQty = reserved.get(id) || 0;
+      const displayQuantity = supportsDisplayQuantity
+        ? getProductDisplayQuantity(p)
+        : DEFAULT_DISPLAY_QUANTITY;
 
       // Step 1: actual available
       const available = Math.max(0, physicalStock - reservedQty);
-      // Step 2: cap at 450 — user cannot order more than they see
-      const displayAvailable = Math.min(DISPLAY_CAP, available);
+      // Step 2: cap at this product's display quantity
+      const displayAvailable = Math.min(displayQuantity, available);
 
       if (qty > displayAvailable) {
         shortages.push({

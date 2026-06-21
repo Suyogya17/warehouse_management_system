@@ -156,6 +156,13 @@ export const api = {
       token
     ),
 
+  updateFinishedGoodDisplayQuantity: (id, displayQuantity, token) =>
+    apiRequest(
+      `/finished-goods/${id}/display-quantity`,
+      { method: "PUT", body: JSON.stringify({ display_quantity: displayQuantity }) },
+      token
+    ),
+
   deleteFinishedGood: (id, token) =>
     apiRequest(`/finished-goods/${id}`, { method: "DELETE" }, token),
 

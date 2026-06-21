@@ -24,6 +24,9 @@ const formatWarehouses = (warehouses = [], unit = "pairs") =>
         .join(", ")
     : "-";
 
+const getWarehouseTotal = (warehouses = []) =>
+  warehouses.reduce((sum, warehouse) => sum + Number(warehouse.quantity || 0), 0);
+
 export default function StockPage() {
   const { token } = useAuth();
   const { showToast } = useToast();
@@ -120,6 +123,7 @@ export default function StockPage() {
       Color: item.color || "",
       Size: item.size || "",
       "Physical Stock": Number(item.physical_stock || 0),
+      "Warehouse Total": getWarehouseTotal(warehousesByProductId.get(String(item.id)) || []),
       Reserved: Number(item.reserved_qty || 0),
       Available: Number(item.available_qty || 0),
       CTN: getCartons(item.available_qty, item),
@@ -138,6 +142,7 @@ export default function StockPage() {
       { wch: 14 }, // Color
       { wch: 10 }, // Size
       { wch: 14 }, // Physical Stock
+      { wch: 16 }, // Warehouse Total
       { wch: 12 }, // Reserved
       { wch: 12 }, // Available
       { wch: 10 }, // CTN
@@ -226,8 +231,30 @@ const totalAvailableCartons = filteredAvailability.reduce((sum, item) => sum + g
               { key: "color", label: "Color" },
               {
                 key: "physical_stock",
-                label: "Physical",
+                label: "Product Stock",
                 render: (row) => `${formatNumber(row.physical_stock)} ${row.unit}`,
+              },
+              {
+                key: "warehouse_total",
+                label: "Warehouse Total",
+                render: (row) => {
+                  const warehouseTotal = getWarehouseTotal(
+                    warehousesByProductId.get(String(row.id)) || []
+                  );
+                  const productStock = Number(row.physical_stock || 0);
+                  const difference = warehouseTotal - productStock;
+
+                  return (
+                    <div className="space-y-1">
+                      <p>{formatNumber(warehouseTotal)} {row.unit}</p>
+                      {difference !== 0 ? (
+                        <StatusBadge tone="warning">
+                          {difference > 0 ? "+" : ""}{formatNumber(difference)} mismatch
+                        </StatusBadge>
+                      ) : null}
+                    </div>
+                  );
+                },
               },
               {
                 key: "reserved_qty",

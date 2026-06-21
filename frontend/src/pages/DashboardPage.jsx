@@ -6,17 +6,23 @@ import ProductImageGallery from "../components/ProductImageGallery";
 import StatCard from "../components/StatCard";
 
 import { useAuth } from "../context/AuthContext";
-import { useDataRefresh } from "../hooks/useDataRefresh";
+import { useToast } from "../context/ToastContext";
+import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber } from "../utils/format";
 
 const getAvailableQty = (product) =>
   Number(product?.available_qty ?? product?.display_quantity ?? product?.quantity ?? 0);
 
+const getSeriesName = (soleCode = "") =>
+  String(soleCode)
+    .replace(/[-_\s]*sole$/i, "")
+    .trim();
+
 // ─────────────────────────────────────────────────────────────
-// ProductCard — read-only, no cart, with lightbox
+// ProductCard — dashboard product card with lightbox
 // ─────────────────────────────────────────────────────────────
-function ProductCard({ variants = [] }) {
+function ProductCard({ variants = [], canManageVisibility = false, onToggleVisibility }) {
   const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
 
   useEffect(() => {
@@ -33,6 +39,7 @@ function ProductCard({ variants = [] }) {
   const availableQty = getAvailableQty(selectedVariant);
   const isLowStock   = availableQty > 0 && availableQty < 10;
   const isOutOfStock = availableQty <= 0;
+  const isHidden = Number(selectedVariant.is_visible) !== 1;
   const isNew =
     selectedVariant.created_at &&
     new Date(selectedVariant.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -61,6 +68,12 @@ function ProductCard({ variants = [] }) {
           {isNew ? (
             <span className="bg-indigo-500 text-white text-[10px] sm:text-xs px-2 py-1 rounded-full font-semibold">NEW</span>
           ) : <div />}
+          {isHidden && (
+            <span className="bg-amber-500 text-white text-[10px] sm:text-xs px-2 py-1 rounded-full font-semibold flex items-center gap-1">
+              <EyeOff size={12} />
+              Hidden
+            </span>
+          )}
         </div>
         {isOutOfStock && (
           <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
@@ -85,6 +98,11 @@ function ProductCard({ variants = [] }) {
             {isOutOfStock ? "Out" : isLowStock ? "Low" : "In Stock"}
           </span>
         </div>
+        {selectedVariant.sole_code && (
+          <div className="text-xs text-slate-600">
+            Sole: <span className="font-semibold">{selectedVariant.sole_code}</span>
+          </div>
+        )}
         {selectedVariant.size && (
           <div className="text-xs text-slate-600">Size: <span className="font-semibold">{selectedVariant.size}</span></div>
         )}
@@ -111,6 +129,19 @@ function ProductCard({ variants = [] }) {
             </div>
           )}
         </div>
+        {canManageVisibility && (
+          <button
+            type="button"
+            onClick={() => onToggleVisibility?.(selectedVariant)}
+            className={`mt-1 rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              isHidden
+                ? "bg-indigo-500 text-white hover:bg-indigo-600"
+                : "bg-amber-100 text-amber-700 hover:bg-amber-200"
+            }`}
+          >
+            {isHidden ? "Unhide product" : "Hide product"}
+          </button>
+        )}
       </div>
 
     </div>
@@ -276,6 +307,7 @@ function PaginationBar({ total, current, setPage }) {
 // ─────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { token, user } = useAuth();
+  const { showToast } = useToast();
 
   const [state, setState] = useState({
     stock: null,
@@ -290,6 +322,7 @@ export default function DashboardPage() {
 
   const [search, setSearch]             = useState("");
   const [stockFilter, setStockFilter]   = useState("all");
+  const [seriesFilter, setSeriesFilter] = useState("");
   const [onHoldSearch, setOnHoldSearch] = useState("");
   const [currentPage, setCurrentPage]   = useState(1);
   const [onHoldPage, setOnHoldPage]     = useState(1);
@@ -315,7 +348,9 @@ export default function DashboardPage() {
       user.role !== "USER" ? api.getProductionHistory(token, { limit: 20, include_total: 0 }) : Promise.resolve({ data: [] }),
       user.role !== "MEMBER" ? api.getConsumptionLogs(token, { limit: 20, include_total: 0 }) : Promise.resolve({ data: [] }),
       user.role !== "MEMBER" ? api.getOrders(token, { limit: 100 }) : Promise.resolve({ data: [] }),
-      isAdmin || user.role === "MEMBER" ? api.getAvailability(token) : Promise.resolve({ data: [] }),
+      isAdmin || user.role === "MEMBER"
+        ? api.getAvailability(token, { includeHidden: isAdmin })
+        : Promise.resolve({ data: [] }),
       isAdmin ? api.getPermissions(token) : Promise.resolve({ data: [] }),
     ]);
 
@@ -333,6 +368,30 @@ export default function DashboardPage() {
 
   useEffect(() => { load().catch(console.error); }, [load]);
   useDataRefresh(load, "dashboard");
+
+  const toggleVisibility = async (product) => {
+    if (!isAdmin || !product) return;
+
+    const nextVisible = Number(product.is_visible) !== 1;
+    const label = product.article_code || product.name || "Product";
+
+    try {
+      await api.setFinishedGoodVisibility(product.id, { is_visible: nextVisible }, token);
+      showToast({
+        tone: "success",
+        title: nextVisible ? "Product unhidden" : "Product hidden",
+        message: `${label} was ${nextVisible ? "shown" : "hidden"} successfully.`,
+      });
+      await load();
+      announceDataRefresh("finished-goods");
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Visibility update failed",
+        message: error.message,
+      });
+    }
+  };
 
   const lowStock      = state.stock?.low_stock_alerts?.length || 0;
   const finishedTotal = state.finishedGoods.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
@@ -357,6 +416,16 @@ export default function DashboardPage() {
     return Object.values(groups);
   }, [state.availability]);
 
+  const seriesList = useMemo(
+    () =>
+      [
+        ...new Set(
+          state.availability.map((item) => getSeriesName(item.sole_code)).filter(Boolean)
+        ),
+      ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })),
+    [state.availability]
+  );
+
   const filteredProducts = useMemo(() => {
     return groupedProducts
       .map((variants) =>
@@ -371,12 +440,13 @@ export default function DashboardPage() {
             : stockFilter === "available" ? qty >= 1
             : stockFilter === "out"       ? qty <= 0
             : qty > 0 && qty < 10;
-          return matchSearch && matchStock;
+          const matchSeries = !seriesFilter || getSeriesName(item.sole_code) === seriesFilter;
+          return matchSearch && matchStock && matchSeries;
         })
       )
       .filter((v) => v.length > 0)
       .sort((a, b) => new Date(b[0]?.created_at || 0) - new Date(a[0]?.created_at || 0));
-  }, [groupedProducts, search, stockFilter]);
+  }, [groupedProducts, search, stockFilter, seriesFilter]);
 
   const onHoldProducts = useMemo(() => {
     const q = onHoldSearch.trim().toLowerCase();
@@ -417,7 +487,7 @@ export default function DashboardPage() {
     return Object.values(groups);
   }, [state.permissions, state.finishedGoods, onHoldSearch]);
 
-  useEffect(() => { setCurrentPage(1); }, [search, stockFilter]);
+  useEffect(() => { setCurrentPage(1); }, [search, stockFilter, seriesFilter]);
   useEffect(() => { setOnHoldPage(1); }, [onHoldSearch]);
 
   const totalPages        = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE);
@@ -478,8 +548,17 @@ export default function DashboardPage() {
                 <option value="available">In Stock</option>
                 <option value="out">Out of Stock</option>
               </select>
-              {(search || stockFilter !== "all") && (
-                <button onClick={() => { setSearch(""); setStockFilter("all"); }}
+              <select value={seriesFilter} onChange={(e) => setSeriesFilter(e.target.value)}
+                className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+                <option value="">All Series</option>
+                {seriesList.map((series) => (
+                  <option key={series} value={series}>
+                    {series}
+                  </option>
+                ))}
+              </select>
+              {(search || stockFilter !== "all" || seriesFilter) && (
+                <button onClick={() => { setSearch(""); setStockFilter("all"); setSeriesFilter(""); }}
                   className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition-all">
                   Clear
                 </button>
@@ -490,7 +569,12 @@ export default function DashboardPage() {
             <>
               <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
                 {paginatedProducts.map((variants) => (
-                  <ProductCard key={variants.map((v) => v.id).join("-")} variants={variants} />
+                  <ProductCard
+                    key={variants.map((v) => v.id).join("-")}
+                    variants={variants}
+                    canManageVisibility={isAdmin}
+                    onToggleVisibility={toggleVisibility}
+                  />
                 ))}
               </div>
               <PaginationBar total={totalPages} current={currentPage} setPage={setCurrentPage} />

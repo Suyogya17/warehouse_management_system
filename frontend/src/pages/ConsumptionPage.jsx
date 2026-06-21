@@ -18,6 +18,7 @@ export default function ConsumptionPage() {
 
   const [materials, setMaterials] = useState([]);
   const [finishedGoods, setFinishedGoods] = useState([]);
+  const [warehouseStock, setWarehouseStock] = useState([]);
   const [logs, setLogs] = useState([]);
 
   const [rawForm, setRawForm] = useState({
@@ -28,6 +29,7 @@ export default function ConsumptionPage() {
 
   const [finishedForm, setFinishedForm] = useState({
     finished_good_id: "",
+    warehouse_id: "",
     qty_used: "",
     reason: "",
   });
@@ -40,6 +42,12 @@ export default function ConsumptionPage() {
   const selectedFinishedGood = finishedGoods.find(
     (item) => String(item.id) === String(finishedForm.finished_good_id)
   );
+  const selectedFinishedWarehouseRows = warehouseStock.filter(
+    (item) => String(item.finished_good_id) === String(finishedForm.finished_good_id)
+  );
+  const selectedFinishedWarehouse = selectedFinishedWarehouseRows.find(
+    (item) => String(item.warehouse_id) === String(finishedForm.warehouse_id)
+  );
 
   // ✅ Separate reason sets (FIXED)
   const rawReasons = ["Damaged", "Sample", "Wastage", "QC Reject"];
@@ -47,15 +55,17 @@ export default function ConsumptionPage() {
 
   // Load data
   const load = useCallback(async () => {
-    const [materialsResult, finishedGoodsResult, logsResult] =
+    const [materialsResult, finishedGoodsResult, warehouseStockResult, logsResult] =
       await Promise.all([
         api.getRawMaterials(token),
         api.getFinishedGoods(token),
+        api.getWarehouseStock(token),
         api.getConsumptionLogs(token, { limit: 100, include_total: 0 }),
       ]);
 
     setMaterials(materialsResult.data || []);
     setFinishedGoods(finishedGoodsResult.data || []);
+    setWarehouseStock(warehouseStockResult.data || []);
     setLogs(logsResult.data || []);
   }, [token]);
 
@@ -115,14 +125,15 @@ export default function ConsumptionPage() {
     e.preventDefault();
 
     const finished_good_id = Number(finishedForm.finished_good_id);
+    const warehouse_id = Number(finishedForm.warehouse_id);
     const qty_used = Number(finishedForm.qty_used);
     const reason = finishedForm.reason?.trim();
 
-    if (!finished_good_id || !qty_used || qty_used <= 0 || !reason) {
+    if (!finished_good_id || !warehouse_id || !qty_used || qty_used <= 0 || !reason) {
       return showToast({
         tone: "error",
         title: "Invalid input",
-        message: "Please fill all fields correctly.",
+        message: "Please select product, warehouse, quantity, and reason.",
       });
     }
 
@@ -131,15 +142,17 @@ export default function ConsumptionPage() {
         {
           type: "FINISHED",
           finished_good_id,
+          warehouse_id,
           qty_used,
           reason,
         },
         token
       );
 
-      setFinishedForm({ finished_good_id: "", qty_used: "", reason: "" });
+      setFinishedForm({ finished_good_id: "", warehouse_id: "", qty_used: "", reason: "" });
       await load();
       announceDataRefresh("consumption");
+      announceDataRefresh("stock");
 
       showToast({
         tone: "success",
@@ -289,10 +302,40 @@ export default function ConsumptionPage() {
                 setFinishedForm((p) => ({
                   ...p,
                   finished_good_id: selected?.value || "",
+                  warehouse_id: "",
                 }))
               }
               isClearable
               isSearchable
+            />
+          </Field>
+
+          <Field label="Warehouse">
+            <Select
+              options={selectedFinishedWarehouseRows
+                .filter((item) => Number(item.quantity || 0) > 0)
+                .map((item) => ({
+                  value: String(item.warehouse_id),
+                  label: `${item.warehouse_name} (${formatNumber(item.quantity)} ${item.unit || "pairs"})`,
+                }))}
+              value={
+                selectedFinishedWarehouseRows
+                  .map((item) => ({
+                    value: String(item.warehouse_id),
+                    label: `${item.warehouse_name} (${formatNumber(item.quantity)} ${item.unit || "pairs"})`,
+                  }))
+                  .find((opt) => opt.value === String(finishedForm.warehouse_id)) || null
+              }
+              onChange={(selected) =>
+                setFinishedForm((p) => ({
+                  ...p,
+                  warehouse_id: selected?.value || "",
+                }))
+              }
+              placeholder="Choose warehouse..."
+              isClearable
+              isSearchable
+              isDisabled={!finishedForm.finished_good_id}
             />
           </Field>
 
@@ -355,6 +398,12 @@ export default function ConsumptionPage() {
                       selectedFinishedGood.quantity
                     )} ${selectedFinishedGood.unit}`,
                   },
+                  {
+                    label: "Warehouse",
+                    value: selectedFinishedWarehouse
+                      ? `${selectedFinishedWarehouse.warehouse_name}: ${formatNumber(selectedFinishedWarehouse.quantity)} ${selectedFinishedWarehouse.unit || "pairs"}`
+                      : "Select warehouse",
+                  },
                 ]}
               />
             </div>
@@ -383,6 +432,7 @@ export default function ConsumptionPage() {
             },
             { key: "name", label: "Item" },
             { key: "article_code", label: "Code" },
+            { key: "warehouse_name", label: "Warehouse", render: (row) => row.warehouse_name || "-" },
             { 
               key: "qty_used", 
               label: "Quantity Used",

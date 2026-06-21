@@ -31,6 +31,7 @@ export default function ReceiveStockPage() {
   const [materials, setMaterials] = useState([]);
   const [finishedGoods, setFinishedGoods] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
+  const [warehouseStock, setWarehouseStock] = useState([]);
   const [selectedId, setSelectedId] = useState("");
   const [selectedFinishedHistoryId, setSelectedFinishedHistoryId] = useState("");
   const [batches, setBatches] = useState([]);
@@ -44,17 +45,34 @@ export default function ReceiveStockPage() {
   });
   const selectedMaterial = materials.find((item) => String(item.id) === String(form.raw_material_id));
   const selectedFinishedGood = finishedGoods.find((item) => String(item.id) === String(finishedForm.finished_good_id));
+  const selectedWarehouse = warehouses.find((item) => String(item.id) === String(finishedForm.warehouse_id));
+  const selectedWarehouseStockRows = warehouseStock.filter(
+    (item) => String(item.finished_good_id) === String(finishedForm.finished_good_id)
+  );
+  const selectedWarehouseStock = selectedWarehouseStockRows.find(
+    (item) => String(item.warehouse_id) === String(finishedForm.warehouse_id)
+  );
+  const selectedWarehouseTotal = selectedWarehouseStockRows.reduce(
+    (sum, item) => sum + Number(item.quantity || 0),
+    0
+  );
+  const finishedGoodsQtyToAdd = Number(finishedForm.qty_added || 0);
+  const selectedProductStock = Number(selectedFinishedGood?.quantity || 0);
+  const selectedWarehouseQty = Number(selectedWarehouseStock?.quantity || 0);
+  const stockMismatch = selectedWarehouseTotal - selectedProductStock;
 
   const loadPurchaseData = useCallback(async () => {
-    const [materialsResult, finishedGoodsResult, warehousesResult] = await Promise.all([
+    const [materialsResult, finishedGoodsResult, warehousesResult, warehouseStockResult] = await Promise.all([
       api.getRawMaterials(token),
       api.getFinishedGoods(token),
       api.getWarehouses(token),
+      api.getWarehouseStock(token),
     ]);
 
     setMaterials(materialsResult.data || []);
     setFinishedGoods(finishedGoodsResult.data || []);
     setWarehouses(warehousesResult.data || []);
+    setWarehouseStock(warehouseStockResult.data || []);
   }, [token]);
 
   const loadBatches = useCallback(async (materialId) => {
@@ -362,16 +380,53 @@ export default function ReceiveStockPage() {
                   <p className="mt-1 text-sm font-medium text-slate-900">{selectedFinishedGood.article_code || "-"}</p>
                 </div>
                 <div className="rounded-2xl bg-white px-4 py-3">
-                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Current stock</p>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Product stock</p>
                   <p className="mt-1 text-sm font-medium text-slate-900">
                     {formatNumber(selectedFinishedGood.quantity)} {selectedFinishedGood.unit || "pairs"}
                   </p>
                 </div>
                 <div className="rounded-2xl bg-white px-4 py-3">
-                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Receive in</p>
-                  <p className="mt-1 text-sm font-medium text-slate-900">{selectedFinishedGood.unit || "pairs"}</p>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Warehouse total</p>
+                  <p className="mt-1 text-sm font-medium text-slate-900">
+                    {formatNumber(selectedWarehouseTotal)} {selectedFinishedGood.unit || "pairs"}
+                  </p>
                 </div>
               </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl bg-white px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Selected warehouse</p>
+                  <p className="mt-1 text-sm font-medium text-slate-900">
+                    {selectedWarehouseStock?.warehouse_name || selectedWarehouse?.name || "Choose warehouse"}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Current: {formatNumber(selectedWarehouseQty)} {selectedFinishedGood.unit || "pairs"}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-white px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">After receive</p>
+                  <p className="mt-1 text-sm font-medium text-slate-900">
+                    Product: {formatNumber(selectedProductStock + finishedGoodsQtyToAdd)}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Warehouse total: {formatNumber(selectedWarehouseTotal + finishedGoodsQtyToAdd)}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-white px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Current difference</p>
+                  <p className={`mt-1 text-sm font-semibold ${stockMismatch === 0 ? "text-emerald-700" : "text-amber-700"}`}>
+                    {stockMismatch === 0
+                      ? "Product and warehouse match"
+                      : `${stockMismatch > 0 ? "+" : ""}${formatNumber(stockMismatch)} pairs`}
+                  </p>
+                </div>
+              </div>
+
+              {stockMismatch !== 0 ? (
+                <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  This form adds new stock to both product stock and the selected warehouse. If you are trying to fix a mismatch, do not add the difference here because it will also increase warehouse stock.
+                </div>
+              ) : null}
             </div>
           ) : null}
 

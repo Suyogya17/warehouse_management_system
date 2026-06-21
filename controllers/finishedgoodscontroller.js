@@ -2,6 +2,8 @@ const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { hasColumn } = require('../utils/schemaSupport');
 
+const DEFAULT_DISPLAY_QUANTITY = 450;
+
 const getImagePath = (req) => (req.file ? `/uploads/${req.file.filename}` : null);
 
 const getFinishedGoodsOrderClause = async (alias = '') => {
@@ -148,6 +150,7 @@ const create = async (req, res, next) => {
     const image_url = req.file ? `/uploads/${req.file.filename}` : null;
 
     const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
+    const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
     let nextDisplayOrder = null;
 
     if (supportsDisplayOrder) {
@@ -162,8 +165,8 @@ const create = async (req, res, next) => {
       (name, article_code, sole_code, color, size, unit,
        quantity, min_quantity,
        inner_box_per_pair, inner_boxes_per_outer_box,
-       image_url, is_visible${supportsDisplayOrder ? ', display_order' : ''})
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0${supportsDisplayOrder ? ', ?' : ''})
+       image_url, is_visible${supportsDisplayOrder ? ', display_order' : ''}${supportsDisplayQuantity ? ', display_quantity' : ''})
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0${supportsDisplayOrder ? ', ?' : ''}${supportsDisplayQuantity ? ', ?' : ''})
     `;
 
     const params = [
@@ -182,6 +185,10 @@ const create = async (req, res, next) => {
 
     if (supportsDisplayOrder) {
       params.push(nextDisplayOrder);
+    }
+
+    if (supportsDisplayQuantity) {
+      params.push(DEFAULT_DISPLAY_QUANTITY);
     }
 
     const rows = await query(sql, params);
@@ -215,8 +222,6 @@ const update = async (req, res, next) => {
       ? `/uploads/${req.file.filename}`
       : null;
 
-    const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
-
     let sql = `
       UPDATE finished_goods
       SET name = ?,
@@ -228,7 +233,6 @@ const update = async (req, res, next) => {
           min_quantity = ?,
           inner_box_per_pair = ?,
           inner_boxes_per_outer_box = ?
-          ${supportsDisplayQuantity ? ', display_quantity = COALESCE(NULLIF(display_quantity, 0), quantity)' : ''}
     `;
 
     const parsedOuterBox =
@@ -324,6 +328,49 @@ const setVisibility = async (req, res, next) => {
   }
 };
 
+// ─── DISPLAY QUANTITY ──────────────────────────────────────────────────────
+const setDisplayQuantity = async (req, res, next) => {
+  try {
+    const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
+
+    if (!supportsDisplayQuantity) {
+      return res.status(400).json({
+        success: false,
+        message: 'Display quantity is not enabled yet. Run sql/add-finished-good-display-quantity.sql first.',
+      });
+    }
+
+    const displayQuantity = Number(req.body.display_quantity);
+
+    if (!Number.isFinite(displayQuantity) || displayQuantity < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Display quantity must be 0 or more.',
+      });
+    }
+
+    const savedDisplayQuantity = Math.floor(displayQuantity);
+    const result = await query(
+      `UPDATE finished_goods SET display_quantity = ? WHERE id = ? AND is_deleted = 0`,
+      [savedDisplayQuantity, req.params.id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        id: Number(req.params.id),
+        display_quantity: savedDisplayQuantity,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── DISPLAY ORDER ─────────────────────────────────────────────────────────
 const setDisplayOrder = async (req, res, next) => {
   try {
@@ -369,5 +416,6 @@ module.exports = {
   update,
   remove,
   setVisibility,
+  setDisplayQuantity,
   setDisplayOrder
 };

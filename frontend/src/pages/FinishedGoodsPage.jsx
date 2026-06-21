@@ -13,6 +13,7 @@ import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber } from "../utils/format";
 import Select from "react-select";
+import * as XLSX from "xlsx";
 
 const initialForm = {
   name: "",
@@ -46,6 +47,11 @@ const buildFormData = (values, editingId) => {
   return formData;
 };
 
+const getSeriesName = (soleCode = "") =>
+  String(soleCode)
+    .replace(/[-_\s]*sole$/i, "")
+    .trim();
+
 export default function FinishedGoodsPage() {
   const { token, user } = useAuth();
   const { showToast } = useToast();
@@ -61,6 +67,7 @@ export default function FinishedGoodsPage() {
   const [production, setProduction] = useState([]);
   const [search, setSearch] = useState("");
   const [searchId, setSearchId] = useState("");
+  const [seriesFilter, setSeriesFilter] = useState("");
 
   const loadItems = useCallback(async () => {
     const [goodsResult, materialsResult] = await Promise.all([
@@ -230,6 +237,8 @@ export default function FinishedGoodsPage() {
   const filteredItems = items.filter((item) => {
     if (!isAdmin && !item.is_visible) return false;
 
+    if (seriesFilter && getSeriesName(item.sole_code) !== seriesFilter) return false;
+
     const qId = searchId.trim().toLowerCase();
     if (qId && !String(item.id || "").toLowerCase().includes(qId)) return false;
 
@@ -243,8 +252,73 @@ export default function FinishedGoodsPage() {
     );
   });
 
+  const seriesList = useMemo(
+    () =>
+      [...new Set(items.map((item) => getSeriesName(item.sole_code)).filter(Boolean))].sort(
+        (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+      ),
+    [items]
+  );
+
   const isEmpty = filteredItems.length === 0;
   const totalPairs = filteredItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+
+  const exportToExcel = () => {
+    if (!filteredItems.length) {
+      showToast({
+        tone: "error",
+        title: "Nothing to export",
+        message: "No finished goods match the current filter.",
+      });
+      return;
+    }
+
+    const rows = filteredItems.map((item) => ({
+      "FG.ID": item.id || "",
+      Name: item.name || "",
+      "Article Code": item.article_code || "",
+      "Sole Code": item.sole_code || "",
+      Color: item.color || "",
+      Size: item.size || "",
+      Stock: Number(item.quantity || 0),
+      Unit: item.unit || "",
+      "Min Qty": Number(item.min_quantity || 0),
+      "Inner Boxes Per Pair": Number(item.inner_box_per_pair || 0),
+      "Inner Boxes Per Outer Box": item.inner_boxes_per_outer_box || "",
+      Visibility: item.is_visible ? "Displayed" : "Hidden",
+      "Image URL": item.image_url ? `${APP_BASE_URL}${item.image_url}` : "",
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+
+    worksheet["!cols"] = [
+      { wch: 8 },
+      { wch: 30 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 14 },
+      { wch: 10 },
+      { wch: 12 },
+      { wch: 10 },
+      { wch: 10 },
+      { wch: 20 },
+      { wch: 24 },
+      { wch: 12 },
+      { wch: 48 },
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Finished Goods");
+
+    const today = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(workbook, `finished-goods-${today}.xlsx`);
+
+    showToast({
+      tone: "success",
+      title: "Excel exported",
+      message: `${rows.length} row${rows.length === 1 ? "" : "s"} exported.`,
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -502,8 +576,13 @@ export default function FinishedGoodsPage() {
         title="Finished goods"
         subtitle={isAdmin ? "Admin can create, manage, and control user visibility for finished goods." : "Visible product catalog for users."}
         icon="finishedGoods"
+        actions={
+          <Button variant="secondary" icon="download" onClick={exportToExcel}>
+            Export Excel
+          </Button>
+        }
       >
-        <div className="mb-4 flex gap-3">
+        <div className="mb-4 flex flex-col gap-3 md:flex-row md:flex-wrap">
           <input
             type="text"
             placeholder="FG.ID..."
@@ -518,6 +597,18 @@ export default function FinishedGoodsPage() {
             onChange={(e) => setSearch(e.target.value)}
             className="rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100 w-full max-w-xs"
           />
+          <select
+            value={seriesFilter}
+            onChange={(e) => setSeriesFilter(e.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100 md:w-44"
+          >
+            <option value="">All Series</option>
+            {seriesList.map((series) => (
+              <option key={series} value={series}>
+                {series}
+              </option>
+            ))}
+          </select>
         </div>
 
         <DataTable

@@ -37,6 +37,7 @@ CREATE TABLE finished_goods (
   min_quantity DECIMAL(10,2) NOT NULL DEFAULT 5,
   image_url VARCHAR(255),
   is_visible TINYINT(1) NOT NULL DEFAULT 0,
+  display_quantity DECIMAL(10,2) NULL DEFAULT 450,
   display_order INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -99,12 +100,15 @@ CREATE TABLE production_items (
 
 CREATE TABLE consumption_logs (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  raw_material_id INT NOT NULL,
+  raw_material_id INT NULL,
+  finished_good_id INT NULL,
+  warehouse_id INT NULL,
   qty_used DECIMAL(10,2) NOT NULL,
   reason VARCHAR(255),
   logged_by INT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (raw_material_id) REFERENCES raw_materials(id),
+  FOREIGN KEY (finished_good_id) REFERENCES finished_goods(id),
   FOREIGN KEY (logged_by) REFERENCES users(id) ON DELETE SET NULL
 );
 

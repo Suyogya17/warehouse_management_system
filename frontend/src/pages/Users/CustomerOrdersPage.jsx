@@ -110,15 +110,6 @@ export default function UserOrderPage() {
 
   // ─── UPDATE QTY ───────────────────────────────────
   //
-  // NO hardcoded 450 cap here. The ceiling is always available_qty,
-  // which the backend already computes as:
-  //   available_qty = MIN(display_quantity, physical_stock) - reserved_qty
-  //
-  // Examples:
-  //   display_qty=450, reserved=30  → available_qty=420  → user can order max 420
-  //   display_qty=110, reserved=30  → available_qty=80   → user can order max 80
-  //   display_qty=450, reserved=0   → available_qty=450  → user can order max 450
-  //
   const updateQty = (id, qty) => {
     if (qty < 1) {
       removeFromCart(id);
@@ -130,7 +121,9 @@ export default function UserOrderPage() {
     if (!item) return;
 
     const cartonsPerBox = Number(item.product?.inner_boxes_per_outer_box || 0);
-    const available = Number(item.product?.available_qty ?? item.product?.quantity ?? 0);
+    const available = Number(
+      item.product?.display_stock ?? item.product?.available_qty ?? item.product?.quantity ?? 0
+    );
 
     const stockLimit =
       item.orderBy === "cartons" && cartonsPerBox > 0
@@ -339,7 +332,9 @@ export default function UserOrderPage() {
             {cart.map((item) => {
               const cartonsPerBox = Number(item.product?.inner_boxes_per_outer_box || 0);
               const hasCartons = cartonsPerBox > 0;
-              const available = Number(item.product?.available_qty ?? item.product?.quantity ?? 0);
+              const available = Number(
+                item.product?.display_stock ?? item.product?.available_qty ?? item.product?.quantity ?? 0
+              );
               const maxQty = hasCartons && item.orderBy === "cartons"
                 ? Math.floor(available / cartonsPerBox)
                 : available;
