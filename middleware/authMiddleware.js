@@ -41,9 +41,7 @@ const authenticate = async (req, res, next) => {
 const authorize = (...roles) => {
   return (req, res, next) => {
     const userRole = (req.user?.role || '').toUpperCase();
-    console.log("AUTH ROLE:", req.user?.role);   
     if (!req.user || !roles.includes(userRole)) {
-             // ← and this
       return res.status(403).json({
         success: false,
         message: 'Forbidden',

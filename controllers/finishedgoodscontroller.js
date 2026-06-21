@@ -18,7 +18,6 @@ const getFinishedGoodsOrderClause = async (alias = '') => {
 // ─── LIST ALL ───────────────────────────────────────────────────────────────
 const getAll = async (req, res, next) => {
   try {
-    console.log("=== getAll HIT ===", req.user);
     const { article_code } = req.query;
     const userId = req.user.id;
     const userRole = req.user.role;
@@ -68,9 +67,6 @@ const getAll = async (req, res, next) => {
     }
 
     const rows = await query(sql, params);
-    console.log("SQL:", sql);
-    console.log("ROWS RETURNED:", rows.length);  // ← add this
-    console.log("USER ROLE:", userRole);          // ← and this
 
     return res.json({
       success: true,
@@ -280,11 +276,10 @@ const remove = async (req, res, next) => {
    try {
     const { id } = req.params;
 
-     const result = await query(
+    const result = await query(
       "UPDATE finished_goods SET is_deleted = 1 WHERE id = ?",
       [id]
     );
-    console.log("DELETE HIT:", req.params.id);
 
     if (!result || result.affectedRows === 0){
       return res.status(404).json({

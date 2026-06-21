@@ -196,6 +196,13 @@ CREATE TABLE orders (
   pan_number VARCHAR(100) NOT NULL,
   transport_name VARCHAR(255) NOT NULL,
   stock_deducted TINYINT(1) DEFAULT 0,
+  delivery_note_number VARCHAR(50),
+  confirmed_by INT,
+  confirmed_at DATETIME,
+  packed_by INT,
+  packed_at DATETIME,
+  delivered_by INT,
+  delivered_at DATETIME,
   is_deleted TINYINT(4) DEFAULT 0,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );

@@ -54,7 +54,6 @@ const getAll = async (req, res, next) => {
  */
 const logConsumption = async (req, res, next) => {
   const client = await getClient();
-  console.log("BODY RECEIVED:", req.body);
   try {
     await client.query("BEGIN");
 
