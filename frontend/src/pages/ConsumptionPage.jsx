@@ -111,7 +111,6 @@ export default function ConsumptionPage() {
         message: "Raw material consumption logged.",
       });
     } catch (err) {
-      console.log("RAW ERROR PAYLOAD ISSUE:", err);
       showToast({
         tone: "error",
         title: "Failed",
@@ -160,7 +159,6 @@ export default function ConsumptionPage() {
         message: "Finished goods updated.",
       });
     } catch (err) {
-      console.log("FINISHED ERROR PAYLOAD ISSUE:", err);
       showToast({
         tone: "error",
         title: "Failed",

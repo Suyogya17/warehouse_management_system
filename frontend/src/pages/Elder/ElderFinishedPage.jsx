@@ -304,8 +304,6 @@ export default function ElderFinishedGoods() {
     });
     return Object.values(groups);
   }, [items]);
-  console.log("RAW ITEMS:", items.length);
-  console.log("GROUPED:", groupedProducts.length);
 
   const sizes = [...new Set(items.map((i) => i.size).filter(Boolean))];
 
