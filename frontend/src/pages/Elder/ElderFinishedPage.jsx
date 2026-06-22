@@ -17,7 +17,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useDataRefresh } from "../../hooks/useDataRefresh";
 
 import { api, APP_BASE_URL } from "../../services/api";
-import { formatNumber } from "../../utils/format";
+import { formatNumber, formatPrice } from "../../utils/format";
 
 const getAvailableQty = (product) =>
   Number(product?.display_stock ?? product?.available_qty ?? product?.display_quantity ?? 0);
@@ -183,6 +183,12 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
 
         {/* STOCK INFO — shows available (reserved-aware), not raw physical */}
         <div className="bg-slate-50 rounded-xl p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">Price</span>
+            <span className="text-base font-bold text-emerald-700">
+              {formatPrice(selectedVariant.price)}
+            </span>
+          </div>
           <div className="flex items-center justify-between">
             <span className="text-xs text-slate-500">Available Stock</span>
             <span className="text-sm font-bold text-slate-900">

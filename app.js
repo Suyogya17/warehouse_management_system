@@ -15,6 +15,7 @@ const permissionRoutes = require("./routes/permissionRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const stockAdjustmentRoutes = require("./routes/stockAdjustments");
 const warehouseRoutes = require("./routes/warehouseRoutes");
+const advertisementRoutes = require("./routes/advertisementRoutes");
 
 const app = express();
 
@@ -98,6 +99,7 @@ app.use("/api/permissions", permissionRoutes);
 app.use("/api/orders", orderRoutes);
 app.use('/api/stock-adjustments', stockAdjustmentRoutes);
 app.use("/api/warehouses", warehouseRoutes);
+app.use("/api/advertisements", advertisementRoutes);
 
 /* ─────────────────────────────
    ROOT ENDPOINT

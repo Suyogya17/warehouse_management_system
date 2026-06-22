@@ -83,6 +83,23 @@ export const api = {
 
   getUsers: (token) => apiRequest("/auth/users", {}, token),
 
+  getAdvertisements: (token) => apiRequest("/advertisements", {}, token),
+
+  createAdvertisement: (payload, token) =>
+    apiRequest("/advertisements", { method: "POST", body: payload }, token),
+
+  updateAdvertisement: (id, payload, token) =>
+    apiRequest(`/advertisements/${id}`, { method: "PUT", body: payload }, token),
+
+  reorderAdvertisements: (orderedIds, token) =>
+    apiRequest("/advertisements/reorder", {
+      method: "PUT",
+      body: JSON.stringify({ ordered_ids: orderedIds }),
+    }, token),
+
+  deleteAdvertisement: (id, token) =>
+    apiRequest(`/advertisements/${id}`, { method: "DELETE" }, token),
+
   updateUser: (id, payload, token) =>
     apiRequest(
       `/auth/users/${id}`,
@@ -160,6 +177,13 @@ export const api = {
     apiRequest(
       `/finished-goods/${id}/display-quantity`,
       { method: "PUT", body: JSON.stringify({ display_quantity: displayQuantity }) },
+      token
+    ),
+
+  updateFinishedGoodPrice: (id, price, token) =>
+    apiRequest(
+      `/finished-goods/${id}/price`,
+      { method: "PUT", body: JSON.stringify({ price }) },
       token
     ),
 

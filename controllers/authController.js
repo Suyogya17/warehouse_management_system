@@ -3,10 +3,16 @@ const jwt = require('jsonwebtoken');
 const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 
+const normalizeLocale = (countryCode, currencyCode) => ({
+  countryCode: String(countryCode || 'NP').trim().toUpperCase().slice(0, 2),
+  currencyCode: String(currencyCode || 'NPR').trim().toUpperCase().slice(0, 3),
+});
+
 // ─── REGISTER ────────────────────────────────────────────────────────────────
 const register = async (req, res, next) => {
   try {
-    const { name, email, password, role = 'USER' } = req.body;
+    const { name, email, password, role = 'USER', country_code, currency_code } = req.body;
+    const locale = normalizeLocale(country_code, currency_code);
 
     const exists = await query(
       'SELECT id FROM users WHERE email = ?',
@@ -23,9 +29,9 @@ const register = async (req, res, next) => {
     const hashed = await bcrypt.hash(password, 10);
 
     const result = await query(
-      `INSERT INTO users (name, email, password, role)
-       VALUES (?, ?, ?, ?)`,
-      [name, email, hashed, role.toUpperCase()]
+      `INSERT INTO users (name, email, password, role, country_code, currency_code)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [name, email, hashed, role.toUpperCase(), locale.countryCode, locale.currencyCode]
     );
 
     const userId = result.insertId;
@@ -35,6 +41,8 @@ const register = async (req, res, next) => {
       name,
       email,
       role: role.toUpperCase(),
+      country_code: locale.countryCode,
+      currency_code: locale.currencyCode,
     };
 
     await auditLog({
@@ -84,6 +92,8 @@ const login = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        country_code: user.country_code,
+        currency_code: user.currency_code,
       },
       process.env.JWT_SECRET,
       { expiresIn: '2h' }
@@ -97,6 +107,8 @@ const login = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        country_code: user.country_code,
+        currency_code: user.currency_code,
       },
     });
   } catch (err) {
@@ -108,7 +120,7 @@ const login = async (req, res, next) => {
 const getProfile = async (req, res, next) => {
   try {
     const result = await query(
-      'SELECT id, name, email, role, created_at FROM users WHERE id = ?',
+      'SELECT id, name, email, role, country_code, currency_code, created_at FROM users WHERE id = ?',
       [req.user.id]
     );
 
@@ -129,7 +141,7 @@ const getProfile = async (req, res, next) => {
 const listUsers = async (req, res, next) => {
   try {
     const result = await query(
-      'SELECT id, name, email, role, created_at FROM users ORDER BY created_at DESC'
+      'SELECT id, name, email, role, country_code, currency_code, created_at FROM users ORDER BY created_at DESC'
     );
 
     return res.json({ success: true, data: result });
@@ -141,7 +153,7 @@ const listUsers = async (req, res, next) => {
 // ─── UPDATE USER ─────────────────────────────────────────────────────────────
 const updateUser = async (req, res, next) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, country_code, currency_code } = req.body;
     const userId = req.params.id;
 
     const existing = await query(
@@ -163,9 +175,19 @@ const updateUser = async (req, res, next) => {
        SET name = COALESCE(?, name),
            email = COALESCE(?, email),
            password = COALESCE(?, password),
-           role = COALESCE(?, role)
+           role = COALESCE(?, role),
+           country_code = COALESCE(?, country_code),
+           currency_code = COALESCE(?, currency_code)
        WHERE id = ?`,
-      [name, email, hashed, role ? role.toUpperCase() : null, userId]
+      [
+        name,
+        email,
+        hashed,
+        role ? role.toUpperCase() : null,
+        country_code ? normalizeLocale(country_code, currency_code).countryCode : null,
+        currency_code ? normalizeLocale(country_code, currency_code).currencyCode : null,
+        userId,
+      ]
     );
 
     await auditLog({

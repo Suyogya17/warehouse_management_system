@@ -69,7 +69,11 @@ export default function OnHoldPage() {
     });
 
     return products
-      .filter((product) => !activeProductIds.has(Number(product.id)))
+      .filter(
+        (product) =>
+          Number(product.is_visible) !== 1 ||
+          !activeProductIds.has(Number(product.id))
+      )
       .filter((product) => {
         if (!q) return true;
 
@@ -219,7 +223,7 @@ export default function OnHoldPage() {
       <PageHeader
         eyebrow="Visibility"
         title="On Hold Products"
-        description="Manage products that are not visible to any user, member, or elder."
+        description="Manage hidden products and products that are not visible to any user, member, or elder."
         icon="hidden"
       />
 
@@ -256,7 +260,7 @@ export default function OnHoldPage() {
 
       <SectionCard
         title="Hidden Products"
-        subtitle="Products appear here only when nobody has active access."
+        subtitle="Hidden products and products with no active user access appear here."
         icon="eyeOff"
         actions={
           <>
@@ -289,7 +293,7 @@ export default function OnHoldPage() {
             columns={columns}
             rows={hiddenProducts}
             emptyTitle="No hidden products"
-            emptyDescription="Products with at least one permitted user are not on hold."
+            emptyDescription="Hidden products and products without permitted users appear here."
           />
         </div>
       </SectionCard>

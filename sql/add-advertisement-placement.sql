@@ -1,0 +1,2 @@
+ALTER TABLE advertisements
+  ADD COLUMN placement VARCHAR(30) NOT NULL DEFAULT 'BELOW_STATUS' AFTER media_type;

@@ -15,7 +15,19 @@ const initialForm = {
   email: "",
   password: "",
   role: "USER",
+  country_code: "NP",
+  currency_code: "NPR",
 };
+
+const countries = [
+  { code: "NP", name: "Nepal", currency: "NPR" },
+  { code: "IN", name: "India", currency: "INR" },
+  { code: "CN", name: "China", currency: "CNY" },
+  { code: "US", name: "United States", currency: "USD" },
+  { code: "GB", name: "United Kingdom", currency: "GBP" },
+];
+
+const currencies = ["NPR", "INR", "CNY", "USD", "GBP"];
 
 export default function UsersPage() {
   const { token, user: currentUser } = useAuth();
@@ -83,6 +95,8 @@ export default function UsersPage() {
       email: row.email || "",
       password: "",
       role: row.role || "USER",
+      country_code: row.country_code || "NP",
+      currency_code: row.currency_code || "NPR",
     });
     setShowPassword(false);
   };
@@ -188,6 +202,39 @@ export default function UsersPage() {
             </SelectInput>
           </Field>
 
+          <Field label="Country / region">
+            <SelectInput
+              value={form.country_code}
+              onChange={(e) => {
+                const country = countries.find((item) => item.code === e.target.value);
+                setForm((current) => ({
+                  ...current,
+                  country_code: e.target.value,
+                  currency_code: country?.currency || current.currency_code,
+                }));
+              }}
+            >
+              {countries.map((country) => (
+                <option key={country.code} value={country.code}>
+                  {country.name}
+                </option>
+              ))}
+            </SelectInput>
+          </Field>
+
+          <Field label="Currency">
+            <SelectInput
+              value={form.currency_code}
+              onChange={(e) =>
+                setForm((current) => ({ ...current, currency_code: e.target.value }))
+              }
+            >
+              {currencies.map((currency) => (
+                <option key={currency} value={currency}>{currency}</option>
+              ))}
+            </SelectInput>
+          </Field>
+
           {/* ACTIONS */}
           <div className="md:col-span-2 xl:col-span-4 flex items-center gap-3">
             <Button type="submit" icon="plus">
@@ -218,6 +265,15 @@ export default function UsersPage() {
             { key: "name", label: "Name" },
             { key: "email", label: "Email" },
             { key: "role", label: "Role" },
+            {
+              key: "country_code",
+              label: "Region",
+              render: (row) =>
+                countries.find((country) => country.code === row.country_code)?.name ||
+                row.country_code ||
+                "-",
+            },
+            { key: "currency_code", label: "Currency" },
             { key: "created_at", label: "Created", type: "date" },
             {
               key: "actions",

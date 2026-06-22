@@ -3,6 +3,18 @@ export const formatNumber = (value) => {
   return Number.isNaN(number) ? "0" : number.toLocaleString();
 };
 
+export const formatPrice = (value, currency = "NPR") => {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return "-";
+
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+};
+
 export const formatDate = (value) => {
   if (!value) return "-";
   return new Date(value).toLocaleString();

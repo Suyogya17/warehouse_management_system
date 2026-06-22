@@ -11,7 +11,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
-import { formatNumber } from "../utils/format";
+import { formatNumber, formatPrice } from "../utils/format";
 import Select from "react-select";
 import * as XLSX from "xlsx";
 
@@ -22,6 +22,7 @@ const initialForm = {
   color: "",
   size: "",
   unit: "pairs",
+  price: 0,
   min_quantity: 5,
   inner_box_per_pair: 1,
   inner_boxes_per_outer_box: "",
@@ -35,6 +36,7 @@ const buildFormData = (values, editingId) => {
   formData.append("sole_code", values.sole_code);
   formData.append("color", values.color);
   formData.append("unit", values.unit);
+  formData.append("price", Number(values.price || 0));
   formData.append("min_quantity", Number(values.min_quantity));
   formData.append("size", values.size || "");
   formData.append("inner_box_per_pair", Number(values.inner_box_per_pair || 1));
@@ -154,6 +156,7 @@ export default function FinishedGoodsPage() {
       color: item.color || "",
       size: item.size || "",
       unit: item.unit || "pairs",
+      price: Number(item.price || 0),
       min_quantity: item.min_quantity || 5,
       inner_box_per_pair: item.inner_box_per_pair || 1,
       inner_boxes_per_outer_box: item.inner_boxes_per_outer_box ?? "",
@@ -496,6 +499,18 @@ export default function FinishedGoodsPage() {
               />
             </Field>
 
+            <Field label="Price (NPR)">
+              <TextInput
+                type="number"
+                min={0}
+                step="0.01"
+                value={form.price}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, price: event.target.value }))
+                }
+              />
+            </Field>
+
             <Field label="Inner boxes per pair">
               <TextInput
                 type="number"
@@ -637,6 +652,7 @@ export default function FinishedGoodsPage() {
             { key: "size", label: "Size" },
             { key: "quantity", label: "Stock", render: (row) => `${formatNumber(row.quantity)} ${row.unit}` },
             ...(isAdmin ? [{ key: "min_quantity", label: "Min Qty" }] : []),
+            ...(isAdmin ? [{ key: "price", label: "Price (NPR)", render: (row) => formatPrice(row.price) }] : []),
             ...(isAdmin
               ? [{
                   key: "packaging",

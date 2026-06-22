@@ -7,7 +7,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
-import { formatNumber } from "../utils/format";
+import { formatNumber, formatPrice } from "../utils/format";
 
 const getPairs = (item) => Number(item.quantity || 0);
 
@@ -53,15 +53,22 @@ export default function ProductDisplayPage() {
   const { token } = useAuth();
   const { showToast } = useToast();
   const [items, setItems] = useState([]);
+  const [permissions, setPermissions] = useState([]);
   const [displayInputs, setDisplayInputs] = useState({});
+  const [priceInputs, setPriceInputs] = useState({});
   const [savingDisplayId, setSavingDisplayId] = useState(null);
+  const [savingPriceId, setSavingPriceId] = useState(null);
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const rowsPerPage = 15;
 
   const loadItems = useCallback(async () => {
-    const result = await api.getFinishedGoods(token);
-    setItems(result.data || []);
+    const [productsResult, permissionsResult] = await Promise.all([
+      api.getFinishedGoods(token),
+      api.getPermissions(token),
+    ]);
+    setItems(productsResult.data || []);
+    setPermissions(permissionsResult.data || []);
   }, [token]);
 
   useEffect(() => {
@@ -73,6 +80,16 @@ export default function ProductDisplayPage() {
       const next = {};
       items.forEach((item) => {
         next[item.id] = current[item.id] ?? String(item.display_quantity ?? 450);
+      });
+      return next;
+    });
+  }, [items]);
+
+  useEffect(() => {
+    setPriceInputs((current) => {
+      const next = {};
+      items.forEach((item) => {
+        next[item.id] = current[item.id] ?? String(item.price ?? 0);
       });
       return next;
     });
@@ -96,6 +113,41 @@ export default function ProductDisplayPage() {
   }, [articleGroups, search]);
 
   const visibleCount = items.filter((item) => item.is_visible).length;
+  const visibleUsersByProduct = useMemo(() => {
+    const denied = new Set(
+      permissions
+        .filter((permission) => Number(permission.can_view) === 0)
+        .map(
+          (permission) =>
+            `${Number(permission.user_id)}:${Number(permission.finished_good_id)}`
+        )
+    );
+    const usersByProduct = new Map();
+
+    permissions.forEach((permission) => {
+      const productId = Number(permission.finished_good_id);
+      const key = `${Number(permission.user_id)}:${productId}`;
+
+      if (Number(permission.can_view) !== 1 || denied.has(key)) return;
+      if (!usersByProduct.has(productId)) usersByProduct.set(productId, []);
+
+      const productUsers = usersByProduct.get(productId);
+      if (productUsers.some((user) => Number(user.id) === Number(permission.user_id))) return;
+
+      productUsers.push({
+        id: permission.user_id,
+        name: permission.user_name || permission.email || `User #${permission.user_id}`,
+        email: permission.email,
+        role: permission.user_role,
+      });
+    });
+
+    usersByProduct.forEach((productUsers) =>
+      productUsers.sort((a, b) => a.name.localeCompare(b.name))
+    );
+
+    return usersByProduct;
+  }, [permissions]);
   const totalPages = Math.ceil(filteredGroups.length / rowsPerPage);
   const paginatedGroups = filteredGroups.slice(
     (currentPage - 1) * rowsPerPage,
@@ -239,12 +291,43 @@ export default function ProductDisplayPage() {
     }
   };
 
+  const savePrice = async (item) => {
+    const price = Number(priceInputs[item.id]);
+
+    if (!Number.isFinite(price) || price < 0) {
+      showToast({ tone: "error", title: "Invalid price", message: "Enter 0 or a positive amount." });
+      return;
+    }
+
+    try {
+      setSavingPriceId(item.id);
+      const result = await api.updateFinishedGoodPrice(item.id, price, token);
+      const savedPrice = Number(result.data?.price ?? price);
+      setItems((current) =>
+        current.map((product) =>
+          Number(product.id) === Number(item.id) ? { ...product, price: savedPrice } : product
+        )
+      );
+      setPriceInputs((current) => ({ ...current, [item.id]: String(savedPrice) }));
+      announceDataRefresh("finished-goods");
+      showToast({
+        tone: "success",
+        title: "Price updated",
+        message: `${item.article_code || item.name} is now ${formatPrice(savedPrice)}.`,
+      });
+    } catch (error) {
+      showToast({ tone: "error", title: "Price update failed", message: error.data?.message || error.message });
+    } finally {
+      setSavingPriceId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
         eyebrow="Catalog control"
         title="Product Display"
-        description="Control the customer catalog for each product: visible stock, visibility, and display order."
+        description="Control each product's price, visible stock, visibility, and display order."
         icon="eye"
       />
 
@@ -350,11 +433,17 @@ export default function ProductDisplayPage() {
                         const hasChanged = Number(inputValue) !== savedValue;
                         const physicalPairs = getPairs(item);
                         const customerVisiblePairs = Math.min(savedValue, physicalPairs);
+                        const savedPrice = Number(item.price || 0);
+                        const priceInput = priceInputs[item.id] ?? String(savedPrice);
+                        const priceChanged = Number(priceInput) !== savedPrice;
+                        const visibleUsers = item.is_visible
+                          ? visibleUsersByProduct.get(Number(item.id)) || []
+                          : [];
 
                         return (
                           <div
                             key={item.id}
-                            className="grid gap-3 rounded-lg border border-slate-200 bg-white px-3 py-3 md:grid-cols-[minmax(130px,1.2fr)_minmax(180px,1fr)_minmax(230px,1.2fr)_auto]"
+                            className="grid gap-3 rounded-lg border border-slate-200 bg-white px-3 py-3 md:grid-cols-[minmax(130px,1.2fr)_minmax(180px,1fr)_minmax(230px,1.2fr)_minmax(210px,1fr)_auto]"
                           >
                             <div className="min-w-0">
                               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -415,15 +504,84 @@ export default function ProductDisplayPage() {
                               </div>
                             </div>
 
-                            <div className="flex items-center justify-start md:justify-end">
+                            <div>
+                              <label className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                                Price (NPR)
+                              </label>
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={priceInput}
+                                  onChange={(event) =>
+                                    setPriceInputs((current) => ({ ...current, [item.id]: event.target.value }))
+                                  }
+                                  className="h-10 w-28 rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                                />
+                                <Button
+                                  type="button"
+                                  variant={priceChanged ? "primary" : "secondary"}
+                                  size="sm"
+                                  icon="check"
+                                  disabled={!priceChanged || savingPriceId === item.id}
+                                  onClick={() => savePrice(item)}
+                                >
+                                  {savingPriceId === item.id ? "Saving" : "Save"}
+                                </Button>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 justify-start md:justify-end">
+                              <div className="group relative">
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  icon="users"
+                                  iconOnly
+                                  className="border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                                  aria-label={`View users with access to ${item.article_code || item.name || `variant ${item.id}`}`}
+                                >
+                                  View users
+                                </Button>
+                                <div
+                                  role="tooltip"
+                                  style={{ backgroundColor: "#020617" }}
+                                  className="invisible absolute bottom-full right-0 z-30 w-72 rounded-xl border border-slate-700 p-3 text-left text-white shadow-2xl group-hover:visible group-focus-within:visible"
+                                >
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+                                    Visible to {visibleUsers.length} {visibleUsers.length === 1 ? "user" : "users"}
+                                  </p>
+                                  {!item.is_visible ? (
+                                    <p className="mt-2 text-sm text-amber-300">This product is hidden from everyone.</p>
+                                  ) : visibleUsers.length ? (
+                                    <ul className="mt-2 max-h-48 space-y-2 overflow-y-auto overscroll-contain pr-1">
+                                      {visibleUsers.map((visibleUser) => (
+                                        <li key={visibleUser.id} className="rounded-lg bg-white/10 px-2.5 py-2">
+                                          <p className="text-sm font-semibold">{visibleUser.name}</p>
+                                          <p className="mt-0.5 text-xs text-slate-300">
+                                            {[visibleUser.role, visibleUser.email].filter(Boolean).join(" · ")}
+                                          </p>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  ) : (
+                                    <p className="mt-2 text-sm text-amber-300">No users currently have access.</p>
+                                  )}
+                                </div>
+                              </div>
                               <Button
                                 type="button"
                                 variant={item.is_visible ? "secondary" : "primary"}
                                 size="sm"
                                 icon={item.is_visible ? "eyeOff" : "eye"}
+                                iconOnly
+                                aria-label={item.is_visible ? "Hide product" : "Show product"}
+                                title={item.is_visible ? "Hide product" : "Show product"}
                                 onClick={() => toggleVisibility(item)}
                               >
-                                {item.is_visible ? "Hide" : "Show"}
+                                {item.is_visible ? "Hide product" : "Show product"}
                               </Button>
                             </div>
                           </div>

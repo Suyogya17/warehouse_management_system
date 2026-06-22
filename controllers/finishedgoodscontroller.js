@@ -138,6 +138,7 @@ const create = async (req, res, next) => {
       size,
       unit,
       quantity,
+      price,
       min_quantity,
       inner_box_per_pair,
       inner_boxes_per_outer_box
@@ -159,10 +160,10 @@ const create = async (req, res, next) => {
     const sql = `
       INSERT INTO finished_goods
       (name, article_code, sole_code, color, size, unit,
-       quantity, min_quantity,
+       quantity, price, min_quantity,
        inner_box_per_pair, inner_boxes_per_outer_box,
        image_url, is_visible${supportsDisplayOrder ? ', display_order' : ''}${supportsDisplayQuantity ? ', display_quantity' : ''})
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0${supportsDisplayOrder ? ', ?' : ''}${supportsDisplayQuantity ? ', ?' : ''})
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0${supportsDisplayOrder ? ', ?' : ''}${supportsDisplayQuantity ? ', ?' : ''})
     `;
 
     const params = [
@@ -173,6 +174,7 @@ const create = async (req, res, next) => {
       size || null,
       unit || 'pairs',
       Number(quantity || 0),
+      Number(price || 0),
       min_quantity || 5,
       Number(inner_box_per_pair || 1),
       inner_boxes_per_outer_box ? Number(inner_boxes_per_outer_box) : null,
@@ -209,6 +211,7 @@ const update = async (req, res, next) => {
       color,
       size,
       unit,
+      price,
       min_quantity,
       inner_box_per_pair,           
       inner_boxes_per_outer_box
@@ -226,6 +229,7 @@ const update = async (req, res, next) => {
           color = ?,
           size = ?,
           unit = ?,
+          price = ?,
           min_quantity = ?,
           inner_box_per_pair = ?,
           inner_boxes_per_outer_box = ?
@@ -245,6 +249,7 @@ const update = async (req, res, next) => {
       color || null,
       size || null,
       unit || 'pairs',
+      Number(price || 0),
       min_quantity || 5,
       Number(inner_box_per_pair || 1),
       parsedOuterBox,
@@ -366,6 +371,37 @@ const setDisplayQuantity = async (req, res, next) => {
   }
 };
 
+// ─── PRICE ─────────────────────────────────────────────────────────────────
+const setPrice = async (req, res, next) => {
+  try {
+    const price = Number(req.body.price);
+
+    if (!Number.isFinite(price) || price < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Price must be 0 or more.',
+      });
+    }
+
+    const savedPrice = Math.round(price * 100) / 100;
+    const result = await query(
+      `UPDATE finished_goods SET price = ? WHERE id = ? AND is_deleted = 0`,
+      [savedPrice, req.params.id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    return res.json({
+      success: true,
+      data: { id: Number(req.params.id), price: savedPrice },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── DISPLAY ORDER ─────────────────────────────────────────────────────────
 const setDisplayOrder = async (req, res, next) => {
   try {
@@ -412,5 +448,6 @@ module.exports = {
   remove,
   setVisibility,
   setDisplayQuantity,
+  setPrice,
   setDisplayOrder
 };

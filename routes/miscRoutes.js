@@ -12,6 +12,7 @@ fgRouter.get('/:id',    cacheResponse(15000), fgCtrl.getOne);
 fgRouter.post('/',      authorize('ADMIN', 'CO_ADMIN'), uploadMiddleware('image'), fgCtrl.create);
 fgRouter.put('/:id/visibility', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setVisibility);
 fgRouter.put('/:id/display-quantity', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDisplayQuantity);
+fgRouter.put('/:id/price', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setPrice);
 fgRouter.put('/:id',    authorize('ADMIN', 'CO_ADMIN'), uploadMiddleware('image'), fgCtrl.update);
 fgRouter.delete('/:id', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.remove);
 

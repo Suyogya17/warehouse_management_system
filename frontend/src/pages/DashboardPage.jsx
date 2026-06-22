@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Package as PackageIcon, EyeOff } from "lucide-react";
+import { ChevronLeft, ChevronRight, Package as PackageIcon, Eye, EyeOff } from "lucide-react";
 
 import PageHeader from "../components/PageHeader";
 import ProductImageGallery from "../components/ProductImageGallery";
@@ -9,7 +9,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
-import { formatNumber } from "../utils/format";
+import { formatNumber, formatPrice } from "../utils/format";
 
 const getAvailableQty = (product) =>
   Number(product?.available_qty ?? product?.display_quantity ?? product?.quantity ?? 0);
@@ -119,6 +119,10 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
         )}
        <div className=" rounded-xl p-3 space-y-2">
           <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-emerald-700">Price</span>
+            <span className="text-sm font-bold text-emerald-700">{formatPrice(selectedVariant.price)}</span>
+          </div>
+          <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-indigo-900">Available pairs: </span>
             <span className="text-sm font-bold text-slate-900">{formatNumber(availableQty)} {selectedVariant.unit || "pcs"}</span>
           </div>
@@ -133,13 +137,15 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
           <button
             type="button"
             onClick={() => onToggleVisibility?.(selectedVariant)}
-            className={`mt-1 rounded-xl px-4 py-2 text-sm font-semibold transition ${
+            aria-label={isHidden ? "Show product" : "Hide product"}
+            title={isHidden ? "Show product" : "Hide product"}
+            className={`mt-1 inline-flex h-10 w-10 items-center justify-center self-end rounded-xl transition ${
               isHidden
                 ? "bg-indigo-500 text-white hover:bg-indigo-600"
                 : "bg-amber-100 text-amber-700 hover:bg-amber-200"
             }`}
           >
-            {isHidden ? "Unhide product" : "Hide product"}
+            {isHidden ? <Eye size={18} /> : <EyeOff size={18} />}
           </button>
         )}
       </div>
@@ -151,7 +157,7 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
 // ─────────────────────────────────────────────────────────────
 // OnHoldCard — with lightbox
 // ─────────────────────────────────────────────────────────────
-function OnHoldCard({ variants = [] }) {
+function OnHoldCard({ variants = [], canManageVisibility = false, onToggleVisibility }) {
   const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
 
   useEffect(() => {
@@ -251,6 +257,17 @@ function OnHoldCard({ variants = [] }) {
             </div>
           )}
         </div>
+        {canManageVisibility && Number(selectedVariant.is_visible) !== 1 && (
+          <button
+            type="button"
+            onClick={() => onToggleVisibility?.(selectedVariant)}
+            aria-label="Show product"
+            title="Show product"
+            className="mt-1 inline-flex h-10 w-10 items-center justify-center self-end rounded-xl bg-indigo-500 text-white transition hover:bg-indigo-600"
+          >
+            <Eye size={18} />
+          </button>
+        )}
       </div>
 
     </div>
@@ -302,6 +319,73 @@ function PaginationBar({ total, current, setPage }) {
   );
 }
 
+function AdvertisementBanner({ advertisements = [] }) {
+  const [current, setCurrent] = useState(0);
+  const [paused, setPaused] = useState(false);
+
+  useEffect(() => {
+    if (current >= advertisements.length) setCurrent(0);
+  }, [advertisements.length, current]);
+
+  useEffect(() => {
+    if (paused || advertisements.length < 2) return undefined;
+    const timer = window.setInterval(
+      () => setCurrent((index) => (index + 1) % advertisements.length),
+      5000
+    );
+    return () => window.clearInterval(timer);
+  }, [advertisements.length, paused]);
+
+  if (!advertisements.length) return null;
+  const item = advertisements[current];
+  const goTo = (index) => setCurrent((index + advertisements.length) % advertisements.length);
+  const bannerHeight = Math.min(600, Math.max(180, Number(item.height_px || 320)));
+  const bannerWidth = Math.min(100, Math.max(50, Number(item.width_percent || 100)));
+
+  const content = (
+    <article style={{ height: `${bannerHeight}px` }} className="group relative overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-950 via-slate-950 to-slate-900 shadow-xl">
+      {item.image_url ? (
+        item.media_type === "VIDEO" ? (
+          <video
+            key={item.id}
+            src={`${APP_BASE_URL}${item.image_url}`}
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="metadata"
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+        ) : (
+          <img src={`${APP_BASE_URL}${item.image_url}`} alt={item.title} className="absolute inset-0 h-full w-full object-cover transition duration-700 group-hover:scale-[1.02]" />
+        )
+      ) : null}
+      <div className="absolute inset-0 bg-gradient-to-r from-black/90 via-black/55 to-black/5" />
+      <div className="relative flex h-full max-w-3xl flex-col justify-center px-8 py-12 text-white sm:px-16">
+        <h2 className="max-w-2xl text-3xl font-black leading-tight tracking-tight drop-shadow-lg sm:text-5xl">{item.title}</h2>
+        {item.message ? <p className="mt-4 max-w-xl text-sm leading-6 text-white/90 drop-shadow sm:text-lg">{item.message}</p> : null}
+        {item.link_url ? <span className="mt-6 inline-flex w-fit items-center rounded-full bg-white px-5 py-2.5 text-sm font-bold text-slate-950 shadow-lg transition group-hover:bg-indigo-50">View offer <span className="ml-2">→</span></span> : null}
+      </div>
+      {advertisements.length > 1 ? <span className="absolute right-5 top-5 rounded-full border border-white/20 bg-black/35 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-md">{current + 1} / {advertisements.length}</span> : null}
+    </article>
+  );
+
+  return (
+    <section aria-label="Promotions" aria-roledescription="carousel" style={{ "--banner-width": `${bannerWidth}%` }} className="relative w-full sm:w-[var(--banner-width)] sm:mx-auto" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
+      {item.link_url ? <a href={item.link_url} target="_blank" rel="noreferrer" className="block">{content}</a> : content}
+      {advertisements.length > 1 ? (
+        <>
+          <button type="button" onClick={() => goTo(current - 1)} aria-label="Previous promotion" className="absolute left-3 top-1/2 z-10 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-black/35 text-white shadow-lg backdrop-blur-md transition hover:bg-black/60"><ChevronLeft size={21} /></button>
+          <button type="button" onClick={() => goTo(current + 1)} aria-label="Next promotion" className="absolute right-3 top-1/2 z-10 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-black/35 text-white shadow-lg backdrop-blur-md transition hover:bg-black/60"><ChevronRight size={21} /></button>
+          <div className="absolute bottom-5 left-1/2 z-10 flex -translate-x-1/2 gap-2 rounded-full bg-black/25 px-3 py-2 backdrop-blur-sm">
+            {advertisements.map((advertisement, index) => <button key={advertisement.id} type="button" onClick={() => goTo(index)} aria-label={`Show promotion ${index + 1}`} className={`h-2.5 rounded-full transition-all ${index === current ? "w-7 bg-white" : "w-2.5 bg-white/50 hover:bg-white/80"}`} />)}
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // DashboardPage — unchanged
 // ─────────────────────────────────────────────────────────────
@@ -318,12 +402,14 @@ export default function DashboardPage() {
     orders: [],
     availability: [],
     permissions: [],
+    advertisements: [],
   });
 
   const [search, setSearch]             = useState("");
   const [stockFilter, setStockFilter]   = useState("all");
   const [seriesFilter, setSeriesFilter] = useState("");
   const [onHoldSearch, setOnHoldSearch] = useState("");
+  const [onHoldSeriesFilter, setOnHoldSeriesFilter] = useState("");
   const [currentPage, setCurrentPage]   = useState(1);
   const [onHoldPage, setOnHoldPage]     = useState(1);
   const PRODUCTS_PER_PAGE = 12;
@@ -341,6 +427,7 @@ export default function DashboardPage() {
       orders,
       availability,
       permissions,
+      advertisements,
     ] = await Promise.all([
       user.role !== "USER" ? api.getStockSummary(token) : Promise.resolve(null),
       api.getFinishedGoods(token),
@@ -352,6 +439,7 @@ export default function DashboardPage() {
         ? api.getAvailability(token, { includeHidden: isAdmin })
         : Promise.resolve({ data: [] }),
       isAdmin ? api.getPermissions(token) : Promise.resolve({ data: [] }),
+      user.role === "USER" ? api.getAdvertisements(token) : Promise.resolve({ data: [] }),
     ]);
 
     setState({
@@ -363,6 +451,7 @@ export default function DashboardPage() {
       orders:        orders.data        || [],
       availability:  availability.data  || [],
       permissions:   permissions.data   || [],
+      advertisements: advertisements.data || [],
     });
   }, [token, user.role, isAdmin]);
 
@@ -430,6 +519,7 @@ export default function DashboardPage() {
     return groupedProducts
       .map((variants) =>
         variants.filter((item) => {
+          const isVisible = Number(item.is_visible) === 1;
           const matchSearch =
             !search ||
             item.name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -441,15 +531,14 @@ export default function DashboardPage() {
             : stockFilter === "out"       ? qty <= 0
             : qty > 0 && qty < 10;
           const matchSeries = !seriesFilter || getSeriesName(item.sole_code) === seriesFilter;
-          return matchSearch && matchStock && matchSeries;
+          return isVisible && matchSearch && matchStock && matchSeries;
         })
       )
       .filter((v) => v.length > 0)
       .sort((a, b) => new Date(b[0]?.created_at || 0) - new Date(a[0]?.created_at || 0));
   }, [groupedProducts, search, stockFilter, seriesFilter]);
 
-  const onHoldProducts = useMemo(() => {
-    const q = onHoldSearch.trim().toLowerCase();
+  const onHoldBaseItems = useMemo(() => {
     const deniedKeys = new Set(
       state.permissions
         .filter((p) => Number(p.can_view) === 0)
@@ -462,17 +551,34 @@ export default function DashboardPage() {
         activeProductIds.add(Number(p.finished_good_id));
       }
     });
-    const onHoldItems = state.finishedGoods
-      .filter((product) => !activeProductIds.has(Number(product.id)))
+    return state.finishedGoods.filter(
+        (product) =>
+          Number(product.is_visible) !== 1 ||
+          !activeProductIds.has(Number(product.id))
+      );
+  }, [state.permissions, state.finishedGoods]);
+
+  const onHoldSeriesList = useMemo(
+    () =>
+      [...new Set(onHoldBaseItems.map((item) => getSeriesName(item.sole_code)).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })),
+    [onHoldBaseItems]
+  );
+
+  const onHoldProducts = useMemo(() => {
+    const q = onHoldSearch.trim().toLowerCase();
+    const onHoldItems = onHoldBaseItems
       .filter((product) => {
-        if (!q) return true;
-        return (
+        const matchesSearch = !q || (
           (product.name         || "").toLowerCase().includes(q) ||
           (product.article_code || "").toLowerCase().includes(q) ||
           (product.sole_code    || "").toLowerCase().includes(q) ||
           (product.color        || "").toLowerCase().includes(q) ||
           (product.size         || "").toLowerCase().includes(q)
         );
+        const matchesSeries =
+          !onHoldSeriesFilter || getSeriesName(product.sole_code) === onHoldSeriesFilter;
+        return matchesSearch && matchesSeries;
       });
     const groups = {};
     onHoldItems.forEach((item) => {
@@ -485,15 +591,21 @@ export default function DashboardPage() {
       groups[key].push(item);
     });
     return Object.values(groups);
-  }, [state.permissions, state.finishedGoods, onHoldSearch]);
+  }, [onHoldBaseItems, onHoldSearch, onHoldSeriesFilter]);
 
   useEffect(() => { setCurrentPage(1); }, [search, stockFilter, seriesFilter]);
-  useEffect(() => { setOnHoldPage(1); }, [onHoldSearch]);
+  useEffect(() => { setOnHoldPage(1); }, [onHoldSearch, onHoldSeriesFilter]);
 
   const totalPages        = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE);
   const onHoldTotal       = Math.ceil(onHoldProducts.length / PRODUCTS_PER_PAGE);
   const paginatedProducts = filteredProducts.slice((currentPage - 1) * PRODUCTS_PER_PAGE, currentPage * PRODUCTS_PER_PAGE);
   const paginatedOnHold   = onHoldProducts.slice((onHoldPage - 1) * PRODUCTS_PER_PAGE, onHoldPage * PRODUCTS_PER_PAGE);
+  const advertisementsAboveStatus = state.advertisements.filter(
+    (advertisement) => advertisement.placement === "ABOVE_STATUS"
+  );
+  const advertisementsBelowStatus = state.advertisements.filter(
+    (advertisement) => advertisement.placement !== "ABOVE_STATUS"
+  );
 
   return (
     <div className="space-y-6">
@@ -503,6 +615,10 @@ export default function DashboardPage() {
         description="Monitor raw-material health, production activity, and finished-goods readiness in one place."
         icon="dashboard"
       />
+
+      {user.role === "USER" && advertisementsAboveStatus.length > 0 && (
+        <AdvertisementBanner advertisements={advertisementsAboveStatus} />
+      )}
 
       {/* STAT CARDS */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
@@ -528,6 +644,10 @@ export default function DashboardPage() {
           </>
         )}
       </div>
+
+      {user.role === "USER" && advertisementsBelowStatus.length > 0 && (
+        <AdvertisementBanner advertisements={advertisementsBelowStatus} />
+      )}
 
       {/* FINISHED GOODS GRID */}
       {canViewDashboard && (
@@ -586,7 +706,7 @@ export default function DashboardPage() {
       )}
 
       {/* ON HOLD GRID */}
-      {canViewDashboard && (
+      {isAdmin && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -594,13 +714,20 @@ export default function DashboardPage() {
               On Hold&nbsp;
               <span className="text-slate-400 font-normal text-base">({onHoldProducts.length})</span>
             </h2>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <input type="text" placeholder="Search on hold…" value={onHoldSearch}
                 onChange={(e) => setOnHoldSearch(e.target.value)}
                 className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-amber-400 focus:border-transparent"
               />
-              {onHoldSearch && (
-                <button onClick={() => setOnHoldSearch("")}
+              <select value={onHoldSeriesFilter} onChange={(e) => setOnHoldSeriesFilter(e.target.value)}
+                className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-amber-400 focus:border-transparent">
+                <option value="">All Series</option>
+                {onHoldSeriesList.map((series) => (
+                  <option key={series} value={series}>{series}</option>
+                ))}
+              </select>
+              {(onHoldSearch || onHoldSeriesFilter) && (
+                <button onClick={() => { setOnHoldSearch(""); setOnHoldSeriesFilter(""); }}
                   className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition-all">
                   Clear
                 </button>
@@ -611,7 +738,12 @@ export default function DashboardPage() {
             <>
               <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
                 {paginatedOnHold.map((variants) => (
-                  <OnHoldCard key={variants.map((v) => v.id).join("-")} variants={variants} />
+                  <OnHoldCard
+                    key={variants.map((v) => v.id).join("-")}
+                    variants={variants}
+                    canManageVisibility={isAdmin}
+                    onToggleVisibility={toggleVisibility}
+                  />
                 ))}
               </div>
               <PaginationBar total={onHoldTotal} current={onHoldPage} setPage={setOnHoldPage} />

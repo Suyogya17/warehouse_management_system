@@ -6,6 +6,14 @@ import Icon from "../components/Icon";
 import NotificationWatcher from "../components/NotificationWatcher";
 import { normalizeRole } from "../utils/roles";
 
+const countryNames = {
+  NP: "Nepal",
+  IN: "India",
+  CN: "China",
+  US: "United States",
+  GB: "United Kingdom",
+};
+
 const navByRole = {
   ADMIN: [
     { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
@@ -20,6 +28,7 @@ const navByRole = {
     { to: "/warehouses", label: "Warehouses", icon: "box" },
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/product-display", label: "Product Display", icon: "eye" },
+    { to: "/advertisements", label: "Advertisements", icon: "image" },
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
     { to: "/summary", label: "Summary", icon: "hidden" },
@@ -39,6 +48,7 @@ const navByRole = {
     { to: "/warehouses", label: "Warehouses", icon: "box" },
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/product-display", label: "Product Display", icon: "eye" },
+    { to: "/advertisements", label: "Advertisements", icon: "image" },
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
     { to: "/summary", label: "Summary", icon: "hidden" },
@@ -96,6 +106,13 @@ export default function AppShell() {
     ? `store-management:notification-inbox:${user.id}`
     : "";
   const unreadCount = notifications.filter((item) => !item.read).length;
+
+  const preventNumberWheelChange = (event) => {
+    const input = event.target;
+    if (input instanceof HTMLInputElement && input.type === "number") {
+      input.blur();
+    }
+  };
 
   const pageTitle = useMemo(() => {
     return (
@@ -175,6 +192,10 @@ export default function AppShell() {
           <span className="mt-2 inline-block rounded-full bg-indigo-100 px-2.5 py-1 text-xs text-indigo-700">
             {user?.role}
           </span>
+          <p className="mt-2 text-xs font-medium text-slate-500">
+            {countryNames[user?.country_code] || user?.country_code || "Nepal"}
+    
+          </p>
         </div>
 
         <button
@@ -264,7 +285,10 @@ export default function AppShell() {
   );
 
   return (
-    <div className="min-h-screen bg-transparent text-slate-900">
+    <div
+      className="min-h-screen bg-transparent text-slate-900"
+      onWheelCapture={preventNumberWheelChange}
+    >
       <NotificationWatcher user={user} token={token} onNotify={addNotification} />
       <div className="mx-auto flex min-h-screen max-w gap-6 px-4 py-4 lg:px-6">
 
