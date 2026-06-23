@@ -5,6 +5,7 @@ import Button from "../components/Button";
 import Icon from "../components/Icon";
 import NotificationWatcher from "../components/NotificationWatcher";
 import { normalizeRole } from "../utils/roles";
+import { api } from "../services/api";
 
 const countryNames = {
   NP: "Nepal",
@@ -92,6 +93,44 @@ const formatNotificationTime = (isoString) => {
   return `${date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${timeStr}`;
 };
 
+const hashText = (value) => {
+  let hash = 0;
+  const text = String(value || "");
+
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash << 5) - hash + text.charCodeAt(index);
+    hash |= 0;
+  }
+
+  return Math.abs(hash).toString(36);
+};
+
+const readLegacyNotifications = (userId) => {
+  try {
+    const saved = localStorage.getItem(`store-management:notification-inbox:${userId}`);
+    const parsed = saved ? JSON.parse(saved) : [];
+
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .filter((item) => item?.title && item?.message)
+      .map((item) => {
+        const fingerprint = `${item.title}|${item.message}|${item.createdAt || ""}`;
+
+        return {
+          unique_key: item.unique_key || `legacy:${hashText(fingerprint)}`,
+          title: item.title,
+          message: item.message,
+          tone: item.tone || "info",
+          createdAt: item.createdAt,
+          read: Boolean(item.read),
+        };
+      });
+  } catch {
+    return [];
+  }
+};
+
 export default function AppShell() {
   const { token, user, logout } = useAuth();
   const location = useLocation();
@@ -102,9 +141,6 @@ export default function AppShell() {
 
   const role = normalizeRole(user?.role);
   const navItems = navByRole[role] || [];
-  const notificationStorageKey = user?.id
-    ? `store-management:notification-inbox:${user.id}`
-    : "";
   const unreadCount = notifications.filter((item) => !item.read).length;
 
   const preventNumberWheelChange = (event) => {
@@ -128,60 +164,106 @@ export default function AppShell() {
   useEffect(() => {
     setNotificationsOpen(false);
 
-    if (!notificationStorageKey) {
+    if (!token || !user?.id) {
       setNotifications([]);
       return;
     }
 
-    try {
-      const saved = localStorage.getItem(notificationStorageKey);
-      setNotifications(saved ? JSON.parse(saved) : []);
-    } catch {
-      setNotifications([]);
-    }
-  }, [notificationStorageKey]);
+    let cancelled = false;
 
-  const saveNotifications = useCallback(
-    (nextNotifications) => {
-      if (notificationStorageKey) {
-        localStorage.setItem(
-          notificationStorageKey,
-          JSON.stringify(nextNotifications)
+    api
+      .getNotifications(token)
+      .then(async (result) => {
+        const serverNotifications = result.data || [];
+        const legacyNotifications = readLegacyNotifications(user.id);
+
+        if (!legacyNotifications.length) {
+          if (!cancelled) setNotifications(serverNotifications);
+          return;
+        }
+
+        const serverKeys = new Set(serverNotifications.map((item) => item.unique_key));
+        const legacyToUpload = legacyNotifications.filter((item) => !serverKeys.has(item.unique_key));
+
+        if (!legacyToUpload.length) {
+          if (!cancelled) setNotifications(serverNotifications);
+          return;
+        }
+
+        const migrated = await Promise.all(
+          legacyToUpload.map((item) =>
+            api.createNotification(item, token).then((response) => response.data).catch(() => item)
+          )
         );
-      }
-    },
-    [notificationStorageKey]
-  );
+
+        const merged = [...migrated, ...serverNotifications]
+          .filter(Boolean)
+          .slice(0, 50);
+
+        if (!cancelled) setNotifications(merged);
+      })
+      .catch(() => {
+        if (!cancelled) setNotifications([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, user?.id]);
 
   const addNotification = useCallback(
     (notification) => {
-      setNotifications((current) => {
-        const next = [
-          {
-            id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            title: notification.title,
-            message: notification.message,
-            tone: notification.tone || "info",
-            createdAt: new Date().toISOString(),
-            read: false,
-          },
-          ...current,
-        ].slice(0, 20);
+      const localNotification = {
+        id: notification.unique_key || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        unique_key: notification.unique_key,
+        title: notification.title,
+        message: notification.message,
+        tone: notification.tone || "info",
+        createdAt: new Date().toISOString(),
+        read: false,
+      };
 
-        saveNotifications(next);
-        return next;
+      setNotifications((current) => {
+        const deduped = current.filter(
+          (item) =>
+            item.unique_key !== localNotification.unique_key &&
+            item.id !== localNotification.id
+        );
+        return [localNotification, ...deduped].slice(0, 20);
       });
+
+      if (token && notification.unique_key) {
+        api
+          .createNotification(notification, token)
+          .then((result) => {
+            const savedNotification = result.data;
+            if (!savedNotification) return;
+
+            setNotifications((current) => {
+              const deduped = current.filter(
+                (item) =>
+                  item.unique_key !== savedNotification.unique_key &&
+                  item.id !== localNotification.id
+              );
+              return [savedNotification, ...deduped].slice(0, 20);
+            });
+          })
+          .catch(() => {});
+      }
     },
-    [saveNotifications]
+    [token]
   );
 
   const markNotificationsRead = useCallback(() => {
     setNotifications((current) => {
       const next = current.map((item) => ({ ...item, read: true }));
-      saveNotifications(next);
       return next;
     });
-  }, [saveNotifications]);
+
+    if (token) {
+      api.markNotificationsRead(token).catch(() => {});
+    }
+  }, [token]);
 
   const UserCard = () => (
     <div className="relative mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">

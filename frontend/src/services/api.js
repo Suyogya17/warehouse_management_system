@@ -85,6 +85,17 @@ export const api = {
 
   getAdvertisements: (token) => apiRequest("/advertisements", {}, token),
 
+  getNotifications: (token) => apiRequest("/notifications", {}, token),
+
+  createNotification: (payload, token) =>
+    apiRequest("/notifications", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }, token),
+
+  markNotificationsRead: (token) =>
+    apiRequest("/notifications/read", { method: "PUT" }, token),
+
   createAdvertisement: (payload, token) =>
     apiRequest("/advertisements", { method: "POST", body: payload }, token),
 

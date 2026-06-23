@@ -121,6 +121,7 @@ export default function NotificationWatcher({ user, token, onNotify }) {
       newOrders.forEach((order) => {
         const time = formatTime(order.order_placed_at || order.created_at || order.createdAt);
         const notification = {
+          unique_key: `admin:new-order:${order.id}`,
           tone: "info",
           title: "New order placed",
           message: `${order.created_by_name || order.customer_name || "User"} placed an order at ${time}. Items: ${getOrderItemSummary(order)}.`,
@@ -175,6 +176,7 @@ export default function NotificationWatcher({ user, token, onNotify }) {
           if (!previous || previous.status === order.status) return;
 
           const notification = {
+            unique_key: `customer:order-status:${order.id}:${order.status}:${order.cancellation_reason || ""}`,
             tone: order.status === "CANCELLED" ? "warning" : "info",
             title: `Order #${order.id} updated`,
             message: getStatusMessage(
@@ -204,6 +206,7 @@ export default function NotificationWatcher({ user, token, onNotify }) {
         newProducts.forEach((product) => {
           const time = formatTime(product.created_at || product.createdAt);
           const notification = {
+            unique_key: `customer:new-product:${product.id}`,
             tone: "success",
             title: "New product available",
             message: `${product.name || "Product"}${product.article_code ? ` (${product.article_code})` : ""} is now available${time ? ` at ${time}` : ""}.`,
