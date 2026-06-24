@@ -1,12 +1,37 @@
+import * as XLSX from "xlsx";
 import { useState, useRef, useEffect } from "react";
 import { formatDate } from "../utils/format";
 import EmptyState from "./EmptyState";
+
+const toExportValue = (value) => {
+  if (value === null || value === undefined) return "";
+  if (value instanceof Date) return value.toLocaleString();
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(toExportValue).filter(Boolean).join(" ");
+  }
+  if (value?.props?.children !== undefined) {
+    return toExportValue(value.props.children);
+  }
+
+  return "";
+};
+
+const normalizeFilename = (value = "data-table") =>
+  String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "data-table";
 
 export default function DataTable({
   columns,
   rows = [],
   emptyTitle,
   emptyDescription,
+  exportFilename = "data-table",
 }) {
   const [currentPage, setCurrentPage] = useState(1);
   const tableContainerRef = useRef(null);
@@ -43,6 +68,41 @@ export default function DataTable({
     currentPage * rowsPerPage
   );
 
+  const getExportCellValue = (row, col, rowIndex) => {
+    if (typeof col.exportValue === "function") {
+      return toExportValue(col.exportValue(row, rowIndex));
+    }
+
+    if (col.type === "date") {
+      return row[col.key] ? formatDate(row[col.key]) : "";
+    }
+
+    if (row[col.key] !== undefined && row[col.key] !== null) {
+      return toExportValue(row[col.key]);
+    }
+
+    if (typeof col.render === "function") {
+      const rendered = col.render(row, rowIndex);
+      return toExportValue(rendered);
+    }
+
+    return "";
+  };
+
+  const handleExport = () => {
+    const exportRows = filteredData.map((row, rowIndex) =>
+      columns.reduce((acc, col) => {
+        acc[col.label || col.key] = getExportCellValue(row, col, rowIndex);
+        return acc;
+      }, {})
+    );
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Data");
+    XLSX.writeFile(workbook, `${normalizeFilename(exportFilename)}.xlsx`);
+  };
+
   const getPageNumbers = () => {
     const pages = [];
     const maxVisible = 5;
@@ -64,6 +124,15 @@ export default function DataTable({
 
   return (
                 <div className="w-full rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="flex items-center justify-end border-b border-slate-100 px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={handleExport}
+                      className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-emerald-50 hover:text-emerald-700"
+                    >
+                      Export Excel
+                    </button>
+                  </div>
 
                   {/* MOBILE TABLE VIEW */}
                       <div className="overflow-x-auto">

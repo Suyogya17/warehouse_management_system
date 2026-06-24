@@ -387,4 +387,6 @@ deleteStockAdjustment: (id, token) =>
 
     return apiRequest(`/warehouses/movements${query ? `?${query}` : ""}`, {}, token);
   },
+
+  getAnalytics: (section, token) => apiRequest(`/analytics/${section}`, {}, token),
 };
