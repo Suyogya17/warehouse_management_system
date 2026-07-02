@@ -19,6 +19,9 @@ const getSeriesName = (soleCode = "") =>
     .replace(/[-_\s]*sole$/i, "")
     .trim();
 
+const advertisementPlacement = (advertisement) =>
+  String(advertisement?.placement || "BELOW_STATUS").trim().toUpperCase();
+
 // ─────────────────────────────────────────────────────────────
 // ProductCard — dashboard product card with lightbox
 // ─────────────────────────────────────────────────────────────
@@ -360,10 +363,10 @@ function AdvertisementBanner({ advertisements = [] }) {
           <img src={`${APP_BASE_URL}${item.image_url}`} alt={item.title} className="absolute inset-0 h-full w-full object-cover transition duration-700 group-hover:scale-[1.02]" />
         )
       ) : null}
-      <div className="absolute inset-0 bg-gradient-to-r from-black/90 via-black/55 to-black/5" />
+      <div className="absolute inset-0 " />
       <div className="relative flex h-full max-w-3xl flex-col justify-center px-8 py-12 text-white sm:px-16">
-        <h2 className="max-w-2xl text-3xl font-black leading-tight tracking-tight drop-shadow-lg sm:text-5xl">{item.title}</h2>
-        {item.message ? <p className="mt-4 max-w-xl text-sm leading-6 text-white/90 drop-shadow sm:text-lg">{item.message}</p> : null}
+        {/* <h2 className="max-w-2xl text-3xl font-black leading-tight tracking-tight drop-shadow-lg sm:text-5xl">{item.title}</h2> */}
+        {/* {item.message ? <p className="mt-4 max-w-xl text-sm leading-6 text-white/90 drop-shadow sm:text-lg">{item.message}</p> : null} */}
         {item.link_url ? <span className="mt-6 inline-flex w-fit items-center rounded-full bg-white px-5 py-2.5 text-sm font-bold text-slate-950 shadow-lg transition group-hover:bg-indigo-50">View offer <span className="ml-2">→</span></span> : null}
       </div>
       {advertisements.length > 1 ? <span className="absolute right-5 top-5 rounded-full border border-white/20 bg-black/35 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-md">{current + 1} / {advertisements.length}</span> : null}
@@ -382,6 +385,76 @@ function AdvertisementBanner({ advertisements = [] }) {
           </div>
         </>
       ) : null}
+    </section>
+  );
+}
+
+function AdvertisementMedia({ item, className = "" }) {
+  if (!item?.image_url) {
+    return <div className={`flex items-center justify-center bg-slate-100 text-sm text-slate-400 ${className}`}>No media</div>;
+  }
+
+  if (item.media_type === "VIDEO") {
+    return (
+      <video
+        src={`${APP_BASE_URL}${item.image_url}`}
+        controls
+        playsInline
+        preload="metadata"
+        className={`bg-black object-cover ${className}`}
+      />
+    );
+  }
+
+  return (
+    <img
+      src={`${APP_BASE_URL}${item.image_url}`}
+      alt={item.title}
+      className={`object-cover ${className}`}
+      loading="lazy"
+      decoding="async"
+    />
+  );
+}
+
+function AdvertisementFeed({ advertisements = [], variant = "facebook" }) {
+  if (!advertisements.length) return null;
+
+  const isInstagram = variant === "instagram";
+  const mediaAspect = isInstagram ? "aspect-square" : "aspect-[4/3]";
+
+  return (
+    <section aria-label="Promotions">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,360px))] gap-4">
+        {advertisements.map((item) => {
+          const card = (
+            <article className="group flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-lg">
+              <div className="relative overflow-hidden bg-slate-100">
+                <AdvertisementMedia item={item} className={`${mediaAspect} w-full transition duration-500 group-hover:scale-[1.03]`} />
+              </div>
+              <div className="flex flex-1 flex-col gap-3 p-4">
+                <div className="min-w-0">
+                  <h3 className="line-clamp-2 text-base font-bold leading-snug text-slate-950">{item.title}</h3>
+                  {item.message ? <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-600">{item.message}</p> : null}
+                </div>
+                {item.link_url ? (
+                  <span className="mt-auto inline-flex h-10 items-center justify-center rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white transition group-hover:bg-indigo-600">
+                    View promotion
+                  </span>
+                ) : null}
+              </div>
+            </article>
+          );
+
+          return item.link_url ? (
+            <a key={item.id} href={item.link_url} target="_blank" rel="noreferrer" className="block">
+              {card}
+            </a>
+          ) : (
+            <div key={item.id}>{card}</div>
+          );
+        })}
+      </div>
     </section>
   );
 }
@@ -601,10 +674,16 @@ export default function DashboardPage() {
   const paginatedProducts = filteredProducts.slice((currentPage - 1) * PRODUCTS_PER_PAGE, currentPage * PRODUCTS_PER_PAGE);
   const paginatedOnHold   = onHoldProducts.slice((onHoldPage - 1) * PRODUCTS_PER_PAGE, onHoldPage * PRODUCTS_PER_PAGE);
   const advertisementsAboveStatus = state.advertisements.filter(
-    (advertisement) => advertisement.placement === "ABOVE_STATUS"
+    (advertisement) => advertisementPlacement(advertisement) === "ABOVE_STATUS"
   );
   const advertisementsBelowStatus = state.advertisements.filter(
-    (advertisement) => advertisement.placement !== "ABOVE_STATUS"
+    (advertisement) => advertisementPlacement(advertisement) === "BELOW_STATUS"
+  );
+  const facebookFeedAdvertisements = state.advertisements.filter(
+    (advertisement) => advertisementPlacement(advertisement) === "FACEBOOK_FEED"
+  );
+  const instagramFeedAdvertisements = state.advertisements.filter(
+    (advertisement) => advertisementPlacement(advertisement) === "INSTAGRAM_FEED"
   );
 
   return (
@@ -647,6 +726,14 @@ export default function DashboardPage() {
 
       {user.role === "USER" && advertisementsBelowStatus.length > 0 && (
         <AdvertisementBanner advertisements={advertisementsBelowStatus} />
+      )}
+
+      {user.role === "USER" && facebookFeedAdvertisements.length > 0 && (
+        <AdvertisementFeed advertisements={facebookFeedAdvertisements} variant="facebook" />
+      )}
+
+      {user.role === "USER" && instagramFeedAdvertisements.length > 0 && (
+        <AdvertisementFeed advertisements={instagramFeedAdvertisements} variant="instagram" />
       )}
 
       {/* FINISHED GOODS GRID */}

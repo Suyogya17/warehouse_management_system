@@ -1,6 +1,6 @@
 import * as XLSX from "xlsx";
 import { useState, useRef, useEffect } from "react";
-import { formatDate } from "../utils/format";
+import { formatDate, formatNumber } from "../utils/format";
 import EmptyState from "./EmptyState";
 
 const toExportValue = (value) => {
@@ -32,8 +32,11 @@ export default function DataTable({
   emptyTitle,
   emptyDescription,
   exportFilename = "data-table",
+  summaryColumns = [],
 }) {
   const [currentPage, setCurrentPage] = useState(1);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchKey, setSearchKey] = useState("all");
   const tableContainerRef = useRef(null);
   const rowsPerPage = 10;
 
@@ -53,13 +56,41 @@ export default function DataTable({
     return () => container.removeEventListener("wheel", handleWheel);
   }, []);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, searchKey, rows]);
+
   // ✅ 2. THEN do early return
   if (!rows.length) {
     return <EmptyState title={emptyTitle} description={emptyDescription} />;
   }
 
   // ✅ 3. rest of your logic
-  const filteredData = rows;
+  const searchableColumns = columns.filter((col) => col.searchable !== false);
+
+  const getCellSearchValue = (row, col, rowIndex) => {
+    if (typeof col.searchValue === "function") {
+      return toExportValue(col.searchValue(row, rowIndex));
+    }
+
+    return getExportCellValue(row, col, rowIndex);
+  };
+
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const filteredData = normalizedSearch
+    ? rows.filter((row, rowIndex) => {
+        const columnsToSearch =
+          searchKey === "all"
+            ? searchableColumns
+            : searchableColumns.filter((col) => col.key === searchKey);
+
+        return columnsToSearch.some((col) =>
+          String(getCellSearchValue(row, col, rowIndex) || "")
+            .toLowerCase()
+            .includes(normalizedSearch)
+        );
+      })
+    : rows;
 
   const totalPages = Math.ceil(filteredData.length / rowsPerPage);
 
@@ -68,7 +99,7 @@ export default function DataTable({
     currentPage * rowsPerPage
   );
 
-  const getExportCellValue = (row, col, rowIndex) => {
+  function getExportCellValue(row, col, rowIndex) {
     if (typeof col.exportValue === "function") {
       return toExportValue(col.exportValue(row, rowIndex));
     }
@@ -87,7 +118,7 @@ export default function DataTable({
     }
 
     return "";
-  };
+  }
 
   const handleExport = () => {
     const exportRows = filteredData.map((row, rowIndex) =>
@@ -102,6 +133,23 @@ export default function DataTable({
     XLSX.utils.book_append_sheet(workbook, worksheet, "Data");
     XLSX.writeFile(workbook, `${normalizeFilename(exportFilename)}.xlsx`);
   };
+
+  const summaryItems = summaryColumns
+    .map((summary) => {
+      const total = filteredData.reduce((sum, row) => {
+        const value =
+          typeof summary.value === "function" ? summary.value(row) : row[summary.key];
+        const number = Number(value || 0);
+        return Number.isFinite(number) ? sum + number : sum;
+      }, 0);
+
+      return {
+        label: summary.label || columns.find((col) => col.key === summary.key)?.label || summary.key,
+        total,
+        suffix: summary.suffix || "",
+      };
+    })
+    .filter((item) => item.label);
 
   const getPageNumbers = () => {
     const pages = [];
@@ -124,7 +172,28 @@ export default function DataTable({
 
   return (
                 <div className="w-full rounded-2xl border border-slate-200 bg-white shadow-sm">
-                  <div className="flex items-center justify-end border-b border-slate-100 px-4 py-3">
+                  <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <input
+                        type="search"
+                        value={searchTerm}
+                        onChange={(event) => setSearchTerm(event.target.value)}
+                        placeholder="Search table..."
+                        className="h-9 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 sm:w-72"
+                      />
+                      <select
+                        value={searchKey}
+                        onChange={(event) => setSearchKey(event.target.value)}
+                        className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                      >
+                        <option value="all">All columns</option>
+                        {searchableColumns.map((col) => (
+                          <option key={col.key} value={col.key}>
+                            {col.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                     <button
                       type="button"
                       onClick={handleExport}
@@ -217,6 +286,23 @@ export default function DataTable({
           </button>
         </div>
       </div>
+
+      {summaryItems.length ? (
+        <div className="border-t border-slate-200 bg-slate-50 px-4 py-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {summaryItems.map((item) => (
+              <div key={item.label} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Total {item.label}
+                </p>
+                <p className="mt-1 text-lg font-semibold text-slate-950">
+                  {formatNumber(item.total)}{item.suffix ? ` ${item.suffix}` : ""}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

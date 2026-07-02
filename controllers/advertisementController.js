@@ -2,8 +2,14 @@ const { query } = require('../config/db');
 
 const imagePath = (req) => (req.file ? `/uploads/${req.file.filename}` : null);
 const mediaType = (req) => (req.file?.mimetype?.startsWith('video/') ? 'VIDEO' : 'IMAGE');
+const ADVERTISEMENT_PLACEMENTS = [
+  'ABOVE_STATUS',
+  'BELOW_STATUS',
+  'FACEBOOK_FEED',
+  'INSTAGRAM_FEED',
+];
 const placement = (value) =>
-  ['ABOVE_STATUS', 'BELOW_STATUS'].includes(String(value).toUpperCase())
+  ADVERTISEMENT_PLACEMENTS.includes(String(value).toUpperCase())
     ? String(value).toUpperCase()
     : 'BELOW_STATUS';
 const clampNumber = (value, min, max, fallback) => {

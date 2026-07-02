@@ -1,10 +1,21 @@
 const { query } = require("../config/db");
+const { hasColumn } = require("../utils/schemaSupport");
 
 const ACTIVE_ORDER_STATUSES = ["PENDING", "CONFIRMED", "PACKED"];
 
 const activeStatusPlaceholders = ACTIVE_ORDER_STATUSES.map(() => "?").join(",");
 
 const numeric = (value) => Number(value || 0);
+
+const emptyUserWorkflowSummary = () => ({
+  active_users: 0,
+  confirmed_orders: 0,
+  packed_orders: 0,
+  delivered_orders: 0,
+  confirmed_quantity: 0,
+  packed_quantity: 0,
+  delivered_quantity: 0,
+});
 
 const mapNumeric = (rows, fields) =>
   rows.map((row) =>
@@ -20,6 +31,160 @@ const mapNumeric = (rows, fields) =>
 const run = async (sql, params = []) => {
   const result = await query(sql, params);
   return result.rows || result;
+};
+
+const productLabel = (row) =>
+  [row.article_code || row.name, row.color, row.size].filter(Boolean).join(" / ");
+
+const getSupport = async (req, res, next) => {
+  try {
+    const [productSignals, materialRisks] = await Promise.all([
+      run(
+        `SELECT fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit,
+                fg.quantity AS current_stock,
+                fg.min_quantity,
+                COALESCE(active_orders.reserved_quantity, 0) AS reserved_quantity,
+                COALESCE(order_30.ordered_last_30_days, 0) AS ordered_last_30_days,
+                COALESCE(order_90.ordered_last_90_days, 0) AS ordered_last_90_days,
+                COALESCE(produced_30.produced_last_30_days, 0) AS produced_last_30_days,
+                last_order.last_order_at
+         FROM finished_goods fg
+         LEFT JOIN (
+           SELECT oi.finished_good_id, SUM(oi.qty_ordered) AS reserved_quantity
+           FROM order_items oi
+           JOIN orders o ON o.id = oi.order_id
+           WHERE o.status IN (${activeStatusPlaceholders})
+           GROUP BY oi.finished_good_id
+         ) active_orders ON active_orders.finished_good_id = fg.id
+         LEFT JOIN (
+           SELECT oi.finished_good_id, SUM(oi.qty_ordered) AS ordered_last_30_days
+           FROM order_items oi
+           JOIN orders o ON o.id = oi.order_id
+           WHERE o.status <> 'CANCELLED'
+             AND o.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+           GROUP BY oi.finished_good_id
+         ) order_30 ON order_30.finished_good_id = fg.id
+         LEFT JOIN (
+           SELECT oi.finished_good_id, SUM(oi.qty_ordered) AS ordered_last_90_days
+           FROM order_items oi
+           JOIN orders o ON o.id = oi.order_id
+           WHERE o.status <> 'CANCELLED'
+             AND o.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+           GROUP BY oi.finished_good_id
+         ) order_90 ON order_90.finished_good_id = fg.id
+         LEFT JOIN (
+           SELECT finished_good_id, SUM(qty_produced) AS produced_last_30_days
+           FROM production
+           WHERE created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+           GROUP BY finished_good_id
+         ) produced_30 ON produced_30.finished_good_id = fg.id
+         LEFT JOIN (
+           SELECT oi.finished_good_id, MAX(o.created_at) AS last_order_at
+           FROM order_items oi
+           JOIN orders o ON o.id = oi.order_id
+           WHERE o.status <> 'CANCELLED'
+           GROUP BY oi.finished_good_id
+         ) last_order ON last_order.finished_good_id = fg.id
+         ORDER BY fg.article_code, fg.color, fg.size`,
+        ACTIVE_ORDER_STATUSES
+      ),
+      run(
+        `SELECT id, name, article_code, category, color, unit, quantity, min_quantity
+         FROM raw_materials
+         WHERE quantity <= min_quantity
+         ORDER BY quantity ASC, name ASC
+         LIMIT 20`
+      ),
+    ]);
+
+    const signals = mapNumeric(productSignals, [
+      "current_stock",
+      "min_quantity",
+      "reserved_quantity",
+      "ordered_last_30_days",
+      "ordered_last_90_days",
+      "produced_last_30_days",
+    ]);
+
+    const makeRecommendations = signals
+      .map((row) => {
+        const activeShortage = Math.max(row.reserved_quantity - row.current_stock, 0);
+        const recentShortage = Math.max(row.ordered_last_30_days - row.current_stock, 0);
+        const safetyShortage = row.current_stock <= row.min_quantity ? row.min_quantity - row.current_stock : 0;
+        const suggested_quantity = Math.ceil(Math.max(activeShortage, recentShortage, safetyShortage));
+        const priority_score =
+          activeShortage * 3 +
+          recentShortage * 2 +
+          Math.max(row.ordered_last_90_days - row.current_stock, 0) +
+          (row.current_stock <= row.min_quantity ? 25 : 0);
+
+        const reasons = [];
+        if (activeShortage > 0) reasons.push("active orders are above current stock");
+        if (recentShortage > 0) reasons.push("last 30 days demand is above stock");
+        if (row.current_stock <= row.min_quantity) reasons.push("stock is at or below minimum");
+
+        return {
+          ...row,
+          product_name: productLabel(row),
+          suggested_quantity,
+          priority_score,
+          reason: reasons.join(", "),
+        };
+      })
+      .filter((row) => row.suggested_quantity > 0)
+      .sort((a, b) => b.priority_score - a.priority_score)
+      .slice(0, 20);
+
+    const holdRecommendations = signals
+      .map((row) => {
+        const monthsOfStock = row.ordered_last_90_days > 0
+          ? row.current_stock / Math.max(row.ordered_last_90_days / 3, 1)
+          : row.current_stock;
+        const priority_score =
+          (row.ordered_last_90_days === 0 ? 100 : 0) +
+          Math.max(row.current_stock - row.ordered_last_90_days, 0) +
+          Math.max(monthsOfStock - 3, 0);
+
+        const reasons = [];
+        if (row.ordered_last_90_days === 0 && row.current_stock > 0) reasons.push("no orders in the last 90 days");
+        if (row.current_stock > row.ordered_last_90_days && row.ordered_last_90_days > 0) {
+          reasons.push("stock is higher than recent 90 day demand");
+        }
+        if (row.produced_last_30_days > 0 && row.ordered_last_30_days === 0) {
+          reasons.push("recently produced with no 30 day sales");
+        }
+
+        return {
+          ...row,
+          product_name: productLabel(row),
+          months_of_stock: Number(monthsOfStock.toFixed(1)),
+          priority_score,
+          reason: reasons.join(", "),
+        };
+      })
+      .filter((row) => row.current_stock > 0 && row.reason)
+      .sort((a, b) => b.priority_score - a.priority_score)
+      .slice(0, 20);
+
+    const urgentCount = makeRecommendations.filter((row) => row.reserved_quantity > row.current_stock).length;
+
+    return res.json({
+      success: true,
+      data: {
+        summary: {
+          make_now_count: makeRecommendations.length,
+          hold_count: holdRecommendations.length,
+          raw_material_risk_count: materialRisks.length,
+          urgent_order_shortage_count: urgentCount,
+        },
+        make_recommendations: makeRecommendations,
+        hold_recommendations: holdRecommendations,
+        raw_material_risks: mapNumeric(materialRisks, ["quantity", "min_quantity"]),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
 };
 
 const getDashboard = async (req, res, next) => {
@@ -432,10 +597,149 @@ const getDealers = async (req, res, next) => {
   }
 };
 
+const getUsers = async (req, res, next) => {
+  try {
+    const requiredWorkflowColumns = [
+      "confirmed_by",
+      "confirmed_at",
+      "packed_by",
+      "packed_at",
+      "delivered_by",
+      "delivered_at",
+    ];
+    const columnSupport = await Promise.all(
+      requiredWorkflowColumns.map(async (column) => ({
+        column,
+        supported: await hasColumn("orders", column),
+      }))
+    );
+    const missingWorkflowColumns = columnSupport
+      .filter((item) => !item.supported)
+      .map((item) => item.column);
+
+    if (missingWorkflowColumns.length) {
+      return res.json({
+        success: true,
+        data: {
+          summary: emptyUserWorkflowSummary(),
+          user_workflow_report: [],
+          missing_workflow_columns: missingWorkflowColumns,
+        },
+      });
+    }
+
+    const userWorkflowReport = await run(
+      `SELECT u.id,
+              COALESCE(u.name, 'Unknown user') AS user_name,
+              u.email,
+              u.role,
+              COALESCE(confirmed.confirmed_orders, 0) AS confirmed_orders,
+              COALESCE(confirmed.confirmed_quantity, 0) AS confirmed_quantity,
+              confirmed.last_confirmed_at,
+              COALESCE(packed.packed_orders, 0) AS packed_orders,
+              COALESCE(packed.packed_quantity, 0) AS packed_quantity,
+              packed.last_packed_at,
+              COALESCE(delivered.delivered_orders, 0) AS delivered_orders,
+              COALESCE(delivered.delivered_quantity, 0) AS delivered_quantity,
+              delivered.last_delivered_at
+       FROM users u
+       LEFT JOIN (
+         SELECT o.confirmed_by AS user_id,
+                COUNT(DISTINCT o.id) AS confirmed_orders,
+                COALESCE(SUM(order_qty.total_quantity), 0) AS confirmed_quantity,
+                MAX(o.confirmed_at) AS last_confirmed_at
+         FROM orders o
+         LEFT JOIN (
+           SELECT order_id, SUM(qty_ordered) AS total_quantity
+           FROM order_items
+           GROUP BY order_id
+         ) order_qty ON order_qty.order_id = o.id
+         WHERE o.confirmed_by IS NOT NULL
+         GROUP BY o.confirmed_by
+       ) confirmed ON confirmed.user_id = u.id
+       LEFT JOIN (
+         SELECT o.packed_by AS user_id,
+                COUNT(DISTINCT o.id) AS packed_orders,
+                COALESCE(SUM(order_qty.total_quantity), 0) AS packed_quantity,
+                MAX(o.packed_at) AS last_packed_at
+         FROM orders o
+         LEFT JOIN (
+           SELECT order_id, SUM(qty_ordered) AS total_quantity
+           FROM order_items
+           GROUP BY order_id
+         ) order_qty ON order_qty.order_id = o.id
+         WHERE o.packed_by IS NOT NULL
+         GROUP BY o.packed_by
+       ) packed ON packed.user_id = u.id
+       LEFT JOIN (
+         SELECT o.delivered_by AS user_id,
+                COUNT(DISTINCT o.id) AS delivered_orders,
+                COALESCE(SUM(order_qty.total_quantity), 0) AS delivered_quantity,
+                MAX(o.delivered_at) AS last_delivered_at
+         FROM orders o
+         LEFT JOIN (
+           SELECT order_id, SUM(qty_ordered) AS total_quantity
+           FROM order_items
+           GROUP BY order_id
+         ) order_qty ON order_qty.order_id = o.id
+         WHERE o.delivered_by IS NOT NULL
+         GROUP BY o.delivered_by
+       ) delivered ON delivered.user_id = u.id
+       WHERE confirmed.user_id IS NOT NULL
+          OR packed.user_id IS NOT NULL
+          OR delivered.user_id IS NOT NULL
+       ORDER BY (
+          COALESCE(confirmed.confirmed_orders, 0) +
+          COALESCE(packed.packed_orders, 0) +
+          COALESCE(delivered.delivered_orders, 0)
+       ) DESC, user_name`
+    );
+
+    const rows = mapNumeric(userWorkflowReport, [
+      "confirmed_orders",
+      "confirmed_quantity",
+      "packed_orders",
+      "packed_quantity",
+      "delivered_orders",
+      "delivered_quantity",
+    ]).map((row) => ({
+      ...row,
+      total_actions: row.confirmed_orders + row.packed_orders + row.delivered_orders,
+      total_quantity_handled:
+        row.confirmed_quantity + row.packed_quantity + row.delivered_quantity,
+    }));
+
+    const summary = rows.reduce(
+      (acc, row) => ({
+        active_users: acc.active_users + 1,
+        confirmed_orders: acc.confirmed_orders + row.confirmed_orders,
+        packed_orders: acc.packed_orders + row.packed_orders,
+        delivered_orders: acc.delivered_orders + row.delivered_orders,
+        confirmed_quantity: acc.confirmed_quantity + row.confirmed_quantity,
+        packed_quantity: acc.packed_quantity + row.packed_quantity,
+        delivered_quantity: acc.delivered_quantity + row.delivered_quantity,
+      }),
+      emptyUserWorkflowSummary()
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        summary,
+        user_workflow_report: rows,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getDashboard,
   getInventory,
   getProduction,
   getSales,
   getDealers,
+  getUsers,
+  getSupport,
 };

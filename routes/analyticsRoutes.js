@@ -11,5 +11,7 @@ router.get("/inventory", cacheResponse(5000), ctrl.getInventory);
 router.get("/production", cacheResponse(5000), ctrl.getProduction);
 router.get("/sales", cacheResponse(5000), ctrl.getSales);
 router.get("/dealers", cacheResponse(5000), ctrl.getDealers);
+router.get("/users", cacheResponse(5000), ctrl.getUsers);
+router.get("/support", cacheResponse(5000), ctrl.getSupport);
 
 module.exports = router;

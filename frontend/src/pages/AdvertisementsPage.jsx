@@ -23,6 +23,15 @@ const initialForm = {
   image: null,
 };
 
+const placementLabels = {
+  ABOVE_STATUS: "Carousel above status cards",
+  BELOW_STATUS: "Carousel below status cards",
+  FACEBOOK_FEED: "Facebook feed",
+  INSTAGRAM_FEED: "Instagram feed",
+};
+const normalizedPlacement = (item) => String(item?.placement || "BELOW_STATUS").trim().toUpperCase();
+const isFeedPlacement = (item) => ["FACEBOOK_FEED", "INSTAGRAM_FEED"].includes(normalizedPlacement(item));
+
 const toLocalInput = (value) => (value ? String(value).replace(" ", "T").slice(0, 16) : "");
 
 const toFormData = (form) => {
@@ -138,7 +147,7 @@ export default function AdvertisementsPage() {
     <div className="space-y-6">
       <PageHeader eyebrow="Customer communication" title="Advertisements" description="Create and schedule banners for the user dashboard." icon="image" />
 
-      <SectionCard title={editingId ? "Edit advertisement" : "Create advertisement"} subtitle="Use a wide banner image for the best result." icon="image">
+      <SectionCard title={editingId ? "Edit advertisement" : "Create advertisement"} subtitle="Choose carousel for banners, or feed placement for Facebook and Instagram style posts." icon="image">
         <form onSubmit={submit} className="grid gap-4 p-4 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Title"><TextInput value={form.title} onChange={(e) => setForm((c) => ({ ...c, title: e.target.value }))} required /></Field>
           <Field label="Link (optional)"><TextInput type="url" placeholder="https://..." value={form.link_url} onChange={(e) => setForm((c) => ({ ...c, link_url: e.target.value }))} /></Field>
@@ -149,8 +158,10 @@ export default function AdvertisementsPage() {
           <Field label="Display order"><TextInput type="number" min="0" value={form.display_order} onChange={(e) => setForm((c) => ({ ...c, display_order: e.target.value }))} /></Field>
           <Field label="Dashboard position">
             <SelectInput value={form.placement} onChange={(e) => setForm((c) => ({ ...c, placement: e.target.value }))}>
-              <option value="ABOVE_STATUS">Above status cards</option>
-              <option value="BELOW_STATUS">Below status cards</option>
+              <option value="ABOVE_STATUS">Carousel above status cards</option>
+              <option value="BELOW_STATUS">Carousel below status cards</option>
+              <option value="FACEBOOK_FEED">Facebook feed</option>
+              <option value="INSTAGRAM_FEED">Instagram feed</option>
             </SelectInput>
           </Field>
           <Field label="Banner width (%)" hint="Between 50% and 100% of the dashboard.">
@@ -164,7 +175,7 @@ export default function AdvertisementsPage() {
         </form>
       </SectionCard>
 
-      <SectionCard title="All advertisements" subtitle="Drag cards to set their carousel order." icon="image">
+      <SectionCard title="All advertisements" subtitle="Drag cards to set their order within carousel and feed placements." icon="image">
         <div className="grid gap-4 p-4 lg:grid-cols-2">
           {items.map((item) => (
             <article
@@ -178,18 +189,18 @@ export default function AdvertisementsPage() {
             >
               {item.image_url ? (
                 item.media_type === "VIDEO" ? (
-                  <video src={`${APP_BASE_URL}${item.image_url}`} controls preload="metadata" className="aspect-[16/5] w-full bg-black object-cover" />
+                  <video src={`${APP_BASE_URL}${item.image_url}`} controls preload="metadata" className={`${isFeedPlacement(item) ? "aspect-square" : "aspect-[16/5]"} w-full bg-black object-cover`} />
                 ) : (
-                  <img src={`${APP_BASE_URL}${item.image_url}`} alt={item.title} className="aspect-[16/5] w-full object-cover" />
+                  <img src={`${APP_BASE_URL}${item.image_url}`} alt={item.title} className={`${isFeedPlacement(item) ? "aspect-square" : "aspect-[16/5]"} w-full object-cover`} />
                 )
-              ) : <div className="flex aspect-[16/5] items-center justify-center bg-slate-100 text-sm text-slate-400">No banner media</div>}
+              ) : <div className={`flex ${isFeedPlacement(item) ? "aspect-square" : "aspect-[16/5]"} items-center justify-center bg-slate-100 text-sm text-slate-400`}>No media</div>}
               <div className="space-y-3 p-4">
                 <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-400">
                   <span className="cursor-grab select-none">⋮⋮ Drag to reorder</span>
                   <span>Position {item.display_order || 0}</span>
                 </div>
                 <div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold text-slate-900">{item.title}</h3><p className="mt-1 text-sm text-slate-500">{item.message || "No message"}</p></div><StatusBadge tone={Number(item.is_active) === 1 ? "success" : "neutral"}>{Number(item.is_active) === 1 ? "Active" : "Inactive"}</StatusBadge></div>
-                <p className="text-xs text-slate-500">{item.placement === "ABOVE_STATUS" ? "Above status cards" : "Below status cards"} · {item.width_percent || 100}% wide × {item.height_px || 320}px high · {item.starts_at ? `Starts ${new Date(item.starts_at).toLocaleString()}` : "Starts immediately"} · {item.ends_at ? `Ends ${new Date(item.ends_at).toLocaleString()}` : "No end date"}</p>
+                <p className="text-xs text-slate-500">{placementLabels[normalizedPlacement(item)] || "Carousel below status cards"} · {item.width_percent || 100}% wide × {item.height_px || 320}px high · {item.starts_at ? `Starts ${new Date(item.starts_at).toLocaleString()}` : "Starts immediately"} · {item.ends_at ? `Ends ${new Date(item.ends_at).toLocaleString()}` : "No end date"}</p>
                 <div className="flex gap-2"><Button size="sm" variant="secondary" icon="edit" onClick={() => edit(item)}>Edit</Button><Button size="sm" variant="danger" icon="delete" onClick={() => remove(item)}>Delete</Button></div>
               </div>
             </article>
