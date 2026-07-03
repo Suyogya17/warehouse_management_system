@@ -95,6 +95,7 @@ app.use("/api/raw-materials", rawmaterialRoutes);
 app.use("/api/finished-goods", fgRouter);
 app.use("/api/consumption", consumptionRouter);
 app.use("/api/audit-logs", auditRouter);
+app.use("/api/activity-logs", auditRouter);
 app.use("/api/formulas", formulaRoutes);
 app.use("/api/productions", productionRoutes);
 app.use("/api/permissions", permissionRoutes);

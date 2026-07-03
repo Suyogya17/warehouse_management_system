@@ -2,6 +2,14 @@ const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { buildStockSummarySelect } = require('../utils/queryBuilders');
 const { hasColumn } = require('../utils/schemaSupport');
+const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
+
+const getActor = (req) => ({
+  userId: req.user?.id,
+  userName: req.user?.name,
+  userRole: req.user?.role,
+  ipAddress: req.ip,
+});
 
 // ─── GET ALL STOCK BATCHES FOR A MATERIAL ────────────────────────────────────
 const getBatchesForMaterial = async (req, res, next) => {
@@ -44,7 +52,7 @@ const receiveStock = async (req, res, next) => {
 
     // Check material exists
     const matRes = await client.query(
-      'SELECT id, name, article_code, quantity FROM raw_materials WHERE id=?',
+      'SELECT id, name, article_code, color, unit, quantity FROM raw_materials WHERE id=?',
       [raw_material_id]
     );
     if (matRes.rows.length === 0) {
@@ -56,10 +64,15 @@ const receiveStock = async (req, res, next) => {
     const prevQty = parseFloat(mat.quantity);
 
     // 1. Add stock batch (FIFO entry)
-    const batchRes = await client.query(
-      `INSERT INTO stock (raw_material_id, qty_added, qty_remaining, notes)
-       VALUES (?,?,?,?)`,
+    const stockInsert = await appendFiscalInsertFields(
+      'stock',
+      ['raw_material_id', 'qty_added', 'qty_remaining', 'notes'],
       [raw_material_id, qty_added, qty_added, notes || null]
+    );
+    const batchRes = await client.query(
+      `INSERT INTO stock (${stockInsert.columns.join(', ')})
+       VALUES (${stockInsert.columns.map(() => '?').join(', ')})`,
+      stockInsert.values
     );
     const batchId = batchRes.insertId;
 
@@ -73,11 +86,25 @@ const receiveStock = async (req, res, next) => {
     await client.query('COMMIT');
 
     await auditLog({
-      userId: req.user.id,
-      action: 'STOCK_RECEIVED',
-      tableName: 'stock',
-      recordId: batchId,
-      detail: `${mat.name} (${mat.article_code}): qty ${prevQty} → ${newQty} (+${qty_added})`,
+      ...getActor(req),
+      actionType: 'STOCK_ADDED',
+      module: 'stock',
+      entity_type: 'raw_material',
+      entity_id: raw_material_id,
+      entityName: [mat.name, mat.article_code, mat.color].filter(Boolean).join(' / '),
+      description: `Added ${qty_added} ${mat.unit || ''} stock for ${mat.name}`,
+      metadata: {
+        stock_batch_id: batchId,
+        raw_material_id,
+        material_name: mat.name,
+        article_code: mat.article_code,
+        color: mat.color,
+        previous_quantity: prevQty,
+        new_quantity: newQty,
+        quantity_added: Number(qty_added),
+        unit: mat.unit,
+        notes: notes || null,
+      },
     });
 
     return res.status(201).json({

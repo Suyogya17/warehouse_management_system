@@ -54,7 +54,7 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
     <div className="group flex flex-col rounded-2xl border border-slate-200 bg-white overflow-hidden hover:shadow-xl transition-all duration-300">
 
       {/* IMAGE */}
-      <div className="relative aspect-[4/3] bg-slate-100 overflow-hidden">
+      <div className="relative aspect-[5/3] bg-slate-100 overflow-hidden">
         {selectedVariant.image_url ? (
           <img
             loading="lazy" decoding="async" width={400} height={300}
@@ -64,7 +64,7 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
-            <PackageIcon className="text-slate-400" size={42} />
+            <PackageIcon className="text-slate-400" size={34} />
           </div>
         )}
         <div className="absolute top-2 left-2 right-2 flex items-start justify-between">
@@ -80,7 +80,7 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
         </div>
         {isOutOfStock && (
           <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-            <span className="bg-red-500 text-white px-4 py-2 rounded-lg font-semibold text-sm">Out of Stock</span>
+            <span className="bg-red-500 text-white px-3 py-1.5 rounded-lg font-semibold text-xs">Out of Stock</span>
           </div>
         )}
         <ProductImageGallery
@@ -91,9 +91,9 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
       </div>
 
       {/* CONTENT */}
-      <div className="flex flex-col p-3 gap-2">
+      <div className="flex flex-col p-2.5 gap-1.5">
         <div className="flex items-start justify-between gap-2">
-          <h3 className="flex-1 text-sm sm:text-base font-bold text-slate-900 line-clamp-2 leading-snug">
+          <h3 className="flex-1 text-sm font-bold text-slate-900 line-clamp-2 leading-snug">
             {selectedVariant.article_code || selectedVariant.name}
           </h3>
           <span className={`text-[10px] px-2 py-1 rounded-full font-semibold whitespace-nowrap
@@ -113,14 +113,14 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
           <div className="flex gap-1 overflow-x-auto whitespace-wrap">
             {variants.map((variant) => (
               <button key={variant.id} onClick={() => setSelectedVariant(variant)}
-                className={`px-2.5 py-0.5 rounded-lg text-xs font-medium transition-all
+                className={`px-2 py-0.5 rounded-lg text-xs font-medium transition-all
                   ${selectedVariant.id === variant.id ? "bg-indigo-500 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>
                 {variant.color}
               </button>
             ))}
           </div>
         )}
-       <div className=" rounded-xl p-3 space-y-2">
+       <div className=" rounded-xl p-2 space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-emerald-700">Price</span>
             <span className="text-sm font-bold text-emerald-700">{formatPrice(selectedVariant.price)}</span>
@@ -130,7 +130,7 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
             <span className="text-sm font-bold text-slate-900">{formatNumber(availableQty)} {selectedVariant.unit || "pcs"}</span>
           </div>
           {Number(selectedVariant.inner_boxes_per_outer_box) > 0 && (
-            <div className="flex items-center justify-between border-t border-amber-200 pt-2">
+            <div className="flex items-center justify-between border-t border-amber-200 pt-1.5">
               <span className="text-xs text-indigo-900">Cartons</span>
               <span className="text-xs font-bold text-indigo-500">{formatNumber(cartons)}</span>
             </div>
@@ -142,7 +142,7 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
             onClick={() => onToggleVisibility?.(selectedVariant)}
             aria-label={isHidden ? "Show product" : "Hide product"}
             title={isHidden ? "Show product" : "Hide product"}
-            className={`mt-1 inline-flex h-10 w-10 items-center justify-center self-end rounded-xl transition ${
+            className={`mt-1 inline-flex h-9 w-9 items-center justify-center self-end rounded-xl transition ${
               isHidden
                 ? "bg-indigo-500 text-white hover:bg-indigo-600"
                 : "bg-amber-100 text-amber-700 hover:bg-amber-200"
@@ -186,7 +186,7 @@ function OnHoldCard({ variants = [], canManageVisibility = false, onToggleVisibi
     <div className="group flex flex-col rounded-2xl border border-amber-200 bg-white overflow-hidden hover:shadow-xl transition-all duration-300">
 
       {/* IMAGE */}
-      <div className="relative aspect-[4/3] bg-slate-100 overflow-hidden">
+      <div className="relative aspect-[5/3] bg-slate-100 overflow-hidden">
         {selectedVariant.image_url ? (
           <img
             loading="lazy" decoding="async" width={400} height={300}
@@ -196,7 +196,7 @@ function OnHoldCard({ variants = [], canManageVisibility = false, onToggleVisibi
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
-            <PackageIcon className="text-slate-400" size={42} />
+            <PackageIcon className="text-slate-400" size={34} />
           </div>
         )}
         <div className="absolute top-2 left-2 right-2 flex items-start justify-between">
@@ -205,7 +205,7 @@ function OnHoldCard({ variants = [], canManageVisibility = false, onToggleVisibi
           ) : <div />}
         </div>
         <div className="absolute inset-0 bg-black/50 flex items-center justify-center pointer-events-none">
-          <span className="bg-amber-500 text-white px-4 py-2 rounded-lg font-semibold text-sm flex items-center gap-2">
+          <span className="bg-amber-500 text-white px-3 py-1.5 rounded-lg font-semibold text-xs flex items-center gap-2">
             <EyeOff size={14} />
             On Hold
           </span>
@@ -218,9 +218,9 @@ function OnHoldCard({ variants = [], canManageVisibility = false, onToggleVisibi
       </div>
 
       {/* CONTENT */}
-      <div className="flex flex-col p-3 gap-2">
+      <div className="flex flex-col p-2.5 gap-1.5">
         <div className="flex items-start justify-between gap-2">
-          <h3 className="flex-1 text-sm sm:text-base font-bold text-slate-900 line-clamp-2 leading-snug">
+          <h3 className="flex-1 text-sm font-bold text-slate-900 line-clamp-2 leading-snug">
             {selectedVariant.article_code || selectedVariant.name}
           </h3>
           <span className="text-[10px] px-2 py-1 rounded-full font-semibold whitespace-nowrap bg-amber-100 text-amber-700">
@@ -234,7 +234,7 @@ function OnHoldCard({ variants = [], canManageVisibility = false, onToggleVisibi
           <div className="flex gap-1">
             {variants.map((variant) => (
               <button key={variant.id} onClick={() => setSelectedVariant(variant)}
-                className={`px-2.5 py-0.5 rounded-lg text-xs font-medium transition-all
+                className={`px-2 py-0.5 rounded-lg text-xs font-medium transition-all
                   ${selectedVariant.id === variant.id
                     ? "bg-amber-500 text-white"
                     : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>
@@ -248,13 +248,13 @@ function OnHoldCard({ variants = [], canManageVisibility = false, onToggleVisibi
             Sole: <span className="font-semibold">{selectedVariant.sole_code}</span>
           </div>
         )}
-        <div className="bg-amber-50 rounded-xl p-3 space-y-2">
+        <div className="bg-amber-50 rounded-xl p-2 space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-xs text-amber-600">Stock</span>
             <span className="text-sm font-bold text-slate-900">{formatNumber(availableQty)} {selectedVariant.unit || "pcs"}</span>
           </div>
           {Number(selectedVariant.inner_boxes_per_outer_box) > 0 && (
-            <div className="flex items-center justify-between border-t border-amber-200 pt-2">
+            <div className="flex items-center justify-between border-t border-amber-200 pt-1.5">
               <span className="text-xs text-amber-600">Cartons</span>
               <span className="text-sm font-bold text-amber-700">{formatNumber(cartons)}</span>
             </div>
@@ -266,7 +266,7 @@ function OnHoldCard({ variants = [], canManageVisibility = false, onToggleVisibi
             onClick={() => onToggleVisibility?.(selectedVariant)}
             aria-label="Show product"
             title="Show product"
-            className="mt-1 inline-flex h-10 w-10 items-center justify-center self-end rounded-xl bg-indigo-500 text-white transition hover:bg-indigo-600"
+            className="mt-1 inline-flex h-9 w-9 items-center justify-center self-end rounded-xl bg-indigo-500 text-white transition hover:bg-indigo-600"
           >
             <Eye size={18} />
           </button>
@@ -421,7 +421,7 @@ function AdvertisementFeed({ advertisements = [], variant = "facebook" }) {
   if (!advertisements.length) return null;
 
   const isInstagram = variant === "instagram";
-  const mediaAspect = isInstagram ? "aspect-square" : "aspect-[4/3]";
+  const mediaAspect = isInstagram ? "aspect-square" : "aspect-[5/3]";
 
   return (
     <section aria-label="Promotions">
@@ -434,7 +434,7 @@ function AdvertisementFeed({ advertisements = [], variant = "facebook" }) {
               </div>
               <div className="flex flex-1 flex-col gap-3 p-4">
                 <div className="min-w-0">
-                  <h3 className="line-clamp-2 text-base font-bold leading-snug text-slate-950">{item.title}</h3>
+                  <h3 className="line-clamp-2 text-sm font-bold leading-snug text-slate-950">{item.title}</h3>
                   {item.message ? <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-600">{item.message}</p> : null}
                 </div>
                 {item.link_url ? (

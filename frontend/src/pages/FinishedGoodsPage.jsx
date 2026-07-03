@@ -690,6 +690,7 @@ export default function FinishedGoodsPage() {
               : { key: "empty", label: "" },
           ]}
           rows={filteredItems}
+          showToolbar={false}
         />
 
           <div className="mt-3 flex justify-center px-2">

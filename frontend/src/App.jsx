@@ -30,6 +30,7 @@ import ProductLedgerPage from "./pages/ProductLedgerPage";
 import ProductDisplayPage from "./pages/ProductDisplayPage";
 import AdvertisementsPage from "./pages/AdvertisementsPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
+import ActivityLogPage from "./pages/ActivityLogPage";
 export default function App() {
   const { isAuthenticated, user } = useAuth();
 
@@ -128,6 +129,15 @@ export default function App() {
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               <AnalyticsPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="activity-logs"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              <ActivityLogPage />
             </ProtectedRoute>
           }
         />

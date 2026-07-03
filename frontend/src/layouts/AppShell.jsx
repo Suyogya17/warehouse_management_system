@@ -6,6 +6,7 @@ import Icon from "../components/Icon";
 import NotificationWatcher from "../components/NotificationWatcher";
 import { normalizeRole } from "../utils/roles";
 import { api } from "../services/api";
+import { formatNepaliDate } from "../utils/format";
 
 const countryNames = {
   NP: "Nepal",
@@ -34,6 +35,7 @@ const navByRole = {
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
     { to: "/summary", label: "Summary", icon: "hidden" },
+    { to: "/activity-logs", label: "Activity Logs", icon: "ledger" },
     { to: "/users", label: "Users", icon: "users" },
   ],
 
@@ -55,6 +57,7 @@ const navByRole = {
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
     { to: "/summary", label: "Summary", icon: "hidden" },
+    { to: "/activity-logs", label: "Activity Logs", icon: "ledger" },
   ],
 
   MEMBER: [
@@ -82,17 +85,9 @@ const formatNotificationTime = (isoString) => {
   const date = new Date(isoString);
   if (isNaN(date.getTime())) return "";
 
-  const now = new Date();
-  const isToday =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
-
   const timeStr = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  if (isToday) return timeStr;
-
-  return `${date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${timeStr}`;
+  return `BS ${formatNepaliDate(date)}, ${timeStr}`;
 };
 
 const hashText = (value) => {
@@ -351,6 +346,7 @@ export default function AppShell() {
         <NavLink
           key={item.to}
           to={item.to}
+          onClick={() => setMobileNavOpen(false)}
           className={({ isActive }) =>
             `flex items-center justify-between rounded-xl px-3.5 py-3 text-sm font-medium transition ${
               isActive
@@ -370,33 +366,42 @@ export default function AppShell() {
 
   return (
     <div
-      className="min-h-screen bg-transparent text-slate-900"
+      className="min-h-screen overflow-x-hidden bg-transparent text-slate-900"
       onWheelCapture={preventNumberWheelChange}
     >
       <NotificationWatcher user={user} token={token} onNotify={addNotification} />
-      <div className="mx-auto flex min-h-screen max-w gap-6 px-4 py-4 lg:px-6">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1800px] gap-4 px-3 py-3 sm:px-4 lg:gap-6 lg:px-6 lg:py-4">
 
         {/* MOBILE OVERLAY */}
         {mobileNavOpen && (
           <div
-            className="fixed inset-0 z-40 bg-slate-950/40 backdrop-blur-sm lg:hidden"
+            className="fixed inset-0 z-40 bg-slate-950/40 backdrop-blur-sm transition-opacity lg:hidden"
             onClick={() => setMobileNavOpen(false)}
           />
         )}
 
         {/* MOBILE SIDEBAR */}
         <aside
-          className={`fixed inset-y-0 left-0 z-50 w-[88vw] max-w-sm transform border-r border-slate-200 bg-white p-4 shadow-2xl transition duration-200 lg:hidden ${
+          className={`fixed inset-y-0 left-0 z-50 w-[88vw] max-w-sm transform border-r border-slate-200 bg-white p-4 shadow-2xl transition-transform duration-300 ease-out lg:hidden ${
             mobileNavOpen ? "translate-x-0" : "-translate-x-full"
           }`}
+          aria-hidden={!mobileNavOpen}
         >
           <div className="flex h-full flex-col">
 
             {/* HEADER */}
-            <div className="rounded-2xl bg-slate-950 px-5 py-5 text-black">
-              <h1 className="text-xl font-bold uppercase tracking-[0.2em]">
+            <div className="flex items-center justify-between rounded-2xl bg-slate-950 px-5 py-5 text-white">
+              <h1 className="text-lg font-bold uppercase tracking-[0.18em]">
                 Store Management
               </h1>
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white transition hover:bg-white/20"
+                onClick={() => setMobileNavOpen(false)}
+                aria-label="Close menu"
+              >
+                <Icon name="close" className="h-5 w-5" />
+              </button>
             </div>
 
             {/* USER */}
@@ -420,14 +425,13 @@ export default function AppShell() {
         </aside>
 
         {/* DESKTOP SIDEBAR */}
-        <aside className="hidden w-50 shrink-0 lg:block">
-          <div className="flex flex-col justify-align sticky top-4 space-y-4 h-full rounded-2xl border border-slate-200 bg-white p-4">
-
+        <aside className="hidden w-72 shrink-0 lg:block">
+          <div className="sticky top-4 flex max-h-[calc(100vh-2rem)] flex-col space-y-4 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
             {/* USER CARD */}
             <UserCard />
 
             {/* NAV */}
-            <nav className="space-y-2">
+            <nav className="space-y-2 overflow-y-auto pr-1">
               <NavList />
             </nav>
 
@@ -447,14 +451,14 @@ export default function AppShell() {
         <main className="min-w-0 flex-1 space-y-4 py-1">
 
           {/* TOP BAR */}
-          <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-4">
-            <div>
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 sm:px-4 sm:py-4">
+            <div className="min-w-0">
               <p className="text-xs text-slate-400">Workspace</p>
-              <p className="text-lg font-semibold">{pageTitle}</p>
+              <p className="truncate text-base font-semibold sm:text-lg">{pageTitle}</p>
             </div>
 
             <Button
-              className="lg:hidden"
+              className="shrink-0 lg:hidden"
               icon="menu"
               onClick={() => setMobileNavOpen(true)}
             >

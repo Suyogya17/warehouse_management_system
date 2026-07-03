@@ -10,11 +10,10 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
-import { formatNumber } from "../utils/format";
+import { formatEnglishDate, formatNepaliDate, formatNumber, formatTime } from "../utils/format";
 import { hasRole } from "../utils/roles";
 import Select from "react-select";
 import { Search } from "lucide-react";
-import NepaliDate from "nepali-date-converter";
 
 const initialForm = {
   customer_name: "",
@@ -230,9 +229,8 @@ export default function OrdersPage() {
 
   const printDeliveryNote = (order = "") => {
     const now = new Date();
-    const englishDate = now.toLocaleDateString("en-GB");
-    const nepDate = new NepaliDate(now);
-    const nepaliDate = nepDate.format("YYYY.MM.DD");
+    const englishDate = formatEnglishDate(now, { includeTime: false });
+    const nepaliDate = formatNepaliDate(now);
     const currentTime = now.toLocaleTimeString();
 
     const deliveryNoteNumber =
@@ -309,6 +307,8 @@ export default function OrdersPage() {
       });
       return;
     }
+
+    api.logOrderPrint(order.id, token).catch(() => {});
 
     printWindow.document.open();
     printWindow.document.write(`
@@ -770,13 +770,11 @@ export default function OrdersPage() {
               key: "created_at",
               label: "Created",
               render: (row) => {
-                const createdDate = new Date(row.created_at);
                 return (
                   <div className="flex flex-col">
-                    <strong>{createdDate.toLocaleDateString("en-GB")}</strong>
-                    <span className="text-xs text-slate-500">
-                      {createdDate.toLocaleTimeString()}
-                    </span>
+                    <strong>{formatEnglishDate(row.created_at, { includeTime: false })}</strong>
+                    <span className="text-xs text-slate-500">BS {formatNepaliDate(row.created_at)}</span>
+                    <span className="text-xs text-slate-500">{formatTime(row.created_at)}</span>
                   </div>
                 );
               },

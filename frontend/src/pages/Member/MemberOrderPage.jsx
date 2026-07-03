@@ -14,7 +14,7 @@ import {
 } from "../../hooks/useDataRefresh";
 
 import { api } from "../../services/api";
-import { formatNumber } from "../../utils/format";
+import { formatDate, formatNumber } from "../../utils/format";
 
 const statusTone = {
   PENDING: "warning",
@@ -293,9 +293,7 @@ export default function MemberOrdersPage() {
             label: "Created At",
             render: (row) =>
               row.created_at
-                ? new Date(
-                    row.created_at
-                  ).toLocaleString()
+                ? formatDate(row.created_at)
                 : "-",
           },
 
@@ -304,9 +302,7 @@ export default function MemberOrdersPage() {
             label: "Confirmed At",
             render: (row) =>
               row.confirmed_at
-                ? new Date(
-                    row.confirmed_at
-                  ).toLocaleString()
+                ? formatDate(row.confirmed_at)
                 : "-",
           },
 
@@ -315,9 +311,7 @@ export default function MemberOrdersPage() {
             label: "Packed At",
             render: (row) =>
               row.packed_at
-                ? new Date(
-                    row.packed_at
-                  ).toLocaleString()
+                ? formatDate(row.packed_at)
                 : "-",
           },
 
@@ -326,9 +320,7 @@ export default function MemberOrdersPage() {
             label: "Delivered At",
             render: (row) =>
               row.delivered_at
-                ? new Date(
-                    row.delivered_at
-                  ).toLocaleString()
+                ? formatDate(row.delivered_at)
                 : "-",
           },
 

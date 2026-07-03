@@ -206,6 +206,7 @@ function InventoryTab({ data }) {
               { key: "low_stock_count", label: "Low Stock" },
             ]}
             columns={[
+              { key: "warehouse_name", label: "Warehouse", render: (row) => row.warehouse_name || "All warehouses" },
               { key: "unit", label: "Unit" },
               { key: "product_count", label: "Products", render: (row) => formatNumber(row.product_count) },
               { key: "total_quantity", label: "Total Qty", render: (row) => formatNumber(row.total_quantity) },
@@ -253,11 +254,16 @@ function InventoryTab({ data }) {
             emptyTitle="No dead stock products"
             summaryColumns={[
               { key: "quantity", label: "Stock" },
+              { key: "reserved_quantity", label: "Reserved" },
             ]}
             columns={[
               { key: "product", label: "Product", render: productName },
               { key: "quantity", label: "Stock", render: (row) => `${formatNumber(row.quantity)} ${row.unit || ""}` },
+              { key: "reserved_quantity", label: "Reserved", render: (row) => formatNumber(row.reserved_quantity) },
               { key: "last_order_at", label: "Last Order", render: (row) => formatDate(row.last_order_at) },
+              { key: "suggested_action", label: "Suggested Action" },
+              { key: "production_action", label: "Production" },
+              { key: "suggestion_reason", label: "Reason" },
             ]}
           />
         </SectionCard>

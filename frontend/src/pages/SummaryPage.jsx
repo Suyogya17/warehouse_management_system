@@ -602,6 +602,7 @@ export default function SummaryPage() {
             <DataTable
               columns={columns}
               rows={filteredRows}
+              showToolbar={false}
               emptyTitle="No summary for this range"
               emptyDescription="Confirmed, packed, delivered, and cancelled orders will appear here."
             />

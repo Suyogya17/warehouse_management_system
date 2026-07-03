@@ -2,8 +2,19 @@ const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { buildStockSummarySelect } = require('../utils/queryBuilders');
 const { hasColumn } = require('../utils/schemaSupport');
+const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const getImagePath = (req) => (req.file ? `/uploads/${req.file.filename}` : null);
+
+const getActor = (req) => ({
+  userId: req.user?.id,
+  userName: req.user?.name,
+  userRole: req.user?.role,
+  ipAddress: req.ip,
+});
+
+const getMaterialName = (material = {}) =>
+  [material.name, material.article_code, material.color].filter(Boolean).join(' / ') || `Material #${material.id}`;
 
 // ─────────────────────────────────────────────────────────────
 // LIST ALL
@@ -90,40 +101,27 @@ const create = async (req, res, next) => {
     const image_url = getImagePath(req);
     const supportsImage = await hasColumn("raw_materials", "image_url");
 
-    let sql, values;
+    const baseColumns = ['name', 'article_code', 'category', 'color', 'unit', 'quantity', 'min_quantity'];
+    const baseValues = [
+      name,
+      article_code,
+      category,
+      color || null,
+      unit || 'pcs',
+      Number(quantity || 0),
+      Number(min_quantity || 10),
+    ];
 
     if (supportsImage) {
-      sql = `
-        INSERT INTO raw_materials
-        (name, article_code, category, color, unit, quantity, min_quantity, image_url)
-        VALUES (?,?,?,?,?,?,?,?)
-      `;
-      values = [
-        name,
-        article_code,
-        category,
-        color || null,
-        unit || 'pcs',
-        Number(quantity || 0),
-        Number(min_quantity || 10),
-        image_url
-      ];
-    } else {
-      sql = `
-        INSERT INTO raw_materials
-        (name, article_code, category, color, unit, quantity, min_quantity)
-        VALUES (?,?,?,?,?,?,?)
-      `;
-      values = [
-        name,
-        article_code,
-        category,
-        color || null,
-        unit || 'pcs',
-        Number(quantity || 0),
-        Number(min_quantity || 10)
-      ];
+      baseColumns.push('image_url');
+      baseValues.push(image_url);
     }
+
+    const { columns, values } = await appendFiscalInsertFields('raw_materials', baseColumns, baseValues);
+    const sql = `
+      INSERT INTO raw_materials (${columns.join(', ')})
+      VALUES (${columns.map(() => '?').join(', ')})
+    `;
 
     const result = await query(sql, values);
 
@@ -136,19 +134,27 @@ const create = async (req, res, next) => {
     const mat = inserted.rows[0];
 
     if (Number(mat.quantity || 0) > 0) {
-      await query(
-        `INSERT INTO stock (raw_material_id, qty_added, qty_remaining)
-         VALUES (?, ?, ?)`,
+      const stockInsert = await appendFiscalInsertFields(
+        'stock',
+        ['raw_material_id', 'qty_added', 'qty_remaining'],
         [mat.id, mat.quantity, mat.quantity]
+      );
+      await query(
+        `INSERT INTO stock (${stockInsert.columns.join(', ')})
+         VALUES (${stockInsert.columns.map(() => '?').join(', ')})`,
+        stockInsert.values
       );
     }
 
     await auditLog({
-      userId: req.user.id,
-      action: 'CREATED',
-      tableName: 'raw_materials',
-      recordId: mat.id,
-      detail: `Created ${mat.name}`
+      ...getActor(req),
+      actionType: 'CREATE',
+      module: 'raw_materials',
+      entity_type: 'raw_material',
+      entity_id: mat.id,
+      entityName: getMaterialName(mat),
+      description: `Created raw material ${getMaterialName(mat)}`,
+      metadata: mat,
     });
 
     return res.status(201).json({
@@ -228,11 +234,14 @@ const update = async (req, res, next) => {
     }
 
     await auditLog({
-      userId: req.user.id,
-      action: 'UPDATED',
-      tableName: 'raw_materials',
-      recordId: req.params.id,
-      detail: `Updated raw material`
+      ...getActor(req),
+      actionType: 'UPDATE',
+      module: 'raw_materials',
+      entity_type: 'raw_material',
+      entity_id: req.params.id,
+      entityName: getMaterialName(updated.rows[0]),
+      description: `Edited raw material ${getMaterialName(updated.rows[0])}`,
+      metadata: updated.rows[0],
     });
 
     return res.json({
@@ -250,6 +259,18 @@ const update = async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────
 const remove = async (req, res, next) => {
   try {
+    const materialRows = await query(
+      'SELECT id, name, article_code, color, unit, quantity FROM raw_materials WHERE id = ?',
+      [req.params.id]
+    );
+
+    if (!materialRows.rows.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'Raw material not found'
+      });
+    }
+
     const usageChecks = await Promise.all([
       query('SELECT COUNT(*) AS c FROM stock WHERE raw_material_id = ?', [req.params.id]),
       query('SELECT COUNT(*) AS c FROM formula_inputs WHERE raw_material_id = ?', [req.params.id]),
@@ -281,6 +302,20 @@ const remove = async (req, res, next) => {
       'DELETE FROM raw_materials WHERE id = ?',
       [req.params.id]
     );
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'DELETE',
+      module: 'raw_materials',
+      entity_type: 'raw_material',
+      entity_id: req.params.id,
+      entityName: getMaterialName(materialRows.rows[0]),
+      description: `Deleted raw material ${getMaterialName(materialRows.rows[0])}`,
+      metadata: {
+        material: materialRows.rows[0],
+        usage,
+      },
+    });
 
     return res.json({
       success: true,

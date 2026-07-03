@@ -1,4 +1,5 @@
 const { query } = require('../config/db');
+const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const imagePath = (req) => (req.file ? `/uploads/${req.file.filename}` : null);
 const mediaType = (req) => (req.file?.mimetype?.startsWith('video/') ? 'VIDEO' : 'IMAGE');
@@ -40,11 +41,22 @@ const create = async (req, res, next) => {
     const title = String(req.body.title || '').trim();
     if (!title) return res.status(400).json({ success: false, message: 'Title is required.' });
 
-    const result = await query(
-      `INSERT INTO advertisements
-       (title, message, image_url, media_type, placement, width_percent, height_px,
-        link_url, is_active, display_order, starts_at, ends_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    const advertisementInsert = await appendFiscalInsertFields(
+      'advertisements',
+      [
+        'title',
+        'message',
+        'image_url',
+        'media_type',
+        'placement',
+        'width_percent',
+        'height_px',
+        'link_url',
+        'is_active',
+        'display_order',
+        'starts_at',
+        'ends_at',
+      ],
       [
         title,
         nullable(req.body.message),
@@ -59,6 +71,11 @@ const create = async (req, res, next) => {
         nullable(req.body.starts_at),
         nullable(req.body.ends_at),
       ]
+    );
+    const result = await query(
+      `INSERT INTO advertisements (${advertisementInsert.columns.join(', ')})
+       VALUES (${advertisementInsert.columns.map(() => '?').join(', ')})`,
+      advertisementInsert.values
     );
     return res.status(201).json({ success: true, id: result.insertId });
   } catch (error) {

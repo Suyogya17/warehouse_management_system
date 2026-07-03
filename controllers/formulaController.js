@@ -1,6 +1,7 @@
 const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { hasColumn } = require('../utils/schemaSupport');
+const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const soleMakingCategories = ['Sole', 'Sole Powder', 'Sole Foam', 'TPR'];
 
@@ -319,10 +320,15 @@ const create = async (req, res, next) => {
       });
     }
 
-    const formulaRes = await client.query(
-      `INSERT INTO formulas (name, finished_good_id, output_qty, notes)
-       VALUES (?,?,?,?)`,
+    const formulaInsert = await appendFiscalInsertFields(
+      'formulas',
+      ['name', 'finished_good_id', 'output_qty', 'notes'],
       [name, finished_good_id, output_qty, notes || null]
+    );
+    const formulaRes = await client.query(
+      `INSERT INTO formulas (${formulaInsert.columns.join(', ')})
+       VALUES (${formulaInsert.columns.map(() => '?').join(', ')})`,
+      formulaInsert.values
     );
     const formula = { id: formulaRes.insertId, name, finished_good_id, output_qty, notes: notes || null };
 

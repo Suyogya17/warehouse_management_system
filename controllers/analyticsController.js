@@ -1,5 +1,5 @@
 const { query } = require("../config/db");
-const { hasColumn } = require("../utils/schemaSupport");
+const { hasColumn, hasTable } = require("../utils/schemaSupport");
 
 const ACTIVE_ORDER_STATUSES = ["PENDING", "CONFIRMED", "PACKED"];
 
@@ -275,6 +275,104 @@ const getDashboard = async (req, res, next) => {
 
 const getInventory = async (req, res, next) => {
   try {
+    const hasWarehouseStock = await hasTable("finished_good_warehouse_stock");
+    const hasWarehouses = await hasTable("warehouses");
+    const hasWarehouseInventory = hasWarehouseStock && hasWarehouses;
+
+    const finishedGoodsStockSummarySql = hasWarehouseInventory
+      ? `SELECT COALESCE(w.name, 'Unassigned') AS warehouse_name,
+                fg.unit,
+                COUNT(DISTINCT fg.id) AS product_count,
+                COALESCE(SUM(COALESCE(fgws.quantity, 0)), 0) AS total_quantity,
+                COALESCE(SUM(CASE WHEN COALESCE(fgws.quantity, 0) <= fg.min_quantity THEN 1 ELSE 0 END), 0) AS low_stock_count
+         FROM finished_goods fg
+         LEFT JOIN finished_good_warehouse_stock fgws ON fgws.finished_good_id = fg.id
+         LEFT JOIN warehouses w ON w.id = fgws.warehouse_id
+         GROUP BY COALESCE(w.name, 'Unassigned'), fg.unit
+         ORDER BY warehouse_name, fg.unit`
+      : `SELECT NULL AS warehouse_name,
+                unit,
+                COUNT(*) AS product_count,
+                COALESCE(SUM(quantity), 0) AS total_quantity,
+                COALESCE(SUM(CASE WHEN quantity <= min_quantity THEN 1 ELSE 0 END), 0) AS low_stock_count
+         FROM finished_goods
+         GROUP BY unit
+         ORDER BY unit`;
+
+    const deadStockSql = hasWarehouseInventory
+      ? `SELECT fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit,
+                COALESCE(stock.quantity, 0) AS quantity,
+                MAX(o.created_at) AS last_order_at,
+                COALESCE(SUM(CASE WHEN o.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+                                  AND o.status <> 'CANCELLED'
+                                  THEN oi.qty_ordered ELSE 0 END), 0) AS ordered_last_90_days,
+                COALESCE(active_orders.reserved_quantity, 0) AS reserved_quantity,
+                CASE
+                  WHEN MAX(o.created_at) IS NULL THEN 'Check visibility, add photos, then bundle or clear at discount'
+                  WHEN MAX(o.created_at) < DATE_SUB(CURRENT_DATE(), INTERVAL 180 DAY) THEN 'Run clearance offer or bundle with fast-moving products'
+                  WHEN COALESCE(stock.quantity, 0) > fg.min_quantity * 3 THEN 'Pause production and move excess stock into promotion'
+                  ELSE 'Review price, dealer demand, and product display before producing more'
+                END AS suggested_action,
+                CASE
+                  WHEN COALESCE(stock.quantity, 0) > fg.min_quantity THEN 'Hold production'
+                  ELSE 'Produce only against confirmed order'
+                END AS production_action,
+                CASE
+                  WHEN MAX(o.created_at) IS NULL THEN 'No order history found'
+                  ELSE CONCAT('No orders in the last 90 days; last order was ', DATE_FORMAT(MAX(o.created_at), '%Y-%m-%d'))
+                END AS suggestion_reason
+         FROM finished_goods fg
+         LEFT JOIN (
+           SELECT finished_good_id, SUM(quantity) AS quantity
+           FROM finished_good_warehouse_stock
+           GROUP BY finished_good_id
+         ) stock ON stock.finished_good_id = fg.id
+         LEFT JOIN order_items oi ON oi.finished_good_id = fg.id
+         LEFT JOIN orders o ON o.id = oi.order_id
+         LEFT JOIN (
+           SELECT oi.finished_good_id, SUM(oi.qty_ordered) AS reserved_quantity
+           FROM order_items oi
+           JOIN orders o ON o.id = oi.order_id
+           WHERE o.status IN (${activeStatusPlaceholders})
+           GROUP BY oi.finished_good_id
+         ) active_orders ON active_orders.finished_good_id = fg.id
+         GROUP BY fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit, fg.min_quantity, stock.quantity, active_orders.reserved_quantity
+         HAVING quantity > 0 AND ordered_last_90_days = 0
+         ORDER BY quantity DESC, fg.name ASC`
+      : `SELECT fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit, fg.quantity,
+                MAX(o.created_at) AS last_order_at,
+                COALESCE(SUM(CASE WHEN o.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+                                  AND o.status <> 'CANCELLED'
+                                  THEN oi.qty_ordered ELSE 0 END), 0) AS ordered_last_90_days,
+                COALESCE(active_orders.reserved_quantity, 0) AS reserved_quantity,
+                CASE
+                  WHEN MAX(o.created_at) IS NULL THEN 'Check visibility, add photos, then bundle or clear at discount'
+                  WHEN MAX(o.created_at) < DATE_SUB(CURRENT_DATE(), INTERVAL 180 DAY) THEN 'Run clearance offer or bundle with fast-moving products'
+                  WHEN fg.quantity > fg.min_quantity * 3 THEN 'Pause production and move excess stock into promotion'
+                  ELSE 'Review price, dealer demand, and product display before producing more'
+                END AS suggested_action,
+                CASE
+                  WHEN fg.quantity > fg.min_quantity THEN 'Hold production'
+                  ELSE 'Produce only against confirmed order'
+                END AS production_action,
+                CASE
+                  WHEN MAX(o.created_at) IS NULL THEN 'No order history found'
+                  ELSE CONCAT('No orders in the last 90 days; last order was ', DATE_FORMAT(MAX(o.created_at), '%Y-%m-%d'))
+                END AS suggestion_reason
+         FROM finished_goods fg
+         LEFT JOIN order_items oi ON oi.finished_good_id = fg.id
+         LEFT JOIN orders o ON o.id = oi.order_id
+         LEFT JOIN (
+           SELECT oi.finished_good_id, SUM(oi.qty_ordered) AS reserved_quantity
+           FROM order_items oi
+           JOIN orders o ON o.id = oi.order_id
+           WHERE o.status IN (${activeStatusPlaceholders})
+           GROUP BY oi.finished_good_id
+         ) active_orders ON active_orders.finished_good_id = fg.id
+         GROUP BY fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit, fg.quantity, fg.min_quantity, active_orders.reserved_quantity
+         HAVING fg.quantity > 0 AND ordered_last_90_days = 0
+         ORDER BY fg.quantity DESC, fg.name ASC`;
+
     const [
       rawMaterialStockSummary,
       finishedGoodsStockSummary,
@@ -292,13 +390,7 @@ const getInventory = async (req, res, next) => {
          ORDER BY category, unit`
       ),
       run(
-        `SELECT unit,
-                COUNT(*) AS product_count,
-                COALESCE(SUM(quantity), 0) AS total_quantity,
-                COALESCE(SUM(CASE WHEN quantity <= min_quantity THEN 1 ELSE 0 END), 0) AS low_stock_count
-         FROM finished_goods
-         GROUP BY unit
-         ORDER BY unit`
+        finishedGoodsStockSummarySql
       ),
       run(
         `SELECT id, name, article_code, category, color, unit, quantity, min_quantity
@@ -307,17 +399,8 @@ const getInventory = async (req, res, next) => {
          ORDER BY quantity ASC, name ASC`
       ),
       run(
-        `SELECT fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit, fg.quantity,
-                MAX(o.created_at) AS last_order_at,
-                COALESCE(SUM(CASE WHEN o.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
-                                  AND o.status <> 'CANCELLED'
-                                  THEN oi.qty_ordered ELSE 0 END), 0) AS ordered_last_90_days
-         FROM finished_goods fg
-         LEFT JOIN order_items oi ON oi.finished_good_id = fg.id
-         LEFT JOIN orders o ON o.id = oi.order_id
-         GROUP BY fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit, fg.quantity
-         HAVING fg.quantity > 0 AND ordered_last_90_days = 0
-         ORDER BY fg.quantity DESC, fg.name ASC`
+        deadStockSql,
+        ACTIVE_ORDER_STATUSES
       ),
       run(
         `SELECT fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit,
@@ -349,6 +432,7 @@ const getInventory = async (req, res, next) => {
         dead_stock_finished_goods: mapNumeric(deadStockFinishedGoods, [
           "quantity",
           "ordered_last_90_days",
+          "reserved_quantity",
         ]),
         reserved_stock: mapNumeric(reservedStock, ["reserved_quantity"]),
       },

@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
+const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const normalizeLocale = (countryCode, currencyCode) => ({
   countryCode: String(countryCode || 'NP').trim().toUpperCase().slice(0, 2),
@@ -28,10 +29,15 @@ const register = async (req, res, next) => {
 
     const hashed = await bcrypt.hash(password, 10);
 
-    const result = await query(
-      `INSERT INTO users (name, email, password, role, country_code, currency_code)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+    const userInsert = await appendFiscalInsertFields(
+      'users',
+      ['name', 'email', 'password', 'role', 'country_code', 'currency_code'],
       [name, email, hashed, role.toUpperCase(), locale.countryCode, locale.currencyCode]
+    );
+    const result = await query(
+      `INSERT INTO users (${userInsert.columns.join(', ')})
+       VALUES (${userInsert.columns.map(() => '?').join(', ')})`,
+      userInsert.values
     );
 
     const userId = result.insertId;

@@ -1,6 +1,7 @@
 const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { getPagination, shouldIncludeTotal } = require('../utils/pagination');
+const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 // GET /api/stock-adjustments
 const getAdjustments = async (req, res, next) => {
@@ -86,10 +87,15 @@ const createAdjustment = async (req, res, next) => {
     }
 
     // Insert adjustment record
-    const insertRes = await client.query(
-      `INSERT INTO stock_adjustments (finished_good_id, qty, reason, adjusted_by)
-       VALUES (?, ?, ?, ?)`,
+    const adjustmentInsert = await appendFiscalInsertFields(
+      'stock_adjustments',
+      ['finished_good_id', 'qty', 'reason', 'adjusted_by'],
       [finished_good_id, qty, reason || null, req.user.id]
+    );
+    const insertRes = await client.query(
+      `INSERT INTO stock_adjustments (${adjustmentInsert.columns.join(', ')})
+       VALUES (${adjustmentInsert.columns.map(() => '?').join(', ')})`,
+      adjustmentInsert.values
     );
 
     // Update finished_goods quantity

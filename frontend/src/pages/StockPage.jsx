@@ -291,6 +291,7 @@ const totalAvailableCartons = filteredAvailability.reduce((sum, item) => sum + g
               },
             ]}
             rows={filteredAvailability}
+            showToolbar={false}
             emptyTitle="No stock found"
             emptyDescription="Try a different search or stock filter."
           />

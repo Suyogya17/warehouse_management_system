@@ -299,6 +299,13 @@ export const api = {
       token
     ),
 
+  logOrderPrint: (id, token, payload = { print_type: "delivery_note" }) =>
+    apiRequest(
+      `/orders/${id}/print`,
+      { method: "POST", body: JSON.stringify(payload) },
+      token
+    ),
+
   updateStockBatch: (id, data, token) =>
     apiRequest(
       `/stock/batch/${id}`,
@@ -389,4 +396,10 @@ deleteStockAdjustment: (id, token) =>
   },
 
   getAnalytics: (section, token) => apiRequest(`/analytics/${section}`, {}, token),
+
+  getActivityLogs: (token, params = {}) => {
+    const query = buildQueryString(params);
+
+    return apiRequest(`/activity-logs${query ? `?${query}` : ""}`, {}, token);
+  },
 };

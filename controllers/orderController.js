@@ -1,15 +1,30 @@
 const { query, getClient } = require('../config/db');
+const auditLog = require('../utils/auditLog');
 const { hasColumn } = require('../utils/schemaSupport');
+const { appendFiscalInsertFields, getNepaliFiscalMeta } = require('../utils/nepaliFiscalYear');
 
 const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'PACKED'];
 const ALL_STATUSES = [...ACTIVE_RESERVATION_STATUSES, 'DELIVERED', 'CANCELLED'];
 const DEFAULT_DISPLAY_QUANTITY = 450;
+const FISCAL_DELIVERY_NOTE_START_YEAR = 2083;
 
 const getProductDisplayQuantity = (product) => {
   const value = Number(product?.display_quantity);
 
   return Number.isFinite(value) && value >= 0 ? value : DEFAULT_DISPLAY_QUANTITY;
 };
+
+const getActor = (req) => ({
+  userId: req.user?.id,
+  userName: req.user?.name,
+  userRole: req.user?.role,
+  ipAddress: req.ip,
+});
+
+const getOrderEntityName = (order = {}) =>
+  order.delivery_note_number
+    ? `${order.delivery_note_number} / ${order.customer_name || `Order #${order.id}`}`
+    : `Order #${order.id}${order.customer_name ? ` / ${order.customer_name}` : ''}`;
 
 // ─── BUILD IN CLAUSE (safe placeholder expansion) ──
 const buildInClause = (values = []) => {
@@ -26,6 +41,60 @@ const normalizeItems = (items = []) =>
       qty_ordered: Number(item.qty_ordered),
     }))
     .filter((item) => item.finished_good_id > 0 && item.qty_ordered > 0);
+
+const shouldUseFiscalDeliveryNotes = (date = new Date()) => {
+  const fiscalStartYear = Number(getNepaliFiscalMeta(date).bs_fiscal_year.split('/')[0]);
+  return fiscalStartYear >= FISCAL_DELIVERY_NOTE_START_YEAR;
+};
+
+const getNextLegacyDeliveryNoteNumber = async (client) => {
+  const lastDnRes = await client.query(
+    `SELECT delivery_note_number
+     FROM orders
+     WHERE status != 'CANCELLED'
+       AND delivery_note_number REGEXP '^DN-[0-9]+$'
+     ORDER BY CAST(SUBSTRING(delivery_note_number, 4) AS UNSIGNED) DESC
+     LIMIT 1
+     FOR UPDATE`
+  );
+  const lastDnNumber = Number(
+    String(lastDnRes.rows[0]?.delivery_note_number || '').replace('DN-', '')
+  );
+
+  return `DN-${(lastDnNumber || 1940) + 1}`;
+};
+
+const getNextFiscalDeliveryNoteNumber = async (client, date = new Date()) => {
+  const fiscalYear = getNepaliFiscalMeta(date).bs_fiscal_year;
+  const supportsFiscalYear = await hasColumn('orders', 'bs_fiscal_year');
+
+  if (!supportsFiscalYear) {
+    return getNextLegacyDeliveryNoteNumber(client);
+  }
+
+  const lastDnRes = await client.query(
+    `SELECT delivery_note_number
+     FROM orders
+     WHERE status != 'CANCELLED'
+       AND bs_fiscal_year = ?
+       AND delivery_note_number REGEXP '^DN-[0-9]+$'
+     ORDER BY CAST(SUBSTRING(delivery_note_number, 4) AS UNSIGNED) DESC
+     LIMIT 1
+     FOR UPDATE`,
+    [fiscalYear]
+  );
+  const lastNumber = Number(
+    String(lastDnRes.rows[0]?.delivery_note_number || '').replace('DN-', '')
+  );
+  const nextNumber = String((Number.isFinite(lastNumber) ? lastNumber : 0) + 1).padStart(4, '0');
+
+  return `DN-${nextNumber}`;
+};
+
+const getNextDeliveryNoteNumber = async (client, date = new Date()) =>
+  shouldUseFiscalDeliveryNotes(date)
+    ? getNextFiscalDeliveryNoteNumber(client, date)
+    : getNextLegacyDeliveryNoteNumber(client);
 
 // ─── RESERVED STOCK ───────────────────────────────
 const getReservedByProduct = async (executor, productIds = []) => {
@@ -96,25 +165,37 @@ const allocateWarehouseStockForDelivery = async (client, item, userId) => {
       [deduct, userId, stock.id]
     );
 
-    await client.query(
-      `INSERT INTO order_item_warehouse_allocations
-         (order_item_id, finished_good_id, warehouse_id, quantity, created_by)
-       VALUES (?, ?, ?, ?, ?)`,
+    const allocationInsert = await appendFiscalInsertFields(
+      'order_item_warehouse_allocations',
+      ['order_item_id', 'finished_good_id', 'warehouse_id', 'quantity', 'created_by'],
       [item.id, item.finished_good_id, stock.warehouse_id, deduct, userId]
     );
 
     await client.query(
-      `INSERT INTO finished_good_warehouse_movements
-         (finished_good_id, warehouse_id, quantity, movement_type, reference_type, reference_id, notes, created_by)
-       VALUES (?, ?, ?, 'ORDER_OUT', 'order', ?, ?, ?)`,
+      `INSERT INTO order_item_warehouse_allocations (${allocationInsert.columns.join(', ')})
+       VALUES (${allocationInsert.columns.map(() => '?').join(', ')})`,
+      allocationInsert.values
+    );
+
+    const movementInsert = await appendFiscalInsertFields(
+      'finished_good_warehouse_movements',
+      ['finished_good_id', 'warehouse_id', 'quantity', 'movement_type', 'reference_type', 'reference_id', 'notes', 'created_by'],
       [
         item.finished_good_id,
         stock.warehouse_id,
         deduct,
+        'ORDER_OUT',
+        'order',
         item.order_id,
         `Delivered order #${item.order_id}`,
         userId,
       ]
+    );
+
+    await client.query(
+      `INSERT INTO finished_good_warehouse_movements (${movementInsert.columns.join(', ')})
+       VALUES (${movementInsert.columns.map(() => '?').join(', ')})`,
+      movementInsert.values
     );
 
     allocations.push({
@@ -322,7 +403,7 @@ const create = async (req, res, next) => {
     const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
 
     let productSql = `
-      SELECT id, name, quantity${supportsDisplayQuantity ? ', display_quantity' : ''}
+      SELECT id, name, article_code, color, quantity${supportsDisplayQuantity ? ', display_quantity' : ''}
       FROM finished_goods
       WHERE is_deleted = 0
         AND is_visible = 1
@@ -404,10 +485,9 @@ const create = async (req, res, next) => {
       });
     }
 
-    const orderRes = await client.query(
-      `INSERT INTO orders
-        (customer_name, customer_phone, notes, pan_number, transport_name, customer_address, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    const orderInsert = await appendFiscalInsertFields(
+      'orders',
+      ['customer_name', 'customer_phone', 'notes', 'pan_number', 'transport_name', 'customer_address', 'created_by'],
       [
         customer_name,
         customer_phone || null,
@@ -417,6 +497,11 @@ const create = async (req, res, next) => {
         customer_address || null,
         req.user.id,
       ]
+    );
+    const orderRes = await client.query(
+      `INSERT INTO orders (${orderInsert.columns.join(', ')})
+       VALUES (${orderInsert.columns.map(() => '?').join(', ')})`,
+      orderInsert.values
     );
 
     const orderId = orderRes.insertId;
@@ -430,14 +515,40 @@ const create = async (req, res, next) => {
     }
 
     for (const item of items) {
-      await client.query(
-        `INSERT INTO order_items (order_id, finished_good_id, qty_ordered)
-         VALUES (?, ?, ?)`,
+      const orderItemInsert = await appendFiscalInsertFields(
+        'order_items',
+        ['order_id', 'finished_good_id', 'qty_ordered'],
         [orderId, item.finished_good_id, item.qty_ordered]
+      );
+      await client.query(
+        `INSERT INTO order_items (${orderItemInsert.columns.join(', ')})
+         VALUES (${orderItemInsert.columns.map(() => '?').join(', ')})`,
+        orderItemInsert.values
       );
     }
 
     await client.query('COMMIT');
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'ORDER_PLACED',
+      module: 'orders',
+      entity_type: 'order',
+      entity_id: orderId,
+      entityName: getOrderEntityName({ id: orderId, customer_name }),
+      description: `Placed order #${orderId} for ${customer_name}`,
+      metadata: {
+        order_number: orderId,
+        customer_name,
+        status: 'PENDING',
+        items: items.map((item) => ({
+          ...item,
+          product_name: productMap.get(item.finished_good_id)?.name,
+          article_code: productMap.get(item.finished_good_id)?.article_code,
+          color: productMap.get(item.finished_good_id)?.color,
+        })),
+      },
+    });
 
     return res.status(201).json({ success: true, data: { id: orderId } });
 
@@ -499,19 +610,7 @@ const updateStatus = async (req, res, next) => {
     let updateParams = [status];
 
     if (status === 'CONFIRMED' && !order.confirmed_by) {
-      const lastDnRes = await client.query(
-        `SELECT delivery_note_number
-         FROM orders
-         WHERE status != 'CANCELLED'
-           AND delivery_note_number IS NOT NULL
-         ORDER BY CAST(SUBSTRING(delivery_note_number, 4) AS UNSIGNED) DESC
-         LIMIT 1
-         FOR UPDATE`
-      );
-      const lastDnNumber = Number(
-        String(lastDnRes.rows[0]?.delivery_note_number || '').replace('DN-', '')
-      );
-      const nextDN = order.delivery_note_number || `DN-${(lastDnNumber || 1940) + 1}`;
+      const nextDN = order.delivery_note_number || await getNextDeliveryNoteNumber(client);
 
       updateFields.push('confirmed_by = ?', 'confirmed_at = NOW()', 'delivery_note_number = ?');
       updateParams.push(req.user.id, nextDN);
@@ -589,6 +688,33 @@ const updateStatus = async (req, res, next) => {
 
     await client.query('COMMIT');
 
+    await auditLog({
+      ...getActor(req),
+      actionType:
+        status === 'CONFIRMED'
+          ? 'CONFIRMED'
+          : status === 'PACKED'
+          ? 'PACKED'
+          : status === 'DELIVERED'
+          ? 'DELIVERED'
+          : status === 'CANCELLED'
+          ? 'CANCELLED'
+          : 'UPDATE',
+      module: 'orders',
+      entity_type: 'order',
+      entity_id: order.id,
+      entityName: getOrderEntityName(order),
+      description: `${status === 'CANCELLED' ? 'Cancelled' : `Set status to ${status} for`} ${getOrderEntityName(order)}`,
+      metadata: {
+        order_number: order.id,
+        customer_name: order.customer_name,
+        previous_status: order.status,
+        status,
+        cancellation_reason: status === 'CANCELLED' ? cancellationReason : undefined,
+        delivery_note_number: order.delivery_note_number,
+      },
+    });
+
     return res.json({ success: true, message: 'Status updated' });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -598,4 +724,42 @@ const updateStatus = async (req, res, next) => {
   }
 };
 
-module.exports = { getAll, getAvailability, create, updateStatus };
+const logPrint = async (req, res, next) => {
+  try {
+    const orderRows = await query(
+      `SELECT id, customer_name, status, delivery_note_number
+       FROM orders
+       WHERE id = ?`,
+      [req.params.id]
+    );
+
+    if (!orderRows.rows.length) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+
+    const order = orderRows.rows[0];
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'PRINTED',
+      module: 'orders',
+      entity_type: 'order',
+      entity_id: order.id,
+      entityName: getOrderEntityName(order),
+      description: `Printed delivery note for ${getOrderEntityName(order)}`,
+      metadata: {
+        order_number: order.id,
+        customer_name: order.customer_name,
+        status: order.status,
+        delivery_note_number: order.delivery_note_number,
+        print_type: req.body?.print_type || 'delivery_note',
+      },
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { getAll, getAvailability, create, updateStatus, logPrint };

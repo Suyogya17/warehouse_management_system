@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js"
+  "start": "node app.js",
+  "backfill:nepali-fiscal-year": "node scripts/backfill-nepali-fiscal-year.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

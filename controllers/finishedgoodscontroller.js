@@ -1,10 +1,21 @@
 const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { hasColumn } = require('../utils/schemaSupport');
+const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const DEFAULT_DISPLAY_QUANTITY = 450;
 
 const getImagePath = (req) => (req.file ? `/uploads/${req.file.filename}` : null);
+
+const getActor = (req) => ({
+  userId: req.user?.id,
+  userName: req.user?.name,
+  userRole: req.user?.role,
+  ipAddress: req.ip,
+});
+
+const getProductName = (product = {}) =>
+  [product.name, product.article_code, product.color].filter(Boolean).join(' / ') || `Product #${product.id}`;
 
 const getFinishedGoodsOrderClause = async (alias = '') => {
   const prefix = alias ? `${alias}.` : '';
@@ -157,16 +168,22 @@ const create = async (req, res, next) => {
       nextDisplayOrder = orderRows[0]?.next_display_order || 1;
     }
 
-    const sql = `
-      INSERT INTO finished_goods
-      (name, article_code, sole_code, color, size, unit,
-       quantity, price, min_quantity,
-       inner_box_per_pair, inner_boxes_per_outer_box,
-       image_url, is_visible${supportsDisplayOrder ? ', display_order' : ''}${supportsDisplayQuantity ? ', display_quantity' : ''})
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0${supportsDisplayOrder ? ', ?' : ''}${supportsDisplayQuantity ? ', ?' : ''})
-    `;
-
-    const params = [
+    const baseColumns = [
+      'name',
+      'article_code',
+      'sole_code',
+      'color',
+      'size',
+      'unit',
+      'quantity',
+      'price',
+      'min_quantity',
+      'inner_box_per_pair',
+      'inner_boxes_per_outer_box',
+      'image_url',
+      'is_visible',
+    ];
+    const baseValues = [
       name,
       article_code,
       sole_code || null,
@@ -178,18 +195,46 @@ const create = async (req, res, next) => {
       min_quantity || 5,
       Number(inner_box_per_pair || 1),
       inner_boxes_per_outer_box ? Number(inner_boxes_per_outer_box) : null,
-      image_url
+      image_url,
+      0,
     ];
 
     if (supportsDisplayOrder) {
-      params.push(nextDisplayOrder);
+      baseColumns.push('display_order');
+      baseValues.push(nextDisplayOrder);
     }
 
     if (supportsDisplayQuantity) {
-      params.push(DEFAULT_DISPLAY_QUANTITY);
+      baseColumns.push('display_quantity');
+      baseValues.push(DEFAULT_DISPLAY_QUANTITY);
     }
 
-    const rows = await query(sql, params);
+    const { columns, values } = await appendFiscalInsertFields('finished_goods', baseColumns, baseValues);
+    const sql = `
+      INSERT INTO finished_goods (${columns.join(', ')})
+      VALUES (${columns.map(() => '?').join(', ')})
+    `;
+
+    const rows = await query(sql, values);
+    const product = {
+      id: rows.insertId,
+      name,
+      article_code,
+      color,
+      size,
+      unit: unit || 'pairs',
+    };
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'CREATE',
+      module: 'finished_goods',
+      entity_type: 'finished_good',
+      entity_id: rows.insertId,
+      entityName: getProductName(product),
+      description: `Created finished good ${getProductName(product)}`,
+      metadata: product,
+    });
 
     return res.status(201).json({
       success: true,
@@ -216,6 +261,15 @@ const update = async (req, res, next) => {
       inner_box_per_pair,           
       inner_boxes_per_outer_box
     } = req.body;
+
+    const existingRows = await query(
+      'SELECT id, name, article_code, color, size, unit FROM finished_goods WHERE id = ? AND is_deleted = 0',
+      [req.params.id]
+    );
+
+    if (!existingRows.rows.length) {
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
 
     const image_url = req.file
       ? `/uploads/${req.file.filename}`
@@ -270,6 +324,29 @@ const update = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Not found' });
     }
 
+    const updatedProduct = {
+      id: Number(req.params.id),
+      name,
+      article_code,
+      color,
+      size,
+      unit: unit || 'pairs',
+    };
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'UPDATE',
+      module: 'finished_goods',
+      entity_type: 'finished_good',
+      entity_id: req.params.id,
+      entityName: getProductName(updatedProduct),
+      description: `Edited finished good ${getProductName(updatedProduct)}`,
+      metadata: {
+        before: existingRows.rows[0],
+        after: updatedProduct,
+      },
+    });
+
     return res.json({ success: true });
 
   } catch (err) {
@@ -280,6 +357,10 @@ const update = async (req, res, next) => {
 const remove = async (req, res, next) => {
    try {
     const { id } = req.params;
+    const productRows = await query(
+      'SELECT id, name, article_code, color, size, unit FROM finished_goods WHERE id = ?',
+      [id]
+    );
 
     const result = await query(
       "UPDATE finished_goods SET is_deleted = 1 WHERE id = ?",
@@ -292,6 +373,18 @@ const remove = async (req, res, next) => {
         message: "Item not found",
       });
     }
+
+    const product = productRows.rows[0] || { id };
+    await auditLog({
+      ...getActor(req),
+      actionType: 'DELETE',
+      module: 'finished_goods',
+      entity_type: 'finished_good',
+      entity_id: id,
+      entityName: getProductName(product),
+      description: `Deleted finished good ${getProductName(product)}`,
+      metadata: product,
+    });
 
     res.json({
       success: true,
@@ -311,6 +404,14 @@ const remove = async (req, res, next) => {
 const setVisibility = async (req, res, next) => {
   try {
     const { is_visible } = req.body;
+    const productRows = await query(
+      'SELECT id, name, article_code, color, size, unit, is_visible FROM finished_goods WHERE id = ? AND is_deleted = 0',
+      [req.params.id]
+    );
+
+    if (!productRows.rows.length) {
+      return res.status(404).json({ success: false });
+    }
 
     const result = await query(
       `UPDATE finished_goods SET is_visible = ? WHERE id = ?`,
@@ -320,6 +421,23 @@ const setVisibility = async (req, res, next) => {
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false });
     }
+
+    const product = productRows.rows[0];
+    const actionType = is_visible ? 'SHOW' : 'HIDE';
+    await auditLog({
+      ...getActor(req),
+      actionType,
+      module: 'product_visibility',
+      entity_type: 'finished_good',
+      entity_id: req.params.id,
+      entityName: getProductName(product),
+      description: `${is_visible ? 'Showed' : 'Hid'} product ${getProductName(product)}`,
+      metadata: {
+        product,
+        previous_visibility: Number(product.is_visible || 0),
+        new_visibility: is_visible ? 1 : 0,
+      },
+    });
 
     return res.json({ success: true });
 

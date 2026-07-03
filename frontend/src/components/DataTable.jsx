@@ -5,7 +5,7 @@ import EmptyState from "./EmptyState";
 
 const toExportValue = (value) => {
   if (value === null || value === undefined) return "";
-  if (value instanceof Date) return value.toLocaleString();
+  if (value instanceof Date) return formatDate(value);
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return value;
   }
@@ -33,6 +33,7 @@ export default function DataTable({
   emptyDescription,
   exportFilename = "data-table",
   summaryColumns = [],
+  showToolbar = true,
 }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
@@ -172,6 +173,7 @@ export default function DataTable({
 
   return (
                 <div className="w-full rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  {showToolbar ? (
                   <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                       <input
@@ -202,10 +204,11 @@ export default function DataTable({
                       Export Excel
                     </button>
                   </div>
+                  ) : null}
 
                   {/* MOBILE TABLE VIEW */}
                       <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse">
+                        <table className="w-full min-w-[760px] text-left border-collapse">
                           <thead>
               <tr className="bg-slate-50 border-b border-slate-200 bg-indigo-50">
                 {columns.map((col, i) => (

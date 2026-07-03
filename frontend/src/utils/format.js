@@ -1,3 +1,13 @@
+import NepaliDateModule from "nepali-date-converter";
+
+const NepaliDate = NepaliDateModule.default || NepaliDateModule;
+
+const normalizeDate = (value) => {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
 export const formatNumber = (value) => {
   const number = Number(value || 0);
   return Number.isNaN(number) ? "0" : number.toLocaleString();
@@ -15,9 +25,30 @@ export const formatPrice = (value, currency = "NPR") => {
   }).format(amount);
 };
 
-export const formatDate = (value) => {
-  if (!value) return "-";
-  return new Date(value).toLocaleString();
+export const formatEnglishDate = (value, options = {}) => {
+  const date = normalizeDate(value);
+  if (!date) return "-";
+  const { includeTime = true } = options;
+  return includeTime ? date.toLocaleString() : date.toLocaleDateString("en-GB");
+};
+
+export const formatTime = (value) => {
+  const date = normalizeDate(value);
+  if (!date) return "-";
+  return date.toLocaleTimeString();
+};
+
+export const formatNepaliDate = (value) => {
+  const date = normalizeDate(value);
+  if (!date) return "-";
+  return new NepaliDate(date).format("YYYY-MM-DD");
+};
+
+export const formatDate = (value, options = {}) => {
+  const date = normalizeDate(value);
+  if (!date) return "-";
+
+  return `AD ${formatEnglishDate(date, options)} | BS ${formatNepaliDate(date)}`;
 };
 
 export const titleCase = (value = "") =>

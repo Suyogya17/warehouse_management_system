@@ -2,6 +2,7 @@ const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { getPagination, shouldIncludeTotal } = require('../utils/pagination');
 const { hasColumn } = require('../utils/schemaSupport');
+const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const ACTIVE_ROLES = ['ADMIN', 'CO_ADMIN'];
 const MOVEMENT_TYPES = new Set([
@@ -17,6 +18,13 @@ const toPositiveNumber = (value) => {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : null;
 };
+
+const getActor = (req) => ({
+  userId: req.user?.id,
+  userName: req.user?.name,
+  userRole: req.user?.role,
+  ipAddress: req.ip,
+});
 
 const assertManager = (req, res) => {
   if (!ACTIVE_ROLES.includes(req.user.role)) {
@@ -57,10 +65,15 @@ const create = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Warehouse name is required' });
     }
 
-    const result = await query(
-      `INSERT INTO warehouses (name, created_by, updated_by)
-       VALUES (?, ?, ?)`,
+    const warehouseInsert = await appendFiscalInsertFields(
+      'warehouses',
+      ['name', 'created_by', 'updated_by'],
       [name, req.user.id, req.user.id]
+    );
+    const result = await query(
+      `INSERT INTO warehouses (${warehouseInsert.columns.join(', ')})
+       VALUES (${warehouseInsert.columns.map(() => '?').join(', ')})`,
+      warehouseInsert.values
     );
 
     await auditLog({
@@ -299,7 +312,7 @@ const adjust = async (req, res, next) => {
     }
 
     const productRes = await client.query(
-      'SELECT id, name, quantity FROM finished_goods WHERE id = ? AND is_deleted = 0',
+      'SELECT id, name, article_code, color, quantity FROM finished_goods WHERE id = ? AND is_deleted = 0',
       [finishedGoodId]
     );
     const warehouseRes = await client.query(
@@ -332,14 +345,19 @@ const adjust = async (req, res, next) => {
 
     const signedQty = movementType === 'ADJUSTMENT_OUT' ? -quantity : quantity;
 
+    const stockInsert = await appendFiscalInsertFields(
+      'finished_good_warehouse_stock',
+      ['finished_good_id', 'warehouse_id', 'quantity', 'created_by', 'updated_by'],
+      [finishedGoodId, warehouseId, signedQty, req.user.id, req.user.id]
+    );
     await client.query(
       `INSERT INTO finished_good_warehouse_stock
-         (finished_good_id, warehouse_id, quantity, created_by, updated_by)
-       VALUES (?, ?, ?, ?, ?)
+         (${stockInsert.columns.join(', ')})
+       VALUES (${stockInsert.columns.map(() => '?').join(', ')})
        ON DUPLICATE KEY UPDATE
          quantity = quantity + VALUES(quantity),
          updated_by = VALUES(updated_by)`,
-      [finishedGoodId, warehouseId, signedQty, req.user.id, req.user.id]
+      stockInsert.values
     );
 
     await client.query(
@@ -349,21 +367,38 @@ const adjust = async (req, res, next) => {
       [signedQty, finishedGoodId]
     );
 
+    const movementInsert = await appendFiscalInsertFields(
+      'finished_good_warehouse_movements',
+      ['finished_good_id', 'warehouse_id', 'quantity', 'movement_type', 'reference_type', 'reference_id', 'notes', 'created_by'],
+      [finishedGoodId, warehouseId, quantity, movementType, 'manual', null, notes, req.user.id]
+    );
     await client.query(
-      `INSERT INTO finished_good_warehouse_movements
-         (finished_good_id, warehouse_id, quantity, movement_type, reference_type, reference_id, notes, created_by)
-       VALUES (?, ?, ?, ?, 'manual', NULL, ?, ?)`,
-      [finishedGoodId, warehouseId, quantity, movementType, notes, req.user.id]
+      `INSERT INTO finished_good_warehouse_movements (${movementInsert.columns.join(', ')})
+       VALUES (${movementInsert.columns.map(() => '?').join(', ')})`,
+      movementInsert.values
     );
 
     await client.query('COMMIT');
 
     await auditLog({
-      userId: req.user.id,
-      action: movementType,
-      tableName: 'finished_good_warehouse_stock',
-      recordId: finishedGoodId,
-      detail: `${movementType} ${quantity} for product #${finishedGoodId} in warehouse #${warehouseId}`,
+      ...getActor(req),
+      actionType: movementType === 'ADJUSTMENT_IN' ? 'STOCK_ADDED' : 'UPDATE',
+      module: 'warehouse',
+      entity_type: 'finished_good',
+      entity_id: finishedGoodId,
+      entityName: [productRes.rows[0].name, productRes.rows[0].article_code, productRes.rows[0].color].filter(Boolean).join(' / '),
+      description: `${movementType === 'ADJUSTMENT_IN' ? 'Added' : 'Removed'} ${quantity} ${productRes.rows[0].name} in ${warehouseRes.rows[0].name}`,
+      metadata: {
+        movement_type: movementType,
+        finished_good_id: finishedGoodId,
+        product_name: productRes.rows[0].name,
+        article_code: productRes.rows[0].article_code,
+        color: productRes.rows[0].color,
+        warehouse_id: warehouseId,
+        warehouse_name: warehouseRes.rows[0].name,
+        quantity,
+        notes,
+      },
     });
 
     return res.json({ success: true, message: 'Warehouse stock adjusted' });
@@ -403,11 +438,11 @@ const transfer = async (req, res, next) => {
     }
 
     const productRes = await client.query(
-      'SELECT id FROM finished_goods WHERE id = ? AND is_deleted = 0',
+      'SELECT id, name, article_code, color FROM finished_goods WHERE id = ? AND is_deleted = 0',
       [finishedGoodId]
     );
     const warehousesRes = await client.query(
-      `SELECT id FROM warehouses
+      `SELECT id, name FROM warehouses
        WHERE id IN (?, ?) AND is_active = 1 AND deleted_at IS NULL`,
       [fromWarehouseId, toWarehouseId]
     );
@@ -442,36 +477,70 @@ const transfer = async (req, res, next) => {
       [quantity, req.user.id, finishedGoodId, fromWarehouseId]
     );
 
+    const transferStockInsert = await appendFiscalInsertFields(
+      'finished_good_warehouse_stock',
+      ['finished_good_id', 'warehouse_id', 'quantity', 'created_by', 'updated_by'],
+      [finishedGoodId, toWarehouseId, quantity, req.user.id, req.user.id]
+    );
     await client.query(
       `INSERT INTO finished_good_warehouse_stock
-         (finished_good_id, warehouse_id, quantity, created_by, updated_by)
-       VALUES (?, ?, ?, ?, ?)
+         (${transferStockInsert.columns.join(', ')})
+       VALUES (${transferStockInsert.columns.map(() => '?').join(', ')})
        ON DUPLICATE KEY UPDATE
          quantity = quantity + VALUES(quantity),
          updated_by = VALUES(updated_by)`,
-      [finishedGoodId, toWarehouseId, quantity, req.user.id, req.user.id]
+      transferStockInsert.values
     );
 
+    const transferOutInsert = await appendFiscalInsertFields(
+      'finished_good_warehouse_movements',
+      ['finished_good_id', 'warehouse_id', 'quantity', 'movement_type', 'reference_type', 'reference_id', 'notes', 'created_by'],
+      [finishedGoodId, fromWarehouseId, quantity, 'TRANSFER_OUT', 'transfer', null, notes, req.user.id]
+    );
     await client.query(
-      `INSERT INTO finished_good_warehouse_movements
-         (finished_good_id, warehouse_id, quantity, movement_type, reference_type, reference_id, notes, created_by)
-       VALUES
-         (?, ?, ?, 'TRANSFER_OUT', 'transfer', NULL, ?, ?),
-         (?, ?, ?, 'TRANSFER_IN', 'transfer', NULL, ?, ?)`,
-      [
-        finishedGoodId, fromWarehouseId, quantity, notes, req.user.id,
-        finishedGoodId, toWarehouseId, quantity, notes, req.user.id,
-      ]
+      `INSERT INTO finished_good_warehouse_movements (${transferOutInsert.columns.join(', ')})
+       VALUES (${transferOutInsert.columns.map(() => '?').join(', ')})`,
+      transferOutInsert.values
+    );
+
+    const transferInInsert = await appendFiscalInsertFields(
+      'finished_good_warehouse_movements',
+      ['finished_good_id', 'warehouse_id', 'quantity', 'movement_type', 'reference_type', 'reference_id', 'notes', 'created_by'],
+      [finishedGoodId, toWarehouseId, quantity, 'TRANSFER_IN', 'transfer', null, notes, req.user.id]
+    );
+    await client.query(
+      `INSERT INTO finished_good_warehouse_movements (${transferInInsert.columns.join(', ')})
+       VALUES (${transferInInsert.columns.map(() => '?').join(', ')})`,
+      transferInInsert.values
     );
 
     await client.query('COMMIT');
 
+    const product = productRes.rows[0];
+    const warehouseById = new Map(warehousesRes.rows.map((warehouse) => [Number(warehouse.id), warehouse]));
+    const fromWarehouse = warehouseById.get(fromWarehouseId);
+    const toWarehouse = warehouseById.get(toWarehouseId);
+
     await auditLog({
-      userId: req.user.id,
-      action: 'TRANSFERRED',
-      tableName: 'finished_good_warehouse_stock',
-      recordId: finishedGoodId,
-      detail: `Transferred ${quantity} of product #${finishedGoodId} from warehouse #${fromWarehouseId} to #${toWarehouseId}`,
+      ...getActor(req),
+      actionType: 'TRANSFER',
+      module: 'warehouse',
+      entity_type: 'finished_good',
+      entity_id: finishedGoodId,
+      entityName: [product.name, product.article_code, product.color].filter(Boolean).join(' / '),
+      description: `Transferred ${quantity} ${product.name} from ${fromWarehouse?.name || `warehouse #${fromWarehouseId}`} to ${toWarehouse?.name || `warehouse #${toWarehouseId}`}`,
+      metadata: {
+        finished_good_id: finishedGoodId,
+        product_name: product.name,
+        article_code: product.article_code,
+        color: product.color,
+        from_warehouse_id: fromWarehouseId,
+        from_warehouse_name: fromWarehouse?.name,
+        to_warehouse_id: toWarehouseId,
+        to_warehouse_name: toWarehouse?.name,
+        quantity,
+        notes,
+      },
     });
 
     return res.json({ success: true, message: 'Warehouse stock transferred' });

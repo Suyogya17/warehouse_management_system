@@ -1,4 +1,5 @@
 const { query } = require('../config/db');
+const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const normalizeTone = (value) => {
   const tone = String(value || 'info').toLowerCase();
@@ -48,16 +49,22 @@ const create = async (req, res, next) => {
       });
     }
 
+    const notificationInsert = await appendFiscalInsertFields(
+      'notifications',
+      ['user_id', 'unique_key', 'title', 'message', 'tone', 'is_read', 'read_at'],
+      [req.user.id, uniqueKey, title, message, normalizeTone(req.body.tone), isRead, isRead ? new Date() : null]
+    );
+
     await query(
-      `INSERT INTO notifications (user_id, unique_key, title, message, tone, is_read, read_at)
-       VALUES (?, ?, ?, ?, ?, ?, IF(? = 1, NOW(), NULL))
+      `INSERT INTO notifications (${notificationInsert.columns.join(', ')})
+       VALUES (${notificationInsert.columns.map(() => '?').join(', ')})
        ON DUPLICATE KEY UPDATE
          title = VALUES(title),
          message = VALUES(message),
          tone = VALUES(tone),
          is_read = GREATEST(is_read, VALUES(is_read)),
          read_at = IF(GREATEST(is_read, VALUES(is_read)) = 1, COALESCE(read_at, NOW()), read_at)`,
-      [req.user.id, uniqueKey, title, message, normalizeTone(req.body.tone), isRead, isRead]
+      notificationInsert.values
     );
 
     const rows = await query(

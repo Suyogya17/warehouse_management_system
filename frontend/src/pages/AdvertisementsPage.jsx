@@ -8,6 +8,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
+import { formatDate } from "../utils/format";
 
 const initialForm = {
   title: "",
@@ -200,7 +201,7 @@ export default function AdvertisementsPage() {
                   <span>Position {item.display_order || 0}</span>
                 </div>
                 <div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold text-slate-900">{item.title}</h3><p className="mt-1 text-sm text-slate-500">{item.message || "No message"}</p></div><StatusBadge tone={Number(item.is_active) === 1 ? "success" : "neutral"}>{Number(item.is_active) === 1 ? "Active" : "Inactive"}</StatusBadge></div>
-                <p className="text-xs text-slate-500">{placementLabels[normalizedPlacement(item)] || "Carousel below status cards"} · {item.width_percent || 100}% wide × {item.height_px || 320}px high · {item.starts_at ? `Starts ${new Date(item.starts_at).toLocaleString()}` : "Starts immediately"} · {item.ends_at ? `Ends ${new Date(item.ends_at).toLocaleString()}` : "No end date"}</p>
+                <p className="text-xs text-slate-500">{placementLabels[normalizedPlacement(item)] || "Carousel below status cards"} · {item.width_percent || 100}% wide × {item.height_px || 320}px high · {item.starts_at ? `Starts ${formatDate(item.starts_at)}` : "Starts immediately"} · {item.ends_at ? `Ends ${formatDate(item.ends_at)}` : "No end date"}</p>
                 <div className="flex gap-2"><Button size="sm" variant="secondary" icon="edit" onClick={() => edit(item)}>Edit</Button><Button size="sm" variant="danger" icon="delete" onClick={() => remove(item)}>Delete</Button></div>
               </div>
             </article>

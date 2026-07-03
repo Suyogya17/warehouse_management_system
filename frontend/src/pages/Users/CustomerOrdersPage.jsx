@@ -22,7 +22,7 @@ import StatusBadge from "../../components/StatusBadge";
 import { api, APP_BASE_URL } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { formatNumber } from "../../utils/format";
+import { formatEnglishDate, formatNepaliDate, formatNumber, formatTime } from "../../utils/format";
 
 export default function UserOrderPage() {
   const { token } = useAuth();
@@ -539,16 +539,17 @@ export default function UserOrderPage() {
               key: "created_at",
               label: "Created",
               render: (row) => {
-  const createdDate = new Date(row.created_at);
-
   return (
     <div className="flex flex-col">
       <strong>
-        {createdDate.toLocaleDateString("en-GB")}
+        {formatEnglishDate(row.created_at, { includeTime: false })}
       </strong>
 
       <span className="text-xs text-slate-500">
-        {createdDate.toLocaleTimeString()}
+        BS {formatNepaliDate(row.created_at)}
+      </span>
+      <span className="text-xs text-slate-500">
+        {formatTime(row.created_at)}
       </span>
     </div>
   );

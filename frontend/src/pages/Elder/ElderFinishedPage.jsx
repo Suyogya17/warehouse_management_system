@@ -79,7 +79,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
   return (
     <div className="group flex flex-col rounded-2xl border border-slate-200 bg-white overflow-hidden hover:shadow-xl transition-all duration-300">
       {/* IMAGE */}
-      <div className="relative aspect-[4/3] bg-slate-100 overflow-hidden">
+      <div className="relative aspect-[5/3] bg-slate-100 overflow-hidden">
         {selectedVariant.image_url ? (
           <img
             loading="lazy"
@@ -92,7 +92,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
-            <PackageIcon className="text-slate-400" size={42} />
+            <PackageIcon className="text-slate-400" size={34} />
           </div>
         )}
 
@@ -117,7 +117,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
         {/* OUT OF STOCK OVERLAY */}
         {isOutOfStock && (
           <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-            <span className="bg-red-500 text-white px-4 py-2 rounded-lg font-semibold text-sm">
+            <span className="bg-red-500 text-white px-3 py-1.5 rounded-lg font-semibold text-xs">
               Out of Stock
             </span>
           </div>
@@ -133,7 +133,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
       <div className="flex flex-col">
         {/* TITLE + STOCK BADGE */}
         <div className="flex items-start justify-between gap-2">
-          <h3 className="flex-1 text-sm sm:text-base font-bold text-slate-900 line-clamp-2 leading-snug min-h-[10px]">
+          <h3 className="flex-1 text-sm font-bold text-slate-900 line-clamp-2 leading-snug min-h-[10px]">
             {selectedVariant.article_code || selectedVariant.name}
           </h3>
           <span
@@ -159,13 +159,13 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
         
         {/* COLOR VARIANTS */}
         {variants.length > 0 && (
-          <div className="flex flex-col  py-2">
+          <div className="flex flex-col py-1">
             <div className="flex scrollbar-hidden  overflow-x-auto px-1 ">
               {variants.map((variant) => (
                 <button
                   key={variant.id}
                   onClick={() => setSelectedVariant(variant)}
-                  className={`px-2.5 rounded-lg text-xs font-medium transition-all
+                  className={`px-2 rounded-lg text-xs font-medium transition-all
                   ${
                     selectedVariant.id === variant.id
                       ? "bg-indigo-500 text-white"
@@ -182,10 +182,10 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
        
 
         {/* STOCK INFO — shows available (reserved-aware), not raw physical */}
-        <div className="bg-slate-50 rounded-xl p-3 space-y-2">
+        <div className="bg-slate-50 rounded-xl p-2 space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500">Price</span>
-            <span className="text-base font-bold text-emerald-700">
+            <span className="text-sm font-bold text-emerald-700">
               {formatPrice(selectedVariant.price)}
             </span>
           </div>
@@ -197,7 +197,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
           </div>
 
           {Number(selectedVariant.inner_boxes_per_outer_box) > 0 && (
-            <div className="flex items-center justify-between border-t border-slate-200 pt-2">
+            <div className="flex items-center justify-between border-t border-slate-200 pt-1.5">
               <span className="text-xs text-slate-500">Cartons</span>
               <span className="text-sm font-bold text-indigo-600">
                 {formatNumber(cartons)}
@@ -207,11 +207,11 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
         </div>
 
         {/* ADD TO CART BUTTON */}
-        <div className="flex justify-center mt-auto pt-2 ">
+        <div className="flex justify-center mt-auto pt-1 ">
           {/* <button
             onClick={() => onAddToCart(selectedVariant)}
             disabled={isOutOfStock}
-            className={`my-2 px-4 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all
+            className={`my-2 px-3 py-2 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 transition-all
             ${
               isInCart
                 ? "bg-green-500 text-white hover:bg-green-600"

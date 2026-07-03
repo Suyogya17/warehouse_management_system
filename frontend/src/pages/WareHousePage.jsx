@@ -411,6 +411,7 @@ export default function WareHousePage() {
               { key: "updated_by_name", label: "Updated By" },
             ]}
             rows={stockRows}
+            showToolbar={false}
             emptyTitle="No warehouse stock found"
             emptyDescription="Run the SQL migration first, then add stock through production or manual adjustment."
           />
@@ -491,6 +492,7 @@ export default function WareHousePage() {
                   },
                 ]}
                 rows={warehouses}
+                showToolbar={false}
                 emptyTitle="No warehouses"
                 emptyDescription="Create your first warehouse to start tracking product locations."
               />
@@ -711,6 +713,7 @@ export default function WareHousePage() {
               { key: "notes", label: "Notes" },
             ]}
             rows={filteredMovements}
+            showToolbar={false}
             emptyTitle="No movements found"
             emptyDescription={
               movementSearch

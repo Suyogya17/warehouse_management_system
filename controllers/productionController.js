@@ -3,6 +3,7 @@ const auditLog = require('../utils/auditLog');
 const { productionHistorySelect } = require('../utils/queryBuilders');
 const { hasColumn } = require('../utils/schemaSupport');
 const { getPagination, shouldIncludeTotal } = require('../utils/pagination');
+const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const packagingSelect = (supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox) => `
   ${supportsInnerBoxPerPair ? 'fg.inner_box_per_pair' : 'CAST(1 AS DECIMAL(10,2)) AS inner_box_per_pair'},
@@ -89,28 +90,39 @@ const validateWarehouseAllocations = async (client, allocations, qtyToProduce) =
 
 const saveProductionWarehouseAllocations = async (client, production, finishedGoodId, allocations, userId) => {
   for (const allocation of allocations) {
+    const warehouseStockInsert = await appendFiscalInsertFields(
+      'finished_good_warehouse_stock',
+      ['finished_good_id', 'warehouse_id', 'quantity', 'created_by', 'updated_by'],
+      [finishedGoodId, allocation.warehouse_id, allocation.quantity, userId, userId]
+    );
     await client.query(
       `INSERT INTO finished_good_warehouse_stock
-         (finished_good_id, warehouse_id, quantity, created_by, updated_by)
-       VALUES (?, ?, ?, ?, ?)
+         (${warehouseStockInsert.columns.join(', ')})
+       VALUES (${warehouseStockInsert.columns.map(() => '?').join(', ')})
        ON DUPLICATE KEY UPDATE
          quantity = quantity + VALUES(quantity),
          updated_by = VALUES(updated_by)`,
-      [finishedGoodId, allocation.warehouse_id, allocation.quantity, userId, userId]
+      warehouseStockInsert.values
     );
 
-    await client.query(
-      `INSERT INTO finished_good_warehouse_movements
-         (finished_good_id, warehouse_id, quantity, movement_type, reference_type, reference_id, notes, created_by)
-       VALUES (?, ?, ?, 'PRODUCTION_IN', 'production', ?, ?, ?)`,
+    const movementInsert = await appendFiscalInsertFields(
+      'finished_good_warehouse_movements',
+      ['finished_good_id', 'warehouse_id', 'quantity', 'movement_type', 'reference_type', 'reference_id', 'notes', 'created_by'],
       [
         finishedGoodId,
         allocation.warehouse_id,
         allocation.quantity,
+        'PRODUCTION_IN',
+        'production',
         production.id,
         production.notes || null,
         userId,
       ]
+    );
+    await client.query(
+      `INSERT INTO finished_good_warehouse_movements (${movementInsert.columns.join(', ')})
+       VALUES (${movementInsert.columns.map(() => '?').join(', ')})`,
+      movementInsert.values
     );
   }
 };
@@ -277,10 +289,9 @@ const runProduction = async (req, res, next) => {
     }
 
     // ── STEP 2: Create production record ─────────────────────────────────────
-    const prodRes = await client.query(
-      `INSERT INTO production
-         (formula_id, finished_good_id, qty_produced, color, batches, notes, produced_by)
-       VALUES (?,?,?,?,?,?,?)`,
+    const productionInsert = await appendFiscalInsertFields(
+      'production',
+      ['formula_id', 'finished_good_id', 'qty_produced', 'color', 'batches', 'notes', 'produced_by'],
       [
         formula_id,
         formula.fg_id,
@@ -290,6 +301,11 @@ const runProduction = async (req, res, next) => {
         notes || null,
         req.user.id,
       ]
+    );
+    const prodRes = await client.query(
+      `INSERT INTO production (${productionInsert.columns.join(', ')})
+       VALUES (${productionInsert.columns.map(() => '?').join(', ')})`,
+      productionInsert.values
     );
     const production = { id: prodRes.insertId };
 
@@ -332,10 +348,15 @@ const runProduction = async (req, res, next) => {
       );
 
       // Record production_items
-      await client.query(
-        `INSERT INTO production_items (production_id, raw_material_id, qty_consumed)
-         VALUES (?,?,?)`,
+      const productionItemInsert = await appendFiscalInsertFields(
+        'production_items',
+        ['production_id', 'raw_material_id', 'qty_consumed'],
         [production.id, inp.raw_material_id, totalNeeded]
+      );
+      await client.query(
+        `INSERT INTO production_items (${productionItemInsert.columns.join(', ')})
+         VALUES (${productionItemInsert.columns.map(() => '?').join(', ')})`,
+        productionItemInsert.values
       );
 
       consumptionSummary.push({
@@ -572,40 +593,29 @@ const deleteProduction = async (req, res, next) => {
       );
 
       const currentQty = Number(rmRes.rows[0].quantity);
+      const restoredQty = currentQty + Number(item.qty_consumed);
 
-     const restoredQty =
-  currentQty + Number(item.qty_consumed);
+      await client.query(
+        `
+        UPDATE raw_materials
+        SET quantity = ?
+        WHERE id = ?
+        `,
+        [restoredQty, item.raw_material_id]
+      );
 
-await client.query(
-  ` 
-  UPDATE raw_materials
-  SET quantity = ?
-  WHERE id = ?
-  `,
-  [
-    restoredQty,
-    item.raw_material_id,
-  ]
-);
+      // restore stock batch
+      const restoredStockInsert = await appendFiscalInsertFields(
+        'stock',
+        ['raw_material_id', 'qty_added', 'qty_remaining', 'purchased_at'],
+        [item.raw_material_id, item.qty_consumed, item.qty_consumed, new Date()]
+      );
 
-// restore stock batch
-await client.query(
-  `
-  INSERT INTO stock
-  (
-    raw_material_id,
-    qty_added,
-    qty_remaining,
-    purchased_at
-  )
-  VALUES (?, ?, ?, NOW())
-  `,
-  [
-    item.raw_material_id,
-    item.qty_consumed,
-    item.qty_consumed,
-  ]
-);
+      await client.query(
+        `INSERT INTO stock (${restoredStockInsert.columns.join(', ')})
+         VALUES (${restoredStockInsert.columns.map(() => '?').join(', ')})`,
+        restoredStockInsert.values
+      );
     }
 
     await client.query(

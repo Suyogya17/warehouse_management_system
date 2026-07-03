@@ -2,6 +2,14 @@ const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { getPagination, shouldIncludeTotal } = require('../utils/pagination');
 const { hasColumn } = require('../utils/schemaSupport');
+const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
+
+const getActor = (req) => ({
+  userId: req.user?.id,
+  userName: req.user?.name,
+  userRole: req.user?.role,
+  ipAddress: req.ip,
+});
 
 // ─── LIST ALL LOGS ────────────────────────────────────────────────────────────
 const getAll = async (req, res, next) => {
@@ -90,7 +98,7 @@ const logConsumption = async (req, res, next) => {
       idValue = raw_material_id;
 
       item = await client.query(
-        "SELECT id, name, article_code, quantity FROM raw_materials WHERE id=?",
+        "SELECT id, name, article_code, color, unit, quantity FROM raw_materials WHERE id=?",
         [raw_material_id]
       );
     } 
@@ -124,7 +132,7 @@ const logConsumption = async (req, res, next) => {
       idValue = finished_good_id;
 
       item = await client.query(
-        "SELECT id, name, article_code, quantity FROM finished_goods WHERE id=?",
+        "SELECT id, name, article_code, color, unit, quantity FROM finished_goods WHERE id=?",
         [finished_good_id]
       );
 
@@ -175,16 +183,26 @@ const logConsumption = async (req, res, next) => {
 let logRes;
 
 if (raw_material_id) {
-  logRes = await client.query(
-    `INSERT INTO consumption_logs (raw_material_id, qty_used, reason, logged_by)
-     VALUES (?, ?, ?, ?)`,
+  const consumptionInsert = await appendFiscalInsertFields(
+    'consumption_logs',
+    ['raw_material_id', 'qty_used', 'reason', 'logged_by'],
     [raw_material_id, qty_used, reason || null, req.user.id]
   );
-} else {
   logRes = await client.query(
-    `INSERT INTO consumption_logs (finished_good_id, warehouse_id, qty_used, reason, logged_by)
-     VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO consumption_logs (${consumptionInsert.columns.join(', ')})
+     VALUES (${consumptionInsert.columns.map(() => '?').join(', ')})`,
+    consumptionInsert.values
+  );
+} else {
+  const consumptionInsert = await appendFiscalInsertFields(
+    'consumption_logs',
+    ['finished_good_id', 'warehouse_id', 'qty_used', 'reason', 'logged_by'],
     [finished_good_id, warehouse_id, qty_used, reason || null, req.user.id]
+  );
+  logRes = await client.query(
+    `INSERT INTO consumption_logs (${consumptionInsert.columns.join(', ')})
+     VALUES (${consumptionInsert.columns.map(() => '?').join(', ')})`,
+    consumptionInsert.values
   );
 }
 
@@ -206,22 +224,58 @@ const logId = logRes.insertId;
         [qty_used, req.user.id, finished_good_id, warehouse_id]
       );
 
-      await client.query(
-        `INSERT INTO finished_good_warehouse_movements
-           (finished_good_id, warehouse_id, quantity, movement_type, reference_type, reference_id, notes, created_by)
-         VALUES (?, ?, ?, 'ADJUSTMENT_OUT', 'consumption', ?, ?, ?)`,
+      const movementInsert = await appendFiscalInsertFields(
+        'finished_good_warehouse_movements',
+        ['finished_good_id', 'warehouse_id', 'quantity', 'movement_type', 'reference_type', 'reference_id', 'notes', 'created_by'],
         [
           finished_good_id,
           warehouse_id,
           qty_used,
+          'ADJUSTMENT_OUT',
+          'consumption',
           logId,
           reason ? `Finished goods consumption: ${reason}` : 'Finished goods consumption',
           req.user.id,
         ]
       );
+      await client.query(
+        `INSERT INTO finished_good_warehouse_movements (${movementInsert.columns.join(', ')})
+         VALUES (${movementInsert.columns.map(() => '?').join(', ')})`,
+        movementInsert.values
+      );
     }
 
     await client.query("COMMIT");
+
+    let warehouseName = null;
+    if (type === "FINISHED" && warehouse_id) {
+      const warehouseRows = await query('SELECT name FROM warehouses WHERE id = ?', [warehouse_id]);
+      warehouseName = warehouseRows.rows[0]?.name || null;
+    }
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'CONSUMPTION',
+      module: 'consumption',
+      entity_type: type === 'RAW' ? 'raw_material' : 'finished_good',
+      entity_id: idValue,
+      entityName: [row.name, row.article_code, row.color].filter(Boolean).join(' / '),
+      description: `Consumed ${qty_used} ${row.unit || ''} ${row.name}${reason ? ` (${reason})` : ''}`,
+      metadata: {
+        type,
+        raw_material_id: raw_material_id || null,
+        finished_good_id: finished_good_id || null,
+        warehouse_id: warehouse_id || null,
+        warehouse_name: warehouseName,
+        material_name: type === 'RAW' ? row.name : undefined,
+        product_name: type === 'FINISHED' ? row.name : undefined,
+        article_code: row.article_code,
+        color: row.color,
+        quantity: Number(qty_used),
+        unit: row.unit,
+        reason: reason || null,
+      },
+    });
 
     return res.status(201).json({
       success: true,

@@ -2,6 +2,7 @@
 const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { hasColumn } = require('../utils/schemaSupport');
+const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const syncFinishedGoodVisibility = async (finishedGoodId) => {
   const result = await query(
@@ -42,10 +43,15 @@ const grantAccess = async (req, res, next) => {
       );
 
       if (!updated.affectedRows) {
+        const permissionInsert = await appendFiscalInsertFields(
+          'user_product_permissions',
+          ['user_id', 'finished_good_id', 'can_view'],
+          [user_id, fg_id, 1]
+        );
         await query(
-          `INSERT INTO user_product_permissions (user_id, finished_good_id, can_view)
-           VALUES (?, ?, 1)`,
-          [user_id, fg_id]
+          `INSERT INTO user_product_permissions (${permissionInsert.columns.join(', ')})
+           VALUES (${permissionInsert.columns.map(() => '?').join(', ')})`,
+          permissionInsert.values
         );
       }
 
@@ -79,10 +85,15 @@ const revokeAccess = async (req, res, next) => {
     );
 
     if (!updated.affectedRows) {
+      const permissionInsert = await appendFiscalInsertFields(
+        'user_product_permissions',
+        ['user_id', 'finished_good_id', 'can_view'],
+        [user_id, finished_good_id, 0]
+      );
       await query(
-        `INSERT INTO user_product_permissions (user_id, finished_good_id, can_view)
-         VALUES (?, ?, 0)`,
-        [user_id, finished_good_id]
+        `INSERT INTO user_product_permissions (${permissionInsert.columns.join(', ')})
+         VALUES (${permissionInsert.columns.map(() => '?').join(', ')})`,
+        permissionInsert.values
       );
     }
 
