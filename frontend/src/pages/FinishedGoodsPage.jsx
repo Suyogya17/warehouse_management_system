@@ -58,6 +58,7 @@ export default function FinishedGoodsPage() {
   const { token, user } = useAuth();
   const { showToast } = useToast();
   const isAdmin = user.role === "ADMIN" || user.role === "CO_ADMIN";
+  const canViewHidden = isAdmin || user.role === "MEMBER";
   const [items, setItems] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [form, setForm] = useState(initialForm);
@@ -74,11 +75,11 @@ export default function FinishedGoodsPage() {
   const loadItems = useCallback(async () => {
     const [goodsResult, materialsResult] = await Promise.all([
       api.getFinishedGoods(token),
-      api.getRawMaterials(token),
+      isAdmin ? api.getRawMaterials(token) : Promise.resolve({ data: [] }),
     ]);
     setItems(goodsResult.data || []);
     setMaterials(materialsResult.data || []);
-  }, [token]);
+  }, [isAdmin, token]);
 
   useEffect(() => {
     loadItems().catch(console.error);
@@ -238,7 +239,7 @@ export default function FinishedGoodsPage() {
   };
 
   const filteredItems = items.filter((item) => {
-    if (!isAdmin && !item.is_visible) return false;
+    if (!canViewHidden && !item.is_visible) return false;
 
     if (seriesFilter && getSeriesName(item.sole_code) !== seriesFilter) return false;
 
@@ -589,7 +590,7 @@ export default function FinishedGoodsPage() {
 
       <SectionCard
         title="Finished goods"
-        subtitle={isAdmin ? "Admin can create, manage, and control user visibility for finished goods." : "Visible product catalog for users."}
+        subtitle={isAdmin ? "Admin can create, manage, and control user visibility for finished goods." : "Product catalog including assigned hidden products."}
         icon="finishedGoods"
         actions={
           <Button variant="secondary" icon="download" onClick={exportToExcel}>
@@ -660,7 +661,7 @@ export default function FinishedGoodsPage() {
                   render: (row) => `${formatNumber(row.inner_box_per_pair || 1)} inner/pair | ${row.inner_boxes_per_outer_box || "-"} inner/outer`,
                 }]
               : []),
-            ...(isAdmin
+            ...(canViewHidden
               ? [{
                   key: "is_visible",
                   label: "Visibility",

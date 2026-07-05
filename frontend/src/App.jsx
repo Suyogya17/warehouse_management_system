@@ -31,6 +31,7 @@ import ProductDisplayPage from "./pages/ProductDisplayPage";
 import AdvertisementsPage from "./pages/AdvertisementsPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import ActivityLogPage from "./pages/ActivityLogPage";
+import ImportTrackingPage from "./pages/ImportTrackingPage";
 export default function App() {
   const { isAuthenticated, user } = useAuth();
 
@@ -84,6 +85,15 @@ export default function App() {
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               <ReceiveStockPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="import-tracking"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              <ImportTrackingPage />
             </ProtectedRoute>
           }
         />

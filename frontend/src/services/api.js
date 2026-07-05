@@ -402,4 +402,49 @@ deleteStockAdjustment: (id, token) =>
 
     return apiRequest(`/activity-logs${query ? `?${query}` : ""}`, {}, token);
   },
+
+  getImportOrders: (token, params = {}) => {
+    const query = buildQueryString(params);
+
+    return apiRequest(`/import-tracking${query ? `?${query}` : ""}`, {}, token);
+  },
+
+  getImportOrder: (id, token) => apiRequest(`/import-tracking/${id}`, {}, token),
+
+  createImportOrder: (payload, token) =>
+    apiRequest(
+      "/import-tracking",
+      { method: "POST", body: JSON.stringify(payload) },
+      token
+    ),
+
+  updateImportOrder: (id, payload, token) =>
+    apiRequest(
+      `/import-tracking/${id}`,
+      { method: "PUT", body: JSON.stringify(payload) },
+      token
+    ),
+
+  deleteImportOrder: (id, token) =>
+    apiRequest(`/import-tracking/${id}`, { method: "DELETE" }, token),
+
+  createRawMaterialFromImportItem: (orderId, itemId, token) =>
+    apiRequest(
+      `/import-tracking/${orderId}/items/${itemId}/create-raw-material`,
+      { method: "POST" },
+      token
+    ),
+
+  receiveImportItemStock: (orderId, itemId, payload, token) =>
+    apiRequest(
+      `/import-tracking/${orderId}/items/${itemId}/receive-stock`,
+      { method: "POST", body: JSON.stringify(payload) },
+      token
+    ),
+
+  getImportReport: (token, params = {}) => {
+    const query = buildQueryString(params);
+
+    return apiRequest(`/import-tracking/report${query ? `?${query}` : ""}`, {}, token);
+  },
 };

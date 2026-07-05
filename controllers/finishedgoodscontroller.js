@@ -36,7 +36,7 @@ const getAll = async (req, res, next) => {
     let sql = '';
     let params = [];
 
-    if (userRole === 'ADMIN' || userRole === 'CO_ADMIN') {
+    if (userRole === 'ADMIN' || userRole === 'CO_ADMIN' || userRole === 'MEMBER') {
       sql = `SELECT * FROM finished_goods WHERE is_deleted = 0`;
 
       if (article_code) {
@@ -46,7 +46,7 @@ const getAll = async (req, res, next) => {
 
       sql += ` ${await getFinishedGoodsOrderClause()}`;
 
-    } else if (userRole === 'USER' || userRole === 'MEMBER' || userRole === 'ELDER') {
+    } else if (userRole === 'USER' || userRole === 'ELDER') {
       sql = `
         SELECT fg.*
         FROM finished_goods fg
@@ -99,7 +99,7 @@ const getOne = async (req, res, next) => {
     let sql;
     let params = [req.params.id];
 
-    if (userRole === 'ADMIN' || userRole === 'CO_ADMIN') {
+    if (userRole === 'ADMIN' || userRole === 'CO_ADMIN' || userRole === 'MEMBER') {
       sql = `SELECT * FROM finished_goods WHERE id = ?`;
 
     } else {

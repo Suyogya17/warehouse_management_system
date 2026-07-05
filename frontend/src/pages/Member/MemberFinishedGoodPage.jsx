@@ -60,6 +60,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
   if (!selectedVariant) return null;
 
   const isInCart = cartProductIds.has(Number(selectedVariant.id));
+  const isHidden = Number(selectedVariant.is_visible) !== 1;
 
   // FIX: Use available_qty (display_stock - reserved) for all stock UI.
   // This comes from /orders/availability and reflects real reservations.
@@ -106,12 +107,19 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
             <div />
           )}
 
-          {isInCart && (
-            <span className="bg-green-500 text-white text-[10px] sm:text-xs px-2 py-1 rounded-full font-semibold flex items-center gap-1">
-              <Check size={12} />
-              In Cart
-            </span>
-          )}
+          <div className="flex flex-col items-end gap-1">
+            {isHidden ? (
+              <span className="bg-amber-500 text-white text-[10px] sm:text-xs px-2 py-1 rounded-full font-semibold">
+                Hidden
+              </span>
+            ) : null}
+            {isInCart && (
+              <span className="bg-green-500 text-white text-[10px] sm:text-xs px-2 py-1 rounded-full font-semibold flex items-center gap-1">
+                <Check size={12} />
+                In Cart
+              </span>
+            )}
+          </div>
         </div>
 
         {/* OUT OF STOCK OVERLAY */}
@@ -280,7 +288,7 @@ export default function FinishedGoodsUserPage() {
   //   reserved_qty    = sum of all PENDING/CONFIRMED/PACKED orders
   //   display_stock   = min(product visible pairs, physical_stock - reserved_qty)
   const load = useCallback(async () => {
-    const result = await api.getAvailability(token);
+    const result = await api.getAvailability(token, { includeHidden: true });
     setItems(result.data || []);
   }, [token]);
 

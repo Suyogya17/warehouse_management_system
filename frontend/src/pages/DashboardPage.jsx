@@ -489,6 +489,7 @@ export default function DashboardPage() {
 
   const isAdmin = user.role === "ADMIN" || user.role === "CO_ADMIN";
   const canViewDashboard = isAdmin || user.role === "MEMBER";
+  const canViewOnHold = isAdmin || user.role === "MEMBER";
 
   const load = useCallback(async () => {
     const [
@@ -509,7 +510,7 @@ export default function DashboardPage() {
       user.role !== "MEMBER" ? api.getConsumptionLogs(token, { limit: 20, include_total: 0 }) : Promise.resolve({ data: [] }),
       user.role !== "MEMBER" ? api.getOrders(token, { limit: 100 }) : Promise.resolve({ data: [] }),
       isAdmin || user.role === "MEMBER"
-        ? api.getAvailability(token, { includeHidden: isAdmin })
+        ? api.getAvailability(token, { includeHidden: isAdmin || user.role === "MEMBER" })
         : Promise.resolve({ data: [] }),
       isAdmin ? api.getPermissions(token) : Promise.resolve({ data: [] }),
       user.role === "USER" ? api.getAdvertisements(token) : Promise.resolve({ data: [] }),
@@ -612,6 +613,10 @@ export default function DashboardPage() {
   }, [groupedProducts, search, stockFilter, seriesFilter]);
 
   const onHoldBaseItems = useMemo(() => {
+    if (!isAdmin) {
+      return state.availability.filter((product) => Number(product.is_visible) !== 1);
+    }
+
     const deniedKeys = new Set(
       state.permissions
         .filter((p) => Number(p.can_view) === 0)
@@ -629,7 +634,7 @@ export default function DashboardPage() {
           Number(product.is_visible) !== 1 ||
           !activeProductIds.has(Number(product.id))
       );
-  }, [state.permissions, state.finishedGoods]);
+  }, [isAdmin, state.permissions, state.finishedGoods, state.availability]);
 
   const onHoldSeriesList = useMemo(
     () =>
@@ -717,7 +722,7 @@ export default function DashboardPage() {
               value={formatNumber(state.orders.filter((o) => !["DELIVERED", "CANCELLED"].includes(o.status)).length)}
               tone="alert" icon="orders"
             />
-            {isAdmin && (
+            {canViewOnHold && (
               <StatCard label="On Hold Products" value={formatNumber(onHoldProducts.length)} tone="alert" icon="hidden" />
             )}
           </>
@@ -793,7 +798,7 @@ export default function DashboardPage() {
       )}
 
       {/* ON HOLD GRID */}
-      {isAdmin && (
+      {canViewOnHold && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">

@@ -307,14 +307,14 @@ const getAvailability = async (req, res, next) => {
     const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
     const includeHidden =
       req.query.include_hidden === '1' &&
-      ['ADMIN', 'CO_ADMIN'].includes(req.user.role);
+      ['ADMIN', 'CO_ADMIN', 'MEMBER'].includes(req.user.role);
 
     let sql = `SELECT * FROM finished_goods WHERE is_deleted = 0${
       includeHidden ? '' : ' AND is_visible = 1'
     }`;
     const params = [];
 
-    if (['USER', 'MEMBER', 'ELDER'].includes(req.user.role)) {
+    if (['USER', 'ELDER'].includes(req.user.role)) {
       sql += ` AND EXISTS (
         SELECT 1 FROM user_product_permissions upp
         WHERE upp.finished_good_id = finished_goods.id

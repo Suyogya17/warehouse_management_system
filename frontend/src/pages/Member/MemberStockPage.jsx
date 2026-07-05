@@ -22,7 +22,7 @@ export default function MemberStockPage() {
   const [rawMaterialStockFilter, setRawMaterialStockFilter] = useState("all");
 
   const load = useCallback(async () => {
-    const result = await api.getAvailability(token);
+    const result = await api.getAvailability(token, { includeHidden: true });
     setAvailability(result.data || []);
   }, [token]);
 
@@ -144,6 +144,15 @@ export default function MemberStockPage() {
                 key: "available_qty",
                 label: "Available",
                 render: (row) => `${formatNumber(row.available_qty)} ${row.unit}`,
+              },
+              {
+                key: "visibility",
+                label: "Visibility",
+                render: (row) => (
+                  <StatusBadge tone={Number(row.is_visible) === 1 ? "success" : "warning"}>
+                    {Number(row.is_visible) === 1 ? "Visible" : "Hidden"}
+                  </StatusBadge>
+                ),
               },
               {
                 key: "status",

@@ -18,6 +18,7 @@ const warehouseRoutes = require("./routes/warehouseRoutes");
 const advertisementRoutes = require("./routes/advertisementRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const analyticsRoutes = require("./routes/analyticsRoutes");
+const importTrackingRoutes = require("./routes/importTrackingRoutes");
 
 const app = express();
 
@@ -105,6 +106,7 @@ app.use("/api/warehouses", warehouseRoutes);
 app.use("/api/advertisements", advertisementRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/analytics", analyticsRoutes);
+app.use("/api/import-tracking", importTrackingRoutes);
 
 /* ─────────────────────────────
    ROOT ENDPOINT
