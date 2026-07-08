@@ -24,6 +24,13 @@ const emptyTransferForm = {
   quantity: "",
   notes: "",
 };
+const emptyTransferReportFilters = {
+  search: "",
+  from_warehouse_id: "",
+  to_warehouse_id: "",
+  date_from: "",
+  date_to: "",
+};
 
 const selectStyles = {
   control: (base) => ({
@@ -48,6 +55,14 @@ const escapeExcelCell = (value) =>
     .replace(/"/g, "&quot;");
 
 const noScroll = (e) => e.target.blur();
+const transferPairWindowMs = 60 * 1000;
+
+const getMovementTime = (movement) => {
+  const time = new Date(movement.created_at || "").getTime();
+  return Number.isFinite(time) ? time : 0;
+};
+
+const sameMovementValue = (left, right, key) => String(left?.[key] ?? "") === String(right?.[key] ?? "");
 
 const getCartons = (quantity, item) => {
   const pairs = Number(quantity || 0);
@@ -63,6 +78,7 @@ export default function WareHousePage() {
 
   const [search, setSearch] = useState("");
   const [movementSearch, setMovementSearch] = useState("");
+  const [transferReportFilters, setTransferReportFilters] = useState(emptyTransferReportFilters);
   const [warehouses, setWarehouses] = useState([]);
   const [finishedGoods, setFinishedGoods] = useState([]);
   const [stockRows, setStockRows] = useState([]);
@@ -82,7 +98,7 @@ export default function WareHousePage() {
       api.getWarehouses(token, true),
       api.getFinishedGoods(token),
       api.getWarehouseStock(token, search),
-      api.getWarehouseMovements(token, { limit: 100, include_total: 0 }),
+      api.getWarehouseMovements(token, { limit: 10000, include_total: 0 }),
     ]);
 
     setWarehouses(warehouseResult.data || []);
@@ -113,15 +129,25 @@ export default function WareHousePage() {
         const partnerType =
           m.movement_type === "TRANSFER_OUT" ? "TRANSFER_IN" : "TRANSFER_OUT";
 
-        const partner = movements.find(
-          (p) =>
-            p.id !== m.id &&
-            p.finished_good_id === m.finished_good_id &&
-            p.quantity === m.quantity &&
-            p.created_at === m.created_at &&
-            p.movement_type === partnerType &&
-            !seen.has(p.id)
-        );
+        const partner = movements.find((p) => {
+          if (p.id === m.id || seen.has(p.id) || p.movement_type !== partnerType) return false;
+          if (!sameMovementValue(p, m, "finished_good_id")) return false;
+          if (Number(p.quantity || 0) !== Number(m.quantity || 0)) return false;
+          if (!sameMovementValue(p, m, "created_by")) return false;
+          if (!sameMovementValue(p, m, "notes")) return false;
+
+          if (
+            m.reference_type === "transfer" &&
+            p.reference_type === "transfer" &&
+            m.reference_id &&
+            p.reference_id &&
+            String(m.reference_id) === String(p.reference_id)
+          ) {
+            return true;
+          }
+
+          return Math.abs(getMovementTime(p) - getMovementTime(m)) <= transferPairWindowMs;
+        });
 
         if (partner) {
           const outRow = m.movement_type === "TRANSFER_OUT" ? m : partner;
@@ -131,7 +157,9 @@ export default function WareHousePage() {
           out.push({
             ...m,
             movement_type: "TRANSFER",
+            from_warehouse_id: outRow.warehouse_id,
             from_warehouse_name: outRow.warehouse_name,
+            to_warehouse_id: inRow.warehouse_id,
             to_warehouse_name: inRow.warehouse_name,
             _merged: true,
           });
@@ -163,6 +191,50 @@ export default function WareHousePage() {
       );
     });
   }, [mergedMovements, movementSearch]);
+
+  const transferReportRows = useMemo(() => {
+    const q = transferReportFilters.search.trim().toLowerCase();
+    const fromDate = transferReportFilters.date_from
+      ? new Date(`${transferReportFilters.date_from}T00:00:00`)
+      : null;
+    const toDate = transferReportFilters.date_to
+      ? new Date(`${transferReportFilters.date_to}T23:59:59`)
+      : null;
+
+    return mergedMovements.filter((row) => {
+      if (row.movement_type !== "TRANSFER" || !row._merged) return false;
+
+      if (
+        transferReportFilters.from_warehouse_id &&
+        String(row.from_warehouse_id || "") !== String(transferReportFilters.from_warehouse_id)
+      ) {
+        return false;
+      }
+
+      if (
+        transferReportFilters.to_warehouse_id &&
+        String(row.to_warehouse_id || "") !== String(transferReportFilters.to_warehouse_id)
+      ) {
+        return false;
+      }
+
+      const createdAt = row.created_at ? new Date(row.created_at) : null;
+      if (fromDate && createdAt && createdAt < fromDate) return false;
+      if (toDate && createdAt && createdAt > toDate) return false;
+
+      if (!q) return true;
+
+      return (
+        (row.product_name ?? "").toLowerCase().includes(q) ||
+        (row.article_code ?? "").toLowerCase().includes(q) ||
+        (row.color ?? "").toLowerCase().includes(q) ||
+        (row.from_warehouse_name ?? "").toLowerCase().includes(q) ||
+        (row.to_warehouse_name ?? "").toLowerCase().includes(q) ||
+        (row.created_by_name ?? "").toLowerCase().includes(q) ||
+        (row.notes ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [mergedMovements, transferReportFilters]);
 
   const saveWarehouse = async (event) => {
     event.preventDefault();
@@ -357,8 +429,84 @@ export default function WareHousePage() {
     });
   };
 
+  const exportTransferReport = () => {
+    if (!transferReportRows.length) {
+      showToast({
+        tone: "error",
+        title: "Nothing to export",
+        message: "No warehouse transfer rows match the current report filters.",
+      });
+      return;
+    }
+
+    const columns = [
+      ["Date", "created_at"],
+      ["Product", "product_name"],
+      ["Article", "article_code"],
+      ["Color", "color"],
+      ["From Warehouse", "from_warehouse_name"],
+      ["To Warehouse", "to_warehouse_name"],
+      ["Quantity", "quantity"],
+      ["Unit", "unit"],
+      ["Transferred By", "created_by_name"],
+      ["Notes", "notes"],
+    ];
+
+    const headerHtml = columns.map(([label]) => `<th>${escapeExcelCell(label)}</th>`).join("");
+    const rowsHtml = transferReportRows
+      .map((row) => {
+        const cells = columns
+          .map(([, key]) => {
+            const value = key === "created_at" ? formatDate(row.created_at) : row[key];
+            return `<td>${escapeExcelCell(value)}</td>`;
+          })
+          .join("");
+        return `<tr>${cells}</tr>`;
+      })
+      .join("");
+
+    const workbookHtml = `
+      <html>
+        <head>
+          <meta charset="UTF-8" />
+          <style>
+            table { border-collapse: collapse; }
+            th, td { border: 1px solid #d9d9d9; padding: 6px; }
+            th { background: #f3f4f6; font-weight: 700; }
+          </style>
+        </head>
+        <body>
+          <table>
+            <thead><tr>${headerHtml}</tr></thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </body>
+      </html>
+    `;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([workbookHtml], {
+      type: "application/vnd.ms-excel;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `warehouse-transfer-report-${today}.xls`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showToast({
+      tone: "success",
+      title: "Transfer report exported",
+      message: `${transferReportRows.length} transfer row${transferReportRows.length === 1 ? "" : "s"} exported.`,
+    });
+  };
+
   const totalWarehouseStock = stockRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
   const totalWarehouseCartons = stockRows.reduce((sum, row) => sum + getCartons(row.quantity, row), 0);
+  const transferReportTotalQty = transferReportRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -661,6 +809,114 @@ export default function WareHousePage() {
           </form>
         </SectionCard>
       ) : null}
+
+      <SectionCard
+        title="Warehouse to warehouse report"
+        subtitle="Track transfers from one warehouse to another by product, date, and user."
+        icon="ledger"
+      >
+        <div className="space-y-4 p-5">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_160px_160px_auto]">
+            <Field label="Search transfer">
+              <TextInput
+                value={transferReportFilters.search}
+                onChange={(event) =>
+                  setTransferReportFilters((current) => ({ ...current, search: event.target.value }))
+                }
+                placeholder="Product, article, warehouse, by, notes..."
+              />
+            </Field>
+            <Field label="From warehouse">
+              <Select
+                options={warehouseOptions}
+                value={findOption(warehouseOptions, transferReportFilters.from_warehouse_id)}
+                onChange={(selected) =>
+                  setTransferReportFilters((current) => ({ ...current, from_warehouse_id: selected?.value || "" }))
+                }
+                placeholder="Any source..."
+                isClearable
+                menuPortalTarget={document.body}
+                menuPosition="fixed"
+                styles={selectStyles}
+              />
+            </Field>
+            <Field label="To warehouse">
+              <Select
+                options={warehouseOptions}
+                value={findOption(warehouseOptions, transferReportFilters.to_warehouse_id)}
+                onChange={(selected) =>
+                  setTransferReportFilters((current) => ({ ...current, to_warehouse_id: selected?.value || "" }))
+                }
+                placeholder="Any destination..."
+                isClearable
+                menuPortalTarget={document.body}
+                menuPosition="fixed"
+                styles={selectStyles}
+              />
+            </Field>
+            <Field label="From date">
+              <TextInput
+                type="date"
+                value={transferReportFilters.date_from}
+                onChange={(event) =>
+                  setTransferReportFilters((current) => ({ ...current, date_from: event.target.value }))
+                }
+              />
+            </Field>
+            <Field label="To date">
+              <TextInput
+                type="date"
+                value={transferReportFilters.date_to}
+                onChange={(event) =>
+                  setTransferReportFilters((current) => ({ ...current, date_to: event.target.value }))
+                }
+              />
+            </Field>
+            <div className="flex items-end gap-2">
+              <Button variant="secondary" icon="download" onClick={exportTransferReport}>
+                Export
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => setTransferReportFilters(emptyTransferReportFilters)}
+              >
+                Clear
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            <span>
+              Transfers: <span className="font-semibold text-slate-900">{formatNumber(transferReportRows.length)}</span>
+            </span>
+            <span>
+              Total quantity: <span className="font-semibold text-slate-900">{formatNumber(transferReportTotalQty)}</span>
+            </span>
+          </div>
+
+          <DataTable
+            columns={[
+              { key: "created_at", label: "Date", render: (row) => formatDate(row.created_at) },
+              { key: "product_name", label: "Product" },
+              { key: "article_code", label: "Article" },
+              { key: "color", label: "Color" },
+              { key: "from_warehouse_name", label: "From" },
+              { key: "to_warehouse_name", label: "To" },
+              {
+                key: "quantity",
+                label: "Qty",
+                render: (row) => `${formatNumber(row.quantity)} ${row.unit || "pairs"}`,
+              },
+              { key: "created_by_name", label: "By" },
+              { key: "notes", label: "Notes" },
+            ]}
+            rows={transferReportRows}
+            showToolbar={false}
+            emptyTitle="No warehouse transfers found"
+            emptyDescription="Transfer stock between warehouses to build this report."
+          />
+        </div>
+      </SectionCard>
 
       <SectionCard
         title="Movement history"

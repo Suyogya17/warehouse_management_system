@@ -5,6 +5,7 @@ import Button from "../components/Button";
 import Icon from "../components/Icon";
 import NotificationWatcher from "../components/NotificationWatcher";
 import { normalizeRole } from "../utils/roles";
+import { canManageProductVisibility } from "../utils/pagePermissions";
 import { api } from "../services/api";
 import { formatNepaliDate } from "../utils/format";
 
@@ -139,7 +140,19 @@ export default function AppShell() {
   const [notifications, setNotifications] = useState([]);
 
   const role = normalizeRole(user?.role);
-  const navItems = navByRole[role] || [];
+  const navItems = useMemo(() => {
+    const items = navByRole[role] || [];
+
+    if (role !== "CO_ADMIN" || canManageProductVisibility(user)) return items;
+
+    const restrictedVisibilityRoutes = new Set([
+      "/permissions",
+      "/product-display",
+      "/on-hold",
+    ]);
+
+    return items.filter((item) => !restrictedVisibilityRoutes.has(item.to));
+  }, [role, user]);
   const unreadCount = notifications.filter((item) => !item.read).length;
 
   const preventNumberWheelChange = (event) => {

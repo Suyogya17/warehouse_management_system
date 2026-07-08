@@ -116,6 +116,7 @@ export default function StockPage() {
       "FG.ID": item.id || "",
       Product: item.name || "",
       Article: item.article_code || "",
+      "Sole Code": item.sole_code || "",
       Warehouse: formatWarehouses(
         warehousesByProductId.get(String(item.id)) || [],
         item.unit || "pairs"
@@ -138,6 +139,7 @@ export default function StockPage() {
       { wch: 8  }, // FG.ID
       { wch: 32 }, // Product
       { wch: 14 }, // Article
+      { wch: 14 }, // Sole Code
       { wch: 30 }, // Warehouse
       { wch: 14 }, // Color
       { wch: 10 }, // Size
@@ -215,6 +217,7 @@ const totalAvailableCartons = filteredAvailability.reduce((sum, item) => sum + g
               { key: "id", label: "FG.ID" },
               { key: "name", label: "Product" },
               { key: "article_code", label: "Article" },
+              { key: "sole_code", label: "Series", render: (row) => row.sole_code || "-" },
               {
                 key: "warehouse",
                 label: "Warehouse",

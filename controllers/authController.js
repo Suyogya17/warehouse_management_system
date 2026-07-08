@@ -3,11 +3,37 @@ const jwt = require('jsonwebtoken');
 const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
+const { PRODUCT_VISIBILITY_PAGE_KEY, getUserPagePermissions } = require('../utils/userPagePermissions');
 
 const normalizeLocale = (countryCode, currencyCode) => ({
   countryCode: String(countryCode || 'NP').trim().toUpperCase().slice(0, 2),
   currencyCode: String(currencyCode || 'NPR').trim().toUpperCase().slice(0, 3),
 });
+
+const mapPagePermissions = (rows = []) =>
+  rows.reduce((acc, row) => {
+    acc[row.page_key] = {
+      can_view: Number(row.can_view || 0) === 1,
+      can_create: Number(row.can_create || 0) === 1,
+      can_edit: Number(row.can_edit || 0) === 1,
+      can_delete: Number(row.can_delete || 0) === 1,
+    };
+    return acc;
+  }, {});
+
+const buildUserPayload = async (user) => {
+  const pagePermissions = await getUserPagePermissions(user.id);
+
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    country_code: user.country_code,
+    currency_code: user.currency_code,
+    page_permissions: mapPagePermissions(pagePermissions),
+  };
+};
 
 // ─── REGISTER ────────────────────────────────────────────────────────────────
 const register = async (req, res, next) => {
@@ -42,14 +68,14 @@ const register = async (req, res, next) => {
 
     const userId = result.insertId;
 
-    const user = {
+    const user = await buildUserPayload({
       id: userId,
       name,
       email,
       role: role.toUpperCase(),
       country_code: locale.countryCode,
       currency_code: locale.currencyCode,
-    };
+    });
 
     await auditLog({
       userId,
@@ -105,17 +131,12 @@ const login = async (req, res, next) => {
       { expiresIn: '2h' }
     );
 
+    const userPayload = await buildUserPayload(user);
+
     return res.json({
       success: true,
       token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        country_code: user.country_code,
-        currency_code: user.currency_code,
-      },
+      user: userPayload,
     });
   } catch (err) {
     next(err);
@@ -137,7 +158,9 @@ const getProfile = async (req, res, next) => {
       });
     }
 
-    return res.json({ success: true, data: result[0] });
+    const userPayload = await buildUserPayload(result[0]);
+
+    return res.json({ success: true, data: { ...result[0], ...userPayload } });
   } catch (err) {
     next(err);
   }
@@ -252,6 +275,66 @@ const deleteUser = async (req, res, next) => {
   }
 };
 
+const listPagePermissions = async (req, res, next) => {
+  try {
+    const rows = await query(
+      `SELECT upp.user_id, upp.page_key, upp.can_view, upp.can_create, upp.can_edit, upp.can_delete,
+              u.name AS user_name, u.email, u.role
+       FROM user_page_permissions upp
+       JOIN users u ON u.id = upp.user_id
+       WHERE upp.page_key = ?
+       ORDER BY u.name`,
+      [PRODUCT_VISIBILITY_PAGE_KEY]
+    );
+
+    return res.json({ success: true, data: rows });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const setPagePermission = async (req, res, next) => {
+  try {
+    const userId = Number(req.params.id);
+    const enabled = Boolean(req.body.enabled);
+
+    const users = await query('SELECT id, role FROM users WHERE id = ?', [userId]);
+
+    if (!users.length) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (users[0].role !== 'CO_ADMIN') {
+      return res.status(400).json({
+        success: false,
+        message: 'Product show/hide access can only be assigned to co-admin users.',
+      });
+    }
+
+    await query(
+      `INSERT INTO user_page_permissions
+         (user_id, page_key, can_view, can_create, can_edit, can_delete)
+       VALUES (?, ?, ?, 0, ?, 0)
+       ON DUPLICATE KEY UPDATE
+         can_view = VALUES(can_view),
+         can_edit = VALUES(can_edit)`,
+      [userId, PRODUCT_VISIBILITY_PAGE_KEY, enabled ? 1 : 0, enabled ? 1 : 0]
+    );
+
+    await auditLog({
+      userId: req.user.id,
+      action: enabled ? 'GRANT_PAGE_PERMISSION' : 'REVOKE_PAGE_PERMISSION',
+      tableName: 'user_page_permissions',
+      recordId: userId,
+      detail: `${enabled ? 'Granted' : 'Revoked'} product show/hide access for user #${userId}`,
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -259,4 +342,6 @@ module.exports = {
   listUsers,
   updateUser,
   deleteUser,
+  listPagePermissions,
+  setPagePermission,
 };

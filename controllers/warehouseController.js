@@ -217,7 +217,7 @@ const getStock = async (req, res, next) => {
 
 const getMovements = async (req, res, next) => {
   try {
-    const { limit, offset } = getPagination(req.query, { defaultLimit: 100, maxLimit: 500 });
+    const { limit, offset } = getPagination(req.query, { defaultLimit: 100, maxLimit: 10000 });
     const supportsDeliveryNoteNumber = await hasColumn('orders', 'delivery_note_number');
     const params = [];
     const filters = [];
@@ -497,16 +497,26 @@ const transfer = async (req, res, next) => {
       ['finished_good_id', 'warehouse_id', 'quantity', 'movement_type', 'reference_type', 'reference_id', 'notes', 'created_by'],
       [finishedGoodId, fromWarehouseId, quantity, 'TRANSFER_OUT', 'transfer', null, notes, req.user.id]
     );
-    await client.query(
+    const transferOutResult = await client.query(
       `INSERT INTO finished_good_warehouse_movements (${transferOutInsert.columns.join(', ')})
        VALUES (${transferOutInsert.columns.map(() => '?').join(', ')})`,
       transferOutInsert.values
     );
+    const transferReferenceId = transferOutResult.insertId;
+
+    if (transferReferenceId) {
+      await client.query(
+        `UPDATE finished_good_warehouse_movements
+         SET reference_id = ?
+         WHERE id = ?`,
+        [transferReferenceId, transferReferenceId]
+      );
+    }
 
     const transferInInsert = await appendFiscalInsertFields(
       'finished_good_warehouse_movements',
       ['finished_good_id', 'warehouse_id', 'quantity', 'movement_type', 'reference_type', 'reference_id', 'notes', 'created_by'],
-      [finishedGoodId, toWarehouseId, quantity, 'TRANSFER_IN', 'transfer', null, notes, req.user.id]
+      [finishedGoodId, toWarehouseId, quantity, 'TRANSFER_IN', 'transfer', transferReferenceId || null, notes, req.user.id]
     );
     await client.query(
       `INSERT INTO finished_good_warehouse_movements (${transferInInsert.columns.join(', ')})

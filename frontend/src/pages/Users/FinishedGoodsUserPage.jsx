@@ -19,10 +19,10 @@ import { useAuth } from "../../context/AuthContext";
 import { useDataRefresh } from "../../hooks/useDataRefresh";
 
 import { api, APP_BASE_URL } from "../../services/api";
+import { getCustomerVisibleStock } from "../../utils/displayStock";
 import { formatNumber, formatPrice } from "../../utils/format";
 
-const getAvailableQty = (product) =>
-  Number(product?.display_stock ?? product?.available_qty ?? product?.display_quantity ?? 0);
+const getAvailableQty = getCustomerVisibleStock;
 
 const getGroupDisplayOrder = (variants = []) =>
   Math.min(...variants.map((variant) => Number(variant.display_order || 999999)));

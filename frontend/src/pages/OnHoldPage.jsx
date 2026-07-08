@@ -9,11 +9,12 @@ import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber } from "../utils/format";
+import { canManageProductVisibility } from "../utils/pagePermissions";
 
 const userRoles = new Set(["USER", "MEMBER", "ELDER"]);
 
 export default function OnHoldPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { showToast } = useToast();
 
   const [users, setUsers] = useState([]);
@@ -23,8 +24,11 @@ export default function OnHoldPage() {
   const [selectedProducts, setSelectedProducts] = useState([]);
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
+  const isAuthorized = canManageProductVisibility(user);
 
   const load = useCallback(async () => {
+    if (!isAuthorized) return;
+
     const [usersRes, productsRes, permissionsRes] = await Promise.all([
       api.getUsers(token),
       api.getFinishedGoods(token),
@@ -34,11 +38,13 @@ export default function OnHoldPage() {
     setUsers((usersRes.data || []).filter((user) => userRoles.has(user.role)));
     setProducts(productsRes.data || []);
     setPermissions(permissionsRes.data || []);
-  }, [token]);
+  }, [isAuthorized, token]);
 
   useDataRefresh(load, "on-hold");
 
   useEffect(() => {
+    if (!isAuthorized) return;
+
     load().catch((error) => {
       showToast({
         tone: "error",
@@ -46,7 +52,7 @@ export default function OnHoldPage() {
         message: error.message || "Could not load on-hold products.",
       });
     });
-  }, [load, showToast]);
+  }, [isAuthorized, load, showToast]);
 
   const hiddenProducts = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -217,6 +223,17 @@ export default function OnHoldPage() {
       render: () => <StatusBadge tone="neutral">On hold</StatusBadge>,
     },
   ];
+
+  if (!isAuthorized) {
+    return (
+      <div className="p-8 text-center">
+        <h2 className="text-lg font-semibold text-slate-900">Access denied</h2>
+        <p className="mt-2 text-sm text-slate-500">
+          You do not have permission to manage product show/hide.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

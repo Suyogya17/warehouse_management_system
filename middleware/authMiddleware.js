@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { query } = require('../config/db');
+const { hasUserPagePermission } = require('../utils/userPagePermissions');
 
 const authenticate = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -51,4 +52,34 @@ const authorize = (...roles) => {
   };
 };
 
-module.exports = { authenticate, authorize };
+const authorizeAdminOrPagePermission = (pageKey, action = 'can_edit') => {
+  return async (req, res, next) => {
+    try {
+      const userRole = (req.user?.role || '').toUpperCase();
+
+      if (userRole === 'ADMIN') return next();
+
+      if (userRole !== 'CO_ADMIN') {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden',
+        });
+      }
+
+      const allowed = await hasUserPagePermission(req.user.id, pageKey, action);
+
+      if (!allowed) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have permission to manage product show/hide.',
+        });
+      }
+
+      return next();
+    } catch (err) {
+      return next(err);
+    }
+  };
+};
+
+module.exports = { authenticate, authorize, authorizeAdminOrPagePermission };

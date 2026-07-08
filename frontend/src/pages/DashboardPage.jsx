@@ -14,6 +14,16 @@ import { formatNumber, formatPrice } from "../utils/format";
 const getAvailableQty = (product) =>
   Number(product?.available_qty ?? product?.display_quantity ?? product?.quantity ?? 0);
 
+const getGroupDisplayOrder = (variants = []) =>
+  Math.min(...variants.map((variant) => Number(variant.display_order || 999999)));
+
+const sortByDisplayOrder = (a, b) => {
+  const orderDiff = Number(a.display_order || 999999) - Number(b.display_order || 999999);
+  if (orderDiff !== 0) return orderDiff;
+
+  return Number(a.id || 0) - Number(b.id || 0);
+};
+
 const getSeriesName = (soleCode = "") =>
   String(soleCode)
     .replace(/[-_\s]*sole$/i, "")
@@ -608,8 +618,18 @@ export default function DashboardPage() {
           return isVisible && matchSearch && matchStock && matchSeries;
         })
       )
+      .map((variants) => [...variants].sort(sortByDisplayOrder))
       .filter((v) => v.length > 0)
-      .sort((a, b) => new Date(b[0]?.created_at || 0) - new Date(a[0]?.created_at || 0));
+      .sort((a, b) => {
+        const orderDiff = getGroupDisplayOrder(a) - getGroupDisplayOrder(b);
+        if (orderDiff !== 0) return orderDiff;
+
+        return String(a[0]?.article_code || a[0]?.name || "").localeCompare(
+          String(b[0]?.article_code || b[0]?.name || ""),
+          undefined,
+          { numeric: true, sensitivity: "base" }
+        );
+      });
   }, [groupedProducts, search, stockFilter, seriesFilter]);
 
   const onHoldBaseItems = useMemo(() => {

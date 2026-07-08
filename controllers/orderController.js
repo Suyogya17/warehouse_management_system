@@ -11,7 +11,9 @@ const FISCAL_DELIVERY_NOTE_START_YEAR = 2083;
 const getProductDisplayQuantity = (product) => {
   const value = Number(product?.display_quantity);
 
-  return Number.isFinite(value) && value >= 0 ? value : DEFAULT_DISPLAY_QUANTITY;
+  if (!Number.isFinite(value) || value < 0) return DEFAULT_DISPLAY_QUANTITY;
+
+  return Math.min(value, DEFAULT_DISPLAY_QUANTITY);
 };
 
 const getActor = (req) => ({

@@ -8,6 +8,7 @@ import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber } from "../utils/format";
+import { canManageProductVisibility } from "../utils/pagePermissions";
 
 const managedRoles = new Set(["USER", "MEMBER", "ELDER"]);
 const rowsPerPage = 10;
@@ -29,9 +30,11 @@ export default function PermissionsPage() {
   const [overviewPage, setOverviewPage] = useState(1);
   const [saving, setSaving] = useState(false);
 
-  const isAuthorized = user && ["ADMIN", "CO_ADMIN"].includes(user.role);
+  const isAuthorized = canManageProductVisibility(user);
 
   const load = useCallback(async () => {
+    if (!isAuthorized) return;
+
     const [usersRes, productsRes, permissionsRes] = await Promise.all([
       api.getUsers(token),
       api.getFinishedGoods(token),
@@ -41,7 +44,7 @@ export default function PermissionsPage() {
     setUsers((usersRes.data || []).filter((item) => managedRoles.has(item.role)));
     setProducts(productsRes.data || []);
     setPermissions(permissionsRes.data || []);
-  }, [token]);
+  }, [isAuthorized, token]);
 
   useEffect(() => {
     if (!isAuthorized) return;

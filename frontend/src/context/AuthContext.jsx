@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, useCallback } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { api } from "../services/api";
 import { normalizeRole } from "../utils/roles";
 
@@ -25,7 +25,10 @@ export const AuthProvider = ({ children }) => {
 
     try {
       const parsed = JSON.parse(saved);
-      return { ...parsed, user: normalizeUser(parsed.user) };
+      return {
+        token: parsed.token || "",
+        user: normalizeUser(parsed.user),
+      };
     } catch {
       localStorage.removeItem(STORAGE_KEY);
       return { token: "", user: null };
@@ -58,13 +61,8 @@ export const AuthProvider = ({ children }) => {
       const payload = decodeJwtPayload(auth.token);
       if (!payload?.exp) return;
 
-      const expiry = payload.exp * 1000;
-
-      const timeout = expiry - Date.now();
-
-      if (timeout <= 0) {
-        return;
-      }
+      const timeout = payload.exp * 1000 - Date.now();
+      if (timeout <= 0) return;
 
       const timer = setTimeout(() => {
         logout();
@@ -72,11 +70,10 @@ export const AuthProvider = ({ children }) => {
 
       return () => clearTimeout(timer);
     } catch {
-      // Let the backend remain the source of truth; api.js logs out on 401.
+      // The backend remains the source of truth; api.js logs out on 401.
     }
   }, [auth.token, logout]);
 
-  // ✅ Wrap functions in useCallback to stabilize references
   const login = useCallback(async (email, password, expectedRole) => {
     setLoading(true);
     try {
@@ -100,7 +97,6 @@ export const AuthProvider = ({ children }) => {
     return user;
   }, [auth.token]);
 
-  // ✅ Now include all dependencies
   const value = useMemo(
     () => ({
       token: auth.token,
@@ -117,7 +113,6 @@ export const AuthProvider = ({ children }) => {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
-// ✅ Move useAuth to a separate export to ensure it's not conflicting
 export function useAuth() {
   const context = useContext(AuthContext);
   if (!context) {

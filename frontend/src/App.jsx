@@ -56,7 +56,14 @@ export default function App() {
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
 
-        <Route path="dashboard" element={<DashboardPage />} />
+        <Route
+          path="dashboard"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER", "USER"]}>
+              <DashboardPage />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="raw-materials"
@@ -70,7 +77,7 @@ export default function App() {
        <Route
   path="finished-goods"
   element={
-    <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER", "USER"]}>
+    <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "USER"]}>
       {user?.role === "USER" ? (
         <FinishedGoodsUserPage />
       ) : (

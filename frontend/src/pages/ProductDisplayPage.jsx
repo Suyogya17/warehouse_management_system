@@ -8,8 +8,22 @@ import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber, formatPrice } from "../utils/format";
+import { canManageProductVisibility } from "../utils/pagePermissions";
+
+const DEFAULT_DISPLAY_QUANTITY = 450;
 
 const getPairs = (item) => Number(item.quantity || 0);
+
+const getDisplayLimit = (item) =>
+  Math.min(DEFAULT_DISPLAY_QUANTITY, Math.max(0, Math.floor(getPairs(item))));
+
+const getSavedDisplayQuantity = (item) => {
+  const savedValue = Number(item.display_quantity);
+
+  if (!Number.isFinite(savedValue) || savedValue < 0) return getDisplayLimit(item);
+
+  return Math.min(Math.floor(savedValue), getDisplayLimit(item));
+};
 
 const getCartons = (item) => {
   const pairs = getPairs(item);
@@ -50,7 +64,7 @@ const buildArticleGroups = (products = []) => {
 };
 
 export default function ProductDisplayPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { showToast } = useToast();
   const [items, setItems] = useState([]);
   const [permissions, setPermissions] = useState([]);
@@ -58,28 +72,34 @@ export default function ProductDisplayPage() {
   const [priceInputs, setPriceInputs] = useState({});
   const [savingDisplayId, setSavingDisplayId] = useState(null);
   const [savingPriceId, setSavingPriceId] = useState(null);
+  const [savingOrder, setSavingOrder] = useState(false);
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const rowsPerPage = 15;
+  const isAuthorized = canManageProductVisibility(user);
 
   const loadItems = useCallback(async () => {
+    if (!isAuthorized) return;
+
     const [productsResult, permissionsResult] = await Promise.all([
       api.getFinishedGoods(token),
       api.getPermissions(token),
     ]);
     setItems(productsResult.data || []);
     setPermissions(permissionsResult.data || []);
-  }, [token]);
+  }, [isAuthorized, token]);
 
   useEffect(() => {
+    if (!isAuthorized) return;
+
     loadItems().catch(console.error);
-  }, [loadItems]);
+  }, [isAuthorized, loadItems]);
 
   useEffect(() => {
     setDisplayInputs((current) => {
       const next = {};
       items.forEach((item) => {
-        next[item.id] = current[item.id] ?? String(item.display_quantity ?? 450);
+        next[item.id] = current[item.id] ?? String(getSavedDisplayQuantity(item));
       });
       return next;
     });
@@ -194,6 +214,8 @@ export default function ProductDisplayPage() {
   };
 
   const moveArticleGroup = async (group, target) => {
+    if (savingOrder) return;
+
     const currentIndex = articleGroups.findIndex((item) => item.key === group.key);
     if (currentIndex === -1) return;
 
@@ -209,6 +231,7 @@ export default function ProductDisplayPage() {
     nextGroups.splice(nextIndex, 0, selected);
 
     try {
+      setSavingOrder(true);
       await saveOrder(nextGroups);
       showToast({
         tone: "success",
@@ -217,6 +240,8 @@ export default function ProductDisplayPage() {
       });
     } catch (error) {
       showToast({ tone: "error", title: "Position update failed", message: error.message });
+    } finally {
+      setSavingOrder(false);
     }
   };
 
@@ -322,6 +347,17 @@ export default function ProductDisplayPage() {
     }
   };
 
+  if (!isAuthorized) {
+    return (
+      <div className="p-8 text-center">
+        <h2 className="text-lg font-semibold text-slate-900">Access denied</h2>
+        <p className="mt-2 text-sm text-slate-500">
+          You do not have permission to manage product show/hide.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -378,7 +414,14 @@ export default function ProductDisplayPage() {
             onChange={(event) => setSearch(event.target.value)}
             className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100 sm:max-w-sm"
           />
-          <p className="text-sm text-slate-500">{filteredGroups.length} article codes shown</p>
+          <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500">
+            <span>{filteredGroups.length} article codes shown</span>
+            {savingOrder ? (
+              <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-100">
+                Saving order...
+              </span>
+            ) : null}
+          </div>
         </div>
 
         <div className="mx-6 overflow-x-auto rounded-xl border border-slate-200 bg-white">
@@ -428,7 +471,7 @@ export default function ProductDisplayPage() {
                   <td className="px-4 py-5 text-sm text-slate-700">
                     <div className="space-y-3">
                       {group.items.map((item) => {
-                        const savedValue = Number(item.display_quantity ?? 450);
+                        const savedValue = getSavedDisplayQuantity(item);
                         const inputValue = displayInputs[item.id] ?? String(savedValue);
                         const hasChanged = Number(inputValue) !== savedValue;
                         const physicalPairs = getPairs(item);
@@ -596,16 +639,16 @@ export default function ProductDisplayPage() {
                   </td>
                   <td className="px-4 py-5">
                     <div className="flex flex-wrap justify-end gap-2">
-                      <Button type="button" variant="ghost" size="sm" icon="moveTop" iconOnly title="Move to top" onClick={() => moveArticleGroup(group, "top")}>
+                      <Button type="button" variant="ghost" size="sm" icon="moveTop" iconOnly title="Move to top" disabled={savingOrder} onClick={() => moveArticleGroup(group, "top")}>
                         Move to top
                       </Button>
-                      <Button type="button" variant="ghost" size="sm" icon="arrowUp" iconOnly title="Move up" onClick={() => moveArticleGroup(group, "up")}>
+                      <Button type="button" variant="ghost" size="sm" icon="arrowUp" iconOnly title="Move up" disabled={savingOrder} onClick={() => moveArticleGroup(group, "up")}>
                         Move up
                       </Button>
-                      <Button type="button" variant="ghost" size="sm" icon="arrowDown" iconOnly title="Move down" onClick={() => moveArticleGroup(group, "down")}>
+                      <Button type="button" variant="ghost" size="sm" icon="arrowDown" iconOnly title="Move down" disabled={savingOrder} onClick={() => moveArticleGroup(group, "down")}>
                         Move down
                       </Button>
-                      <Button type="button" variant="ghost" size="sm" icon="moveBottom" iconOnly title="Move to bottom" onClick={() => moveArticleGroup(group, "bottom")}>
+                      <Button type="button" variant="ghost" size="sm" icon="moveBottom" iconOnly title="Move to bottom" disabled={savingOrder} onClick={() => moveArticleGroup(group, "bottom")}>
                         Move to bottom
                       </Button>
                     </div>

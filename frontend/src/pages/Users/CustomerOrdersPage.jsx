@@ -22,6 +22,7 @@ import StatusBadge from "../../components/StatusBadge";
 import { api, APP_BASE_URL } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
+import { getCustomerVisibleStock } from "../../utils/displayStock";
 import { formatEnglishDate, formatNepaliDate, formatNumber, formatTime } from "../../utils/format";
 
 export default function UserOrderPage() {
@@ -121,9 +122,7 @@ export default function UserOrderPage() {
     if (!item) return;
 
     const cartonsPerBox = Number(item.product?.inner_boxes_per_outer_box || 0);
-    const available = Number(
-      item.product?.display_stock ?? item.product?.available_qty ?? item.product?.quantity ?? 0
-    );
+    const available = getCustomerVisibleStock(item.product);
 
     const stockLimit =
       item.orderBy === "cartons" && cartonsPerBox > 0
@@ -332,9 +331,7 @@ export default function UserOrderPage() {
             {cart.map((item) => {
               const cartonsPerBox = Number(item.product?.inner_boxes_per_outer_box || 0);
               const hasCartons = cartonsPerBox > 0;
-              const available = Number(
-                item.product?.display_stock ?? item.product?.available_qty ?? item.product?.quantity ?? 0
-              );
+              const available = getCustomerVisibleStock(item.product);
               const maxQty = hasCartons && item.orderBy === "cartons"
                 ? Math.floor(available / cartonsPerBox)
                 : available;

@@ -12,6 +12,7 @@ import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber, formatPrice } from "../utils/format";
+import { canManageProductVisibility } from "../utils/pagePermissions";
 import Select from "react-select";
 import * as XLSX from "xlsx";
 
@@ -58,6 +59,7 @@ export default function FinishedGoodsPage() {
   const { token, user } = useAuth();
   const { showToast } = useToast();
   const isAdmin = user.role === "ADMIN" || user.role === "CO_ADMIN";
+  const canToggleVisibility = canManageProductVisibility(user);
   const canViewHidden = isAdmin || user.role === "MEMBER";
   const [items, setItems] = useState([]);
   const [materials, setMaterials] = useState([]);
@@ -678,7 +680,9 @@ export default function FinishedGoodsPage() {
                   label: "Actions",
                   render: (row) => (
                     <div className="flex flex-wrap justify-end gap-2">
-                      <Button type="button" variant={row.is_visible ? "ghost" : "primary"} size="sm" icon={row.is_visible ? "eye" : "eyeOff"} onClick={() => toggleVisibility(row)} />
+                      {canToggleVisibility ? (
+                        <Button type="button" variant={row.is_visible ? "ghost" : "primary"} size="sm" icon={row.is_visible ? "eye" : "eyeOff"} onClick={() => toggleVisibility(row)} />
+                      ) : null}
                       <Button type="button" variant="secondary" size="sm" icon="edit" onClick={() => startEdit(row)}>
                         Edit
                       </Button>

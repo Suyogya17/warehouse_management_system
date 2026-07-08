@@ -1,5 +1,14 @@
 const router = require('express').Router();
-const { register, login, getProfile, listUsers, updateUser, deleteUser } = require('../controllers/authController');
+const {
+  register,
+  login,
+  getProfile,
+  listUsers,
+  updateUser,
+  deleteUser,
+  listPagePermissions,
+  setPagePermission,
+} = require('../controllers/authController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 const { query } = require('../config/db');
 
@@ -32,6 +41,10 @@ router.get('/profile', authenticate, getProfile);
 
 // GET /api/auth/users  (ADMIN only)
 router.get('/users', authenticate, authorize('ADMIN', 'CO_ADMIN'), listUsers);
+
+router.get('/page-permissions', authenticate, authorize('ADMIN'), listPagePermissions);
+
+router.put('/users/:id/product-visibility-permission', authenticate, authorize('ADMIN'), setPagePermission);
 
 // PUT /api/auth/users/:id  (ADMIN only)
 router.put('/users/:id', authenticate, authorize('ADMIN','CO_ADMIN'), updateUser);

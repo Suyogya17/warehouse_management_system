@@ -206,6 +206,9 @@ const orderToPayload = (order, status = order.status) => {
 export default function ImportTrackingPage() {
   const { token } = useAuth();
   const { showToast } = useToast();
+  const canCreateImport = true;
+  const canEditImport = true;
+  const canDeleteImport = true;
 
   const [orders, setOrders] = useState([]);
   const [materials, setMaterials] = useState([]);
@@ -446,6 +449,15 @@ export default function ImportTrackingPage() {
   const submitSlip = async (event) => {
     event.preventDefault();
 
+    if ((editingId && !canEditImport) || (!editingId && !canCreateImport)) {
+      showToast({
+        tone: "error",
+        title: "Access denied",
+        message: "You do not have permission to save import slips.",
+      });
+      return;
+    }
+
     try {
       if (editingId) {
         const existing = orders.find((order) => Number(order.id) === Number(editingId));
@@ -473,6 +485,8 @@ export default function ImportTrackingPage() {
   };
 
   const editSlip = (order) => {
+    if (!canEditImport) return;
+
     const container = firstContainer(order);
     const items = (order.items?.length ? order.items : [firstItem(order)]).map((item) => createSlipItem(item));
     const customCategories = {};
@@ -502,6 +516,8 @@ export default function ImportTrackingPage() {
   };
 
   const deleteSlip = async (order) => {
+    if (!canDeleteImport) return;
+
     if (!window.confirm(`Delete ${order.order_number}?`)) return;
 
     try {
@@ -518,6 +534,8 @@ export default function ImportTrackingPage() {
   };
 
   const createMaterialFromSlip = async (order, item) => {
+    if (!canEditImport) return;
+
     if (!item.id || item.raw_material_id) return;
 
     const isTest = Number(order.is_test ?? 1) === 1;
@@ -548,6 +566,8 @@ export default function ImportTrackingPage() {
   };
 
   const openReceiveModal = (order, item) => {
+    if (!canEditImport) return;
+
     const remainingQty = Math.max(Number(item.ordered_qty || 0) - Number(item.received_qty || 0), 0);
 
     setReceivingOrder(order);
@@ -564,6 +584,15 @@ export default function ImportTrackingPage() {
   const submitReceiveStock = async (event) => {
     event.preventDefault();
     if (!receivingOrder || !receivingItem) return;
+
+    if (!canEditImport) {
+      showToast({
+        tone: "error",
+        title: "Access denied",
+        message: "You do not have permission to receive import stock.",
+      });
+      return;
+    }
 
     const item = receivingItem;
     const isTest = Number(receivingOrder.is_test ?? 1) === 1;
@@ -618,6 +647,8 @@ export default function ImportTrackingPage() {
   };
 
   const moveOrder = async (orderId, nextStatus) => {
+    if (!canEditImport) return;
+
     const order = orders.find((item) => Number(item.id) === Number(orderId));
     if (!order || order.status === nextStatus) return;
 
@@ -689,8 +720,9 @@ export default function ImportTrackingPage() {
     return (
       <article
         key={order.id}
-        draggable
+        draggable={canEditImport}
         onDragStart={(event) => {
+          if (!canEditImport) return;
           setDraggingId(order.id);
           event.dataTransfer.setData("text/plain", String(order.id));
         }}
@@ -750,12 +782,16 @@ export default function ImportTrackingPage() {
         </div>
 
         <div className="mt-2 flex gap-2">
-          <Button size="sm" variant="secondary" icon="edit" onClick={() => editSlip(order)}>
-            Edit
-          </Button>
-          <Button size="sm" variant="danger" icon="delete" onClick={() => deleteSlip(order)}>
-            Delete
-          </Button>
+          {canEditImport ? (
+            <Button size="sm" variant="secondary" icon="edit" onClick={() => editSlip(order)}>
+              Edit
+            </Button>
+          ) : null}
+          {canDeleteImport ? (
+            <Button size="sm" variant="danger" icon="delete" onClick={() => deleteSlip(order)}>
+              Delete
+            </Button>
+          ) : null}
         </div>
       </article>
     );
@@ -773,9 +809,11 @@ export default function ImportTrackingPage() {
             <Button variant="secondary" icon="download" onClick={exportReport} disabled={!orders.length}>
               Export
             </Button>
-            <Button icon="plus" onClick={() => setShowSlipForm((open) => !open)}>
-              New {filters.is_test === "1" ? "test" : "real"} slip
-            </Button>
+            {canCreateImport ? (
+              <Button icon="plus" onClick={() => setShowSlipForm((open) => !open)}>
+                New {filters.is_test === "1" ? "test" : "real"} slip
+              </Button>
+            ) : null}
           </div>
         }
       />
@@ -1013,6 +1051,7 @@ export default function ImportTrackingPage() {
                       onDragOver={(event) => event.preventDefault()}
                       onDrop={(event) => {
                         event.preventDefault();
+                        if (!canEditImport) return;
                         moveOrder(event.dataTransfer.getData("text/plain"), column.key);
                       }}
                       className="min-h-[420px] w-[280px] shrink-0 rounded-2xl border border-slate-200 bg-slate-50"
@@ -1173,7 +1212,12 @@ export default function ImportTrackingPage() {
                             Linked material
                           </Button>
                         ) : (
-                          <Button size="sm" icon="plus" onClick={() => createMaterialFromSlip(viewingOrder, item)}>
+                          <Button
+                            size="sm"
+                            icon="plus"
+                            disabled={!canEditImport}
+                            onClick={() => createMaterialFromSlip(viewingOrder, item)}
+                          >
                             {isTest ? "Create test material" : "Create material"}
                           </Button>
                         )}
@@ -1181,7 +1225,7 @@ export default function ImportTrackingPage() {
                           size="sm"
                           variant={canReceiveItem ? "primary" : "secondary"}
                           icon="check"
-                          disabled={!canReceiveItem}
+                          disabled={!canReceiveItem || !canEditImport}
                           onClick={() => openReceiveModal(viewingOrder, item)}
                         >
                           {isTest ? "Mark received" : item.raw_material_id ? "Receive stock" : "Link material first"}
@@ -1229,7 +1273,12 @@ export default function ImportTrackingPage() {
                             {item.raw_material_id ? (
                               <StatusBadge tone="success">Linked</StatusBadge>
                             ) : (
-                              <Button size="sm" icon="plus" onClick={() => createMaterialFromSlip(viewingOrder, item)}>
+                              <Button
+                                size="sm"
+                                icon="plus"
+                                disabled={!canEditImport}
+                                onClick={() => createMaterialFromSlip(viewingOrder, item)}
+                              >
                                 {isTest ? "Create test material" : "Create material"}
                               </Button>
                             )}
@@ -1239,7 +1288,7 @@ export default function ImportTrackingPage() {
                               size="sm"
                               variant={canReceiveItem ? "primary" : "secondary"}
                               icon="check"
-                              disabled={!canReceiveItem}
+                              disabled={!canReceiveItem || !canEditImport}
                               onClick={() => openReceiveModal(viewingOrder, item)}
                             >
                               {isTest ? "Mark received" : item.raw_material_id ? "Receive stock" : "Link material first"}

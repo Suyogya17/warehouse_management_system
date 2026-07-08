@@ -5,6 +5,9 @@ const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const DEFAULT_DISPLAY_QUANTITY = 450;
 
+const getDisplayQuantityLimit = (quantity) =>
+  Math.min(DEFAULT_DISPLAY_QUANTITY, Math.max(0, Math.floor(Number(quantity || 0))));
+
 const getImagePath = (req) => (req.file ? `/uploads/${req.file.filename}` : null);
 
 const getActor = (req) => ({
@@ -206,7 +209,7 @@ const create = async (req, res, next) => {
 
     if (supportsDisplayQuantity) {
       baseColumns.push('display_quantity');
-      baseValues.push(DEFAULT_DISPLAY_QUANTITY);
+      baseValues.push(getDisplayQuantityLimit(quantity));
     }
 
     const { columns, values } = await appendFiscalInsertFields('finished_goods', baseColumns, baseValues);
@@ -467,7 +470,17 @@ const setDisplayQuantity = async (req, res, next) => {
       });
     }
 
-    const savedDisplayQuantity = Math.floor(displayQuantity);
+    const productRows = await query(
+      'SELECT id, quantity FROM finished_goods WHERE id = ? AND is_deleted = 0',
+      [req.params.id]
+    );
+
+    if (!productRows.rows.length) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    const physicalQuantity = Math.floor(Number(productRows.rows[0].quantity || 0));
+    const savedDisplayQuantity = Math.min(Math.floor(displayQuantity), getDisplayQuantityLimit(physicalQuantity));
     const result = await query(
       `UPDATE finished_goods SET display_quantity = ? WHERE id = ? AND is_deleted = 0`,
       [savedDisplayQuantity, req.params.id]
@@ -482,6 +495,51 @@ const setDisplayQuantity = async (req, res, next) => {
       data: {
         id: Number(req.params.id),
         display_quantity: savedDisplayQuantity,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const resetDisplayQuantities = async (req, res, next) => {
+  try {
+    const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
+
+    if (!supportsDisplayQuantity) {
+      return res.status(400).json({
+        success: false,
+        message: 'Display quantity is not enabled yet. Run sql/add-finished-good-display-quantity.sql first.',
+      });
+    }
+
+    const result = await query(
+      `UPDATE finished_goods
+       SET display_quantity = LEAST(GREATEST(FLOOR(COALESCE(quantity, 0)), 0), ?)
+       WHERE is_deleted = 0`,
+      [DEFAULT_DISPLAY_QUANTITY]
+    );
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'UPDATE',
+      module: 'product_display',
+      entity_type: 'finished_good',
+      entity_id: null,
+      entityName: 'Finished goods display quantity',
+      description: `Reset user-visible quantity to actual stock up to ${DEFAULT_DISPLAY_QUANTITY}`,
+      metadata: {
+        display_quantity_max: DEFAULT_DISPLAY_QUANTITY,
+        affected_rows: result.affectedRows || 0,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: `Products now show actual stock up to ${DEFAULT_DISPLAY_QUANTITY} pairs.`,
+      data: {
+        display_quantity_max: DEFAULT_DISPLAY_QUANTITY,
+        affected_rows: result.affectedRows || 0,
       },
     });
   } catch (err) {
@@ -543,13 +601,15 @@ const setDisplayOrder = async (req, res, next) => {
       });
     }
 
-    await Promise.all(
-      orderedIds.map((id, index) =>
-        query(
-          `UPDATE finished_goods SET display_order = ? WHERE id = ? AND is_deleted = 0`,
-          [index + 1, id]
-        )
-      )
+    const caseSql = orderedIds.map(() => 'WHEN ? THEN ?').join(' ');
+    const placeholders = orderedIds.map(() => '?').join(', ');
+    const caseParams = orderedIds.flatMap((id, index) => [id, index + 1]);
+
+    await query(
+      `UPDATE finished_goods
+       SET display_order = CASE id ${caseSql} ELSE display_order END
+       WHERE id IN (${placeholders}) AND is_deleted = 0`,
+      [...caseParams, ...orderedIds]
     );
 
     return res.json({ success: true });
@@ -566,6 +626,7 @@ module.exports = {
   remove,
   setVisibility,
   setDisplayQuantity,
+  resetDisplayQuantities,
   setPrice,
   setDisplayOrder
 };

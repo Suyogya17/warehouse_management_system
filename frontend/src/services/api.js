@@ -83,6 +83,15 @@ export const api = {
 
   getUsers: (token) => apiRequest("/auth/users", {}, token),
 
+  getPagePermissions: (token) => apiRequest("/auth/page-permissions", {}, token),
+
+  setProductVisibilityPermission: (id, enabled, token) =>
+    apiRequest(
+      `/auth/users/${id}/product-visibility-permission`,
+      { method: "PUT", body: JSON.stringify({ enabled }) },
+      token
+    ),
+
   getAdvertisements: (token) => apiRequest("/advertisements", {}, token),
 
   getNotifications: (token) => apiRequest("/notifications", {}, token),

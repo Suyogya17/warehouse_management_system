@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import Button from "../components/Button";
 import DataTable from "../components/DataTable";
 import { Field, SelectInput, TextInput } from "../components/Field";
@@ -8,7 +9,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
-import { Eye, EyeOff } from "lucide-react";
+import { PRODUCT_VISIBILITY_PAGE_KEY } from "../utils/pagePermissions";
 
 const initialForm = {
   name: "",
@@ -34,14 +35,22 @@ export default function UsersPage() {
   const { showToast } = useToast();
 
   const [users, setUsers] = useState([]);
+  const [pagePermissions, setPagePermissions] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
 
   const load = useCallback(async () => {
-    const result = await api.getUsers(token);
-    setUsers(result.data || []);
-  }, [token]);
+    const [usersResult, pagePermissionsResult] = await Promise.all([
+      api.getUsers(token),
+      currentUser?.role === "ADMIN"
+        ? api.getPagePermissions(token)
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    setUsers(usersResult.data || []);
+    setPagePermissions(pagePermissionsResult.data || []);
+  }, [currentUser?.role, token]);
 
   useEffect(() => {
     load().catch(console.error);
@@ -126,73 +135,97 @@ export default function UsersPage() {
     }
   };
 
+  const hasProductVisibilityPermission = (id) =>
+    pagePermissions.some(
+      (permission) =>
+        Number(permission.user_id) === Number(id) &&
+        permission.page_key === PRODUCT_VISIBILITY_PAGE_KEY &&
+        Number(permission.can_edit) === 1
+    );
+
+  const toggleProductVisibilityPermission = async (row) => {
+    const enabled = !hasProductVisibilityPermission(row.id);
+
+    try {
+      await api.setProductVisibilityPermission(row.id, enabled, token);
+      await load();
+      announceDataRefresh("users");
+
+      showToast({
+        tone: "success",
+        title: enabled ? "Show/hide access granted" : "Show/hide access removed",
+        message: `${row.name || row.email} ${enabled ? "can now" : "can no longer"} manage product show/hide.`,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Permission update failed",
+        message: error.message,
+      });
+    }
+  };
+
   return (
     <div className="space-y-6">
+      <PageHeader
+        eyebrow="Admin"
+        title="Users"
+        description="Create, update, and manage system user accounts."
+        icon="users"
+      />
+
       <SectionCard
         title={editingId ? "Edit user" : "Create users"}
         subtitle={
           editingId
             ? "Update account details. Leave password blank to keep current password."
-            : "Admin can register admin, store keeper, or user accounts."
+            : "Admin can register admin, co-admin, member, elder, or user accounts."
         }
         icon="users"
       >
-        <form
-          className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"
-          onSubmit={submit}
-        >
-          {/* NAME */}
+        <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" onSubmit={submit}>
           <Field label="Name">
             <TextInput
               value={form.name}
-              onChange={(e) =>
-                setForm((c) => ({ ...c, name: e.target.value }))
-              }
+              onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
               required
             />
           </Field>
 
-          {/* EMAIL */}
           <Field label="Email">
             <TextInput
               type="email"
               value={form.email}
-              onChange={(e) =>
-                setForm((c) => ({ ...c, email: e.target.value }))
-              }
+              onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
               required
             />
           </Field>
 
-          {/* PASSWORD WITH EYE TOGGLE */}
           <Field label="Password">
             <div className="relative">
               <TextInput
                 type={showPassword ? "text" : "password"}
                 value={form.password}
-                onChange={(e) =>
-                  setForm((c) => ({ ...c, password: e.target.value }))
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, password: event.target.value }))
                 }
                 required={!editingId}
               />
-
               <button
                 type="button"
-                onClick={() => setShowPassword((p) => !p)}
+                onClick={() => setShowPassword((current) => !current)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-500 hover:text-slate-800"
+                aria-label={showPassword ? "Hide password" : "Show password"}
               >
-                 {showPassword ? <Eye size={18} /> : <EyeOff size={18} />}
+                {showPassword ? <Eye size={18} /> : <EyeOff size={18} />}
               </button>
             </div>
           </Field>
 
-          {/* ROLE */}
           <Field label="Role">
             <SelectInput
               value={form.role}
-              onChange={(e) =>
-                setForm((c) => ({ ...c, role: e.target.value }))
-              }
+              onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))}
             >
               <option value="ADMIN">ADMIN</option>
               <option value="CO_ADMIN">CO_ADMIN</option>
@@ -205,11 +238,11 @@ export default function UsersPage() {
           <Field label="Country / region">
             <SelectInput
               value={form.country_code}
-              onChange={(e) => {
-                const country = countries.find((item) => item.code === e.target.value);
+              onChange={(event) => {
+                const country = countries.find((item) => item.code === event.target.value);
                 setForm((current) => ({
                   ...current,
-                  country_code: e.target.value,
+                  country_code: event.target.value,
                   currency_code: country?.currency || current.currency_code,
                 }));
               }}
@@ -225,41 +258,32 @@ export default function UsersPage() {
           <Field label="Currency">
             <SelectInput
               value={form.currency_code}
-              onChange={(e) =>
-                setForm((current) => ({ ...current, currency_code: e.target.value }))
+              onChange={(event) =>
+                setForm((current) => ({ ...current, currency_code: event.target.value }))
               }
             >
               {currencies.map((currency) => (
-                <option key={currency} value={currency}>{currency}</option>
+                <option key={currency} value={currency}>
+                  {currency}
+                </option>
               ))}
             </SelectInput>
           </Field>
 
-          {/* ACTIONS */}
-          <div className="md:col-span-2 xl:col-span-4 flex items-center gap-3">
+          <div className="flex items-center gap-3 md:col-span-2 xl:col-span-4">
             <Button type="submit" icon="plus">
               {editingId ? "Save changes" : "Create account"}
             </Button>
-
-            {editingId && (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={cancelEdit}
-              >
+            {editingId ? (
+              <Button type="button" variant="secondary" onClick={cancelEdit}>
                 Cancel
               </Button>
-            )}
+            ) : null}
           </div>
         </form>
       </SectionCard>
 
-      {/* TABLE */}
-      <SectionCard
-        title="System users"
-        subtitle="Registered users and access levels."
-        icon="users"
-      >
+      <SectionCard title="System users" subtitle="Registered users and access levels." icon="users">
         <DataTable
           columns={[
             { key: "name", label: "Name" },
@@ -278,29 +302,44 @@ export default function UsersPage() {
             {
               key: "actions",
               label: "Actions",
-              render: (row) => (
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    icon="edit"
-                    onClick={() => startEdit(row)}
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="danger"
-                    icon="delete"
-                    disabled={Number(row.id) === Number(currentUser?.id)}
-                    onClick={() => remove(row.id)}
-                  >
-                    Delete
-                  </Button>
-                </div>
-              ),
+              render: (row) => {
+                const hasVisibilityAccess = hasProductVisibilityPermission(row.id);
+
+                return (
+                  <div className="flex flex-wrap gap-2">
+                    {row.role === "CO_ADMIN" ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={hasVisibilityAccess ? "ghost" : "primary"}
+                        icon={hasVisibilityAccess ? "eyeOff" : "eye"}
+                        onClick={() => toggleProductVisibilityPermission(row)}
+                      >
+                        {hasVisibilityAccess ? "Remove show/hide" : "Allow show/hide"}
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      icon="edit"
+                      onClick={() => startEdit(row)}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="danger"
+                      icon="delete"
+                      disabled={Number(row.id) === Number(currentUser?.id)}
+                      onClick={() => remove(row.id)}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                );
+              },
             },
           ]}
           rows={users}

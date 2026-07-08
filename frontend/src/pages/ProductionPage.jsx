@@ -11,7 +11,7 @@
   import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
   import { api } from "../services/api";
   import Select from "react-select";
-  import { formatNumber } from "../utils/format";
+  import { formatDate, formatNumber } from "../utils/format";
 
   export default function ProductionPage() {
     const [search, setSearch] = useState("");
@@ -515,6 +515,12 @@ const filteredHistory = history.filter((row) => {
   <DataTable
     columns={[
       { key: "production_id", label: "ID" },
+
+      {
+        key: "produced_at",
+        label: "Production Date",
+        render: (row) => formatDate(row.produced_at),
+      },
 
       { key: "formula_name", label: "Formula" },
 
