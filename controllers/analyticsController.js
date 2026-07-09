@@ -198,6 +198,9 @@ const getDashboard = async (req, res, next) => {
       lowStockRawMaterials,
       topSellingProducts,
       topDealers,
+      countryVisibilitySummary,
+      countryShownProducts,
+      countryOnHoldProducts,
     ] = await Promise.all([
       run("SELECT COALESCE(SUM(quantity), 0) AS total_quantity FROM raw_materials"),
       run("SELECT COALESCE(SUM(quantity), 0) AS total_quantity FROM finished_goods"),
@@ -251,6 +254,103 @@ const getDashboard = async (req, res, next) => {
          ORDER BY total_quantity DESC
          LIMIT 10`
       ),
+      run(
+        `SELECT pc.country_code,
+                pc.country_label,
+                COUNT(*) AS total_product_count,
+                COALESCE(SUM(pc.is_shown), 0) AS shown_product_count,
+                COALESCE(SUM(CASE WHEN pc.is_shown = 0 THEN 1 ELSE 0 END), 0) AS on_hold_product_count,
+                COALESCE(SUM(CASE WHEN pc.is_shown = 1 THEN pc.quantity ELSE 0 END), 0) AS shown_quantity,
+                COALESCE(SUM(CASE WHEN pc.is_shown = 0 THEN pc.quantity ELSE 0 END), 0) AS on_hold_quantity
+         FROM (
+           SELECT COALESCE(u.country_code, 'NP') AS country_code,
+                  CASE COALESCE(u.country_code, 'NP')
+                    WHEN 'IN' THEN 'India'
+                    WHEN 'NP' THEN 'Nepal'
+                    ELSE COALESCE(u.country_code, 'NP')
+                  END AS country_label,
+                  fg.id,
+                  fg.quantity,
+                  MAX(CASE WHEN fg.is_visible = 1 AND upp.can_view = 1 THEN 1 ELSE 0 END) AS is_shown
+           FROM users u
+           JOIN finished_goods fg ON fg.is_deleted = 0
+           LEFT JOIN user_product_permissions upp
+             ON upp.user_id = u.id
+            AND upp.finished_good_id = fg.id
+           WHERE u.role IN ('USER', 'MEMBER', 'ELDER')
+           GROUP BY COALESCE(u.country_code, 'NP'),
+                    CASE COALESCE(u.country_code, 'NP')
+                      WHEN 'IN' THEN 'India'
+                      WHEN 'NP' THEN 'Nepal'
+                      ELSE COALESCE(u.country_code, 'NP')
+                    END,
+                    fg.id, fg.quantity
+         ) pc
+         GROUP BY pc.country_code, pc.country_label
+         ORDER BY pc.country_label`
+      ),
+      run(
+        `SELECT pc.*
+         FROM (
+           SELECT COALESCE(u.country_code, 'NP') AS country_code,
+                  CASE COALESCE(u.country_code, 'NP')
+                    WHEN 'IN' THEN 'India'
+                    WHEN 'NP' THEN 'Nepal'
+                    ELSE COALESCE(u.country_code, 'NP')
+                  END AS country_label,
+                  fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit,
+                  fg.quantity, fg.min_quantity,
+                  COUNT(DISTINCT u.id) AS country_user_count,
+                  COUNT(DISTINCT CASE WHEN fg.is_visible = 1 AND upp.can_view = 1 THEN u.id END) AS visible_user_count,
+                  MAX(CASE WHEN fg.is_visible = 1 AND upp.can_view = 1 THEN 1 ELSE 0 END) AS is_shown
+           FROM users u
+           JOIN finished_goods fg ON fg.is_deleted = 0
+           LEFT JOIN user_product_permissions upp
+             ON upp.user_id = u.id
+            AND upp.finished_good_id = fg.id
+           WHERE u.role IN ('USER', 'MEMBER', 'ELDER')
+           GROUP BY COALESCE(u.country_code, 'NP'),
+                    CASE COALESCE(u.country_code, 'NP')
+                      WHEN 'IN' THEN 'India'
+                      WHEN 'NP' THEN 'Nepal'
+                      ELSE COALESCE(u.country_code, 'NP')
+                    END,
+                    fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit, fg.quantity, fg.min_quantity
+         ) pc
+         WHERE pc.is_shown = 1
+         ORDER BY pc.country_label, pc.quantity DESC, pc.article_code, pc.color, pc.id`
+      ),
+      run(
+        `SELECT pc.*
+         FROM (
+           SELECT COALESCE(u.country_code, 'NP') AS country_code,
+                  CASE COALESCE(u.country_code, 'NP')
+                    WHEN 'IN' THEN 'India'
+                    WHEN 'NP' THEN 'Nepal'
+                    ELSE COALESCE(u.country_code, 'NP')
+                  END AS country_label,
+                  fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit,
+                  fg.quantity, fg.min_quantity,
+                  COUNT(DISTINCT u.id) AS country_user_count,
+                  COUNT(DISTINCT CASE WHEN fg.is_visible = 1 AND upp.can_view = 1 THEN u.id END) AS visible_user_count,
+                  MAX(CASE WHEN fg.is_visible = 1 AND upp.can_view = 1 THEN 1 ELSE 0 END) AS is_shown
+           FROM users u
+           JOIN finished_goods fg ON fg.is_deleted = 0
+           LEFT JOIN user_product_permissions upp
+             ON upp.user_id = u.id
+            AND upp.finished_good_id = fg.id
+           WHERE u.role IN ('USER', 'MEMBER', 'ELDER')
+           GROUP BY COALESCE(u.country_code, 'NP'),
+                    CASE COALESCE(u.country_code, 'NP')
+                      WHEN 'IN' THEN 'India'
+                      WHEN 'NP' THEN 'Nepal'
+                      ELSE COALESCE(u.country_code, 'NP')
+                    END,
+                    fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit, fg.quantity, fg.min_quantity
+         ) pc
+         WHERE pc.is_shown = 0
+         ORDER BY pc.country_label, pc.quantity DESC, pc.article_code, pc.color, pc.id`
+      ),
     ]);
 
     return res.json({
@@ -266,6 +366,27 @@ const getDashboard = async (req, res, next) => {
         low_stock_raw_materials: mapNumeric(lowStockRawMaterials, ["quantity", "min_quantity"]),
         top_selling_products: mapNumeric(topSellingProducts, ["total_quantity", "order_count"]),
         top_dealers: mapNumeric(topDealers, ["total_quantity", "order_count", "customer_count"]),
+        country_visibility_summary: mapNumeric(countryVisibilitySummary, [
+          "total_product_count",
+          "shown_product_count",
+          "on_hold_product_count",
+          "shown_quantity",
+          "on_hold_quantity",
+        ]),
+        country_shown_products: mapNumeric(countryShownProducts, [
+          "quantity",
+          "min_quantity",
+          "country_user_count",
+          "visible_user_count",
+          "is_shown",
+        ]),
+        country_on_hold_products: mapNumeric(countryOnHoldProducts, [
+          "quantity",
+          "min_quantity",
+          "country_user_count",
+          "visible_user_count",
+          "is_shown",
+        ]),
       },
     });
   } catch (err) {
@@ -515,6 +636,7 @@ const getSales = async (req, res, next) => {
   try {
     const [
       monthlyOrderTrend,
+      dailyOrderTrend,
       topSellingProducts,
       orderStatusSummary,
       fulfilledDeliveredOrders,
@@ -528,6 +650,16 @@ const getSales = async (req, res, next) => {
          WHERE o.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)
          GROUP BY DATE_FORMAT(o.created_at, '%Y-%m')
          ORDER BY month`
+      ),
+      run(
+        `SELECT DATE_FORMAT(o.created_at, '%Y-%m-%d') AS day,
+                COUNT(DISTINCT o.id) AS order_count,
+                COALESCE(SUM(oi.qty_ordered), 0) AS total_quantity
+         FROM orders o
+         LEFT JOIN order_items oi ON oi.order_id = o.id
+         WHERE o.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+         GROUP BY DATE_FORMAT(o.created_at, '%Y-%m-%d')
+         ORDER BY day`
       ),
       run(
         `SELECT fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit,
@@ -564,6 +696,7 @@ const getSales = async (req, res, next) => {
       success: true,
       data: {
         monthly_order_trend: mapNumeric(monthlyOrderTrend, ["order_count", "total_quantity"]),
+        daily_order_trend: mapNumeric(dailyOrderTrend, ["order_count", "total_quantity"]),
         top_selling_products: mapNumeric(topSellingProducts, ["total_quantity", "order_count"]),
         order_status_summary: mapNumeric(orderStatusSummary, ["order_count"]),
         fulfilled_delivered_orders: mapNumeric(fulfilledDeliveredOrders, ["total_quantity"]),

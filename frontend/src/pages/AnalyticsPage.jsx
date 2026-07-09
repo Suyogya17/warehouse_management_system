@@ -104,6 +104,33 @@ function ErrorState({ message, onRetry }) {
 
 function DashboardTab({ data }) {
   const totals = data?.totals || {};
+  const countryVisibilitySummary = data?.country_visibility_summary || [];
+  const totalShownProducts = countryVisibilitySummary.reduce(
+    (sum, row) => sum + Number(row.shown_product_count || 0),
+    0
+  );
+  const totalOnHoldProducts = countryVisibilitySummary.reduce(
+    (sum, row) => sum + Number(row.on_hold_product_count || 0),
+    0
+  );
+  const totalShownStock = countryVisibilitySummary.reduce(
+    (sum, row) => sum + Number(row.shown_quantity || 0),
+    0
+  );
+  const totalOnHoldStock = countryVisibilitySummary.reduce(
+    (sum, row) => sum + Number(row.on_hold_quantity || 0),
+    0
+  );
+  const countryProductGroups = countryVisibilitySummary.map((row) => ({
+    country_code: row.country_code,
+    country_label: row.country_label,
+    shown_products: (data?.country_shown_products || []).filter(
+      (product) => product.country_code === row.country_code
+    ),
+    on_hold_products: (data?.country_on_hold_products || []).filter(
+      (product) => product.country_code === row.country_code
+    ),
+  }));
 
   return (
     <div className="space-y-4">
@@ -114,6 +141,79 @@ function DashboardTab({ data }) {
         <StatCard label="Orders This Month" value={formatNumber(totals.orders_this_month)} icon="orders" />
         <StatCard label="Reserved Stock" value={formatNumber(totals.reserved_stock)} tone="alert" icon="stock" />
       </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Shown Products" value={formatNumber(totalShownProducts)} tone="success" icon="finishedGoods" />
+        <StatCard label="On Hold Products" value={formatNumber(totalOnHoldProducts)} tone="alert" icon="eye" />
+        <StatCard label="Shown Stock" value={formatNumber(totalShownStock)} icon="stock" />
+        <StatCard label="On Hold Stock" value={formatNumber(totalOnHoldStock)} tone="alert" icon="stock" />
+      </div>
+
+      <SectionCard title="Customer Catalog by Country" subtitle="How many products customers can see in Nepal and India." icon="eye">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <ChartFrame height={280}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={countryVisibilitySummary} margin={{ top: 8, right: 24, bottom: 8, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="country_label" tick={{ fontSize: 12 }} />
+                <YAxis tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                <Tooltip formatter={numberTooltip} />
+                <Legend />
+                <Bar dataKey="shown_product_count" name="Can See" stackId="products" fill="#059669" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="on_hold_product_count" name="Hidden" stackId="products" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartFrame>
+          <DataTable
+            rows={countryVisibilitySummary}
+            emptyTitle="No display analytics"
+            summaryColumns={[
+              { key: "shown_product_count", label: "Can See" },
+              { key: "on_hold_product_count", label: "Hidden" },
+              { key: "shown_quantity", label: "Visible Stock" },
+              { key: "on_hold_quantity", label: "Hidden Stock" },
+            ]}
+            columns={[
+              { key: "country_label", label: "Country" },
+              { key: "shown_product_count", label: "Products Customers Can See", render: (row) => formatNumber(row.shown_product_count) },
+              { key: "on_hold_product_count", label: "Hidden Products", render: (row) => formatNumber(row.on_hold_product_count) },
+              { key: "shown_quantity", label: "Visible Stock", render: (row) => formatNumber(row.shown_quantity) },
+              { key: "on_hold_quantity", label: "Hidden Stock", render: (row) => formatNumber(row.on_hold_quantity) },
+            ]}
+          />
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Hidden Products by Country" subtitle="Products that no customer can see in each country." icon="eye">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <ChartFrame height={260}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={countryVisibilitySummary} margin={{ top: 8, right: 24, bottom: 8, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="country_label" tick={{ fontSize: 12 }} />
+                <YAxis tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                <Tooltip formatter={numberTooltip} />
+                <Legend />
+                <Bar dataKey="on_hold_product_count" name="Hidden Products" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartFrame>
+          <DataTable
+            rows={countryVisibilitySummary}
+            emptyTitle="No on-hold analytics"
+            summaryColumns={[
+              { key: "on_hold_product_count", label: "Hidden" },
+              { key: "on_hold_quantity", label: "Hidden Stock" },
+            ]}
+            columns={[
+              { key: "country_label", label: "Country" },
+              { key: "on_hold_product_count", label: "Hidden Products", render: (row) => formatNumber(row.on_hold_product_count) },
+              { key: "on_hold_quantity", label: "Hidden Stock", render: (row) => formatNumber(row.on_hold_quantity) },
+              { key: "total_product_count", label: "Total Products", render: (row) => formatNumber(row.total_product_count) },
+            ]}
+          />
+        </div>
+      </SectionCard>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <SectionCard title="Top Selling Products" icon="orders">
@@ -151,6 +251,64 @@ function DashboardTab({ data }) {
           />
         </SectionCard>
       </div>
+
+      <SectionCard title="Hidden Product List" subtitle="Products customers cannot see, separated by country." icon="eye">
+        <div className="space-y-5 p-4">
+          {countryProductGroups.map((group) => (
+            <div key={`hold-${group.country_code}`} className="rounded-xl border border-slate-200 bg-white">
+              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                <h3 className="font-semibold text-slate-950">{group.country_label}</h3>
+                <StatusBadge tone={group.on_hold_products.length ? "warning" : "success"}>
+                  {formatNumber(group.on_hold_products.length)} hidden
+                </StatusBadge>
+              </div>
+              <DataTable
+                rows={group.on_hold_products}
+                emptyTitle={`No on-hold products for ${group.country_label}`}
+                summaryColumns={[
+                  { key: "quantity", label: "Stock" },
+                  { key: "country_user_count", label: "Customers" },
+                ]}
+                columns={[
+                  { key: "product", label: "Product", render: productName },
+                  { key: "quantity", label: "Stock", render: (row) => `${formatNumber(row.quantity)} ${row.unit || ""}` },
+                  { key: "min_quantity", label: "Minimum", render: (row) => formatNumber(row.min_quantity) },
+                  { key: "country_user_count", label: "Customers in Country", render: (row) => formatNumber(row.country_user_count) },
+                ]}
+              />
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Visible Product List" subtitle="Products customers can see, separated by country." icon="finishedGoods">
+        <div className="space-y-5 p-4">
+          {countryProductGroups.map((group) => (
+            <div key={`shown-${group.country_code}`} className="rounded-xl border border-slate-200 bg-white">
+              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                <h3 className="font-semibold text-slate-950">{group.country_label}</h3>
+                <StatusBadge tone={group.shown_products.length ? "success" : "neutral"}>
+                  {formatNumber(group.shown_products.length)} visible
+                </StatusBadge>
+              </div>
+              <DataTable
+                rows={group.shown_products}
+                emptyTitle={`No shown products for ${group.country_label}`}
+                summaryColumns={[
+                  { key: "quantity", label: "Stock" },
+                  { key: "visible_user_count", label: "Customer Access" },
+                ]}
+                columns={[
+                  { key: "product", label: "Product", render: productName },
+                  { key: "quantity", label: "Stock", render: (row) => `${formatNumber(row.quantity)} ${row.unit || ""}` },
+                  { key: "min_quantity", label: "Minimum", render: (row) => formatNumber(row.min_quantity) },
+                  { key: "visible_user_count", label: "Customers Who Can See It", render: (row) => `${formatNumber(row.visible_user_count)}/${formatNumber(row.country_user_count)}` },
+                ]}
+              />
+            </div>
+          ))}
+        </div>
+      </SectionCard>
 
       <SectionCard title="Low Stock Raw Materials" icon="materials">
         <DataTable
@@ -425,6 +583,8 @@ function ProductionTab({ data }) {
 }
 
 function SalesTab({ data }) {
+  const [trendMode, setTrendMode] = useState("month");
+  const [expandedTrend, setExpandedTrend] = useState(false);
   const statusRows = useMemo(
     () =>
       (data?.order_status_summary || [])
@@ -455,26 +615,83 @@ function SalesTab({ data }) {
   );
   const statusChartHeight = Math.max(260, statusRows.length * 46 + 72);
   const sellingProductChartHeight = Math.max(300, sellingProductRows.length * 44 + 96);
+  const trendRows = trendMode === "day" ? data?.daily_order_trend || [] : data?.monthly_order_trend || [];
+  const trendLabelKey = trendMode === "day" ? "day" : "month";
+  const trendTitle = trendMode === "day" ? "Daily Order Trend" : "Monthly Order Trend";
+  const trendHeight = expandedTrend ? 520 : 340;
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 xl:grid-cols-2">
-        <SectionCard title="Monthly Order Trend" icon="orders">
-          <ChartFrame>
+      <SectionCard
+        title={trendTitle}
+        subtitle={trendMode === "day" ? "Last 90 days of sales activity." : "Last 12 months of sales activity."}
+        icon="orders"
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1">
+              {[
+                { key: "month", label: "Month" },
+                { key: "day", label: "Day" },
+              ].map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => {
+                    setTrendMode(option.key);
+                    if (option.key === "day") {
+                      setExpandedTrend(true);
+                    }
+                  }}
+                  className={`h-8 rounded-md px-3 text-sm font-semibold transition ${
+                    trendMode === option.key
+                      ? "bg-indigo-600 text-white shadow-sm"
+                      : "text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              icon={expandedTrend ? "minimize" : "maximize"}
+              onClick={() => setExpandedTrend((value) => !value)}
+            >
+              {expandedTrend ? "Compact" : "Expand"}
+            </Button>
+          </div>
+        }
+      >
+        {trendRows.length ? (
+          <ChartFrame height={trendHeight}>
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data?.monthly_order_trend || []} margin={{ top: 8, right: 18, bottom: 8, left: 0 }}>
+              <LineChart data={trendRows} margin={{ top: 8, right: 36, bottom: expandedTrend ? 28 : 8, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                <YAxis tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                <XAxis
+                  dataKey={trendLabelKey}
+                  tick={{ fontSize: 12 }}
+                  angle={trendMode === "day" && expandedTrend ? -35 : 0}
+                  textAnchor={trendMode === "day" && expandedTrend ? "end" : "middle"}
+                  interval={trendMode === "day" ? (expandedTrend ? 4 : 9) : 0}
+                  height={trendMode === "day" && expandedTrend ? 56 : 30}
+                />
+                <YAxis yAxisId="orders" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                <YAxis yAxisId="quantity" orientation="right" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
                 <Tooltip formatter={numberTooltip} />
                 <Legend />
-                <Line type="monotone" dataKey="order_count" name="Orders" stroke="#4f46e5" strokeWidth={2} />
-                <Line type="monotone" dataKey="total_quantity" name="Qty Ordered" stroke="#dc2626" strokeWidth={2} />
+                <Line yAxisId="orders" type="monotone" dataKey="order_count" name="Orders" stroke="#4f46e5" strokeWidth={2} />
+                <Line yAxisId="quantity" type="monotone" dataKey="total_quantity" name="Qty Ordered" stroke="#dc2626" strokeWidth={2} />
               </LineChart>
             </ResponsiveContainer>
           </ChartFrame>
-        </SectionCard>
+        ) : (
+          <div className="px-6 py-10 text-sm text-slate-500">No sales trend data to chart yet.</div>
+        )}
+      </SectionCard>
 
+      <div className="grid gap-4 xl:grid-cols-2">
         <SectionCard title="Order Status Summary" icon="orders">
           {statusRows.length ? (
             <ChartFrame height={statusChartHeight}>
