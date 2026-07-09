@@ -3,6 +3,7 @@ const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { hasColumn } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
+const { clearCache } = require('../middleware/cacheMiddleware');
 
 const syncFinishedGoodVisibility = async (finishedGoodId) => {
   const result = await query(
@@ -58,6 +59,8 @@ const grantAccess = async (req, res, next) => {
       await syncFinishedGoodVisibility(fg_id);
     }
 
+    clearCache();
+
     await auditLog({
       userId: req.user.id,
       action: 'GRANT_ACCESS',
@@ -98,6 +101,7 @@ const revokeAccess = async (req, res, next) => {
     }
 
     await syncFinishedGoodVisibility(finished_good_id);
+    clearCache();
 
     await auditLog({
       userId: req.user.id,

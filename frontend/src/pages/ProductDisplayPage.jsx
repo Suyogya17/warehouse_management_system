@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Button from "../components/Button";
+import Icon from "../components/Icon";
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import StatusBadge from "../components/StatusBadge";
@@ -11,6 +12,7 @@ import { formatNumber, formatPrice } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
 
 const DEFAULT_DISPLAY_QUANTITY = 450;
+const managedUserRoles = new Set(["USER", "MEMBER", "ELDER"]);
 
 const getPairs = (item) => Number(item.quantity || 0);
 
@@ -67,26 +69,35 @@ export default function ProductDisplayPage() {
   const { token, user } = useAuth();
   const { showToast } = useToast();
   const [items, setItems] = useState([]);
+  const [users, setUsers] = useState([]);
   const [permissions, setPermissions] = useState([]);
   const [displayInputs, setDisplayInputs] = useState({});
   const [priceInputs, setPriceInputs] = useState({});
   const [savingDisplayId, setSavingDisplayId] = useState(null);
   const [savingPriceId, setSavingPriceId] = useState(null);
+  const [savingUserProductKey, setSavingUserProductKey] = useState("");
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const [selectedUserProductSearch, setSelectedUserProductSearch] = useState("");
+  const [selectedUserProductMode, setSelectedUserProductMode] = useState("shown");
+  const [selectedUserProductPage, setSelectedUserProductPage] = useState(1);
   const [savingOrder, setSavingOrder] = useState(false);
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const rowsPerPage = 15;
+  const userProductsPerPage = 10;
   const isAuthorized = canManageProductVisibility(user);
 
   const loadItems = useCallback(async () => {
     if (!isAuthorized) return;
 
-    const [productsResult, permissionsResult] = await Promise.all([
+    const [productsResult, permissionsResult, usersResult] = await Promise.all([
       api.getFinishedGoods(token),
       api.getPermissions(token),
+      api.getUsers(token),
     ]);
     setItems(productsResult.data || []);
     setPermissions(permissionsResult.data || []);
+    setUsers((usersResult.data || []).filter((item) => managedUserRoles.has(item.role)));
   }, [isAuthorized, token]);
 
   useEffect(() => {
@@ -168,6 +179,73 @@ export default function ProductDisplayPage() {
 
     return usersByProduct;
   }, [permissions]);
+
+  useEffect(() => {
+    if (selectedUserId || !users.length) return;
+    setSelectedUserId(String(users[0].id));
+  }, [selectedUserId, users]);
+
+  const permissionState = useMemo(() => {
+    const granted = new Set();
+    const denied = new Set();
+
+    permissions.forEach((permission) => {
+      const key = `${Number(permission.user_id)}:${Number(permission.finished_good_id)}`;
+
+      if (Number(permission.can_view) === 1) granted.add(key);
+      if (Number(permission.can_view) === 0) denied.add(key);
+    });
+
+    return { granted, denied };
+  }, [permissions]);
+
+  const selectedUser = users.find((item) => String(item.id) === String(selectedUserId));
+
+  const isProductShownToSelectedUser = useCallback(
+    (product) => {
+      if (!selectedUserId || !product) return false;
+
+      const key = `${Number(selectedUserId)}:${Number(product.id)}`;
+
+      return Number(product.is_visible) === 1 && permissionState.granted.has(key) && !permissionState.denied.has(key);
+    },
+    [permissionState, selectedUserId]
+  );
+
+  const selectedUserProducts = useMemo(() => {
+    const q = selectedUserProductSearch.trim().toLowerCase();
+    const matchesSearch = (product) => {
+      if (!q) return true;
+
+      return [product.id, product.name, product.article_code, product.sole_code, product.color, product.size]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(q));
+    };
+
+    const shown = [];
+    const hidden = [];
+
+    items.filter(matchesSearch).forEach((product) => {
+      if (isProductShownToSelectedUser(product)) {
+        shown.push(product);
+      } else {
+        hidden.push(product);
+      }
+    });
+
+    return { shown, hidden };
+  }, [isProductShownToSelectedUser, items, selectedUserProductSearch]);
+
+  const selectedUserProductList =
+    selectedUserProductMode === "shown" ? selectedUserProducts.shown : selectedUserProducts.hidden;
+  const selectedUserProductTotalPages = Math.max(
+    1,
+    Math.ceil(selectedUserProductList.length / userProductsPerPage)
+  );
+  const paginatedSelectedUserProducts = selectedUserProductList.slice(
+    (selectedUserProductPage - 1) * userProductsPerPage,
+    selectedUserProductPage * userProductsPerPage
+  );
   const totalPages = Math.ceil(filteredGroups.length / rowsPerPage);
   const paginatedGroups = filteredGroups.slice(
     (currentPage - 1) * rowsPerPage,
@@ -204,6 +282,16 @@ export default function ProductDisplayPage() {
   useEffect(() => {
     setCurrentPage(1);
   }, [search]);
+
+  useEffect(() => {
+    setSelectedUserProductPage(1);
+  }, [selectedUserId, selectedUserProductMode, selectedUserProductSearch]);
+
+  useEffect(() => {
+    setSelectedUserProductPage((page) =>
+      page > selectedUserProductTotalPages ? selectedUserProductTotalPages : page
+    );
+  }, [selectedUserProductTotalPages]);
 
   const saveOrder = async (nextGroups) => {
     const nextItems = nextGroups.flatMap((group) => group.items);
@@ -266,6 +354,153 @@ export default function ProductDisplayPage() {
     } catch (error) {
       showToast({ tone: "error", title: "Visibility update failed", message: error.message });
     }
+  };
+
+  const setProductForSelectedUser = async (product, shouldShow) => {
+    if (!selectedUserId || !product) return;
+
+    const key = `${selectedUserId}:${product.id}`;
+    const label = product.article_code || product.name || `Product #${product.id}`;
+    const userLabel = selectedUser?.name || selectedUser?.email || "selected user";
+
+    try {
+      setSavingUserProductKey(key);
+
+      if (shouldShow) {
+        if (Number(product.is_visible) !== 1) {
+          await api.setFinishedGoodVisibility(product.id, { is_visible: true }, token);
+        }
+
+        await api.grantPermission(
+          {
+            user_id: Number(selectedUserId),
+            finished_good_ids: [Number(product.id)],
+          },
+          token
+        );
+      } else {
+        await api.revokePermission(
+          {
+            user_id: Number(selectedUserId),
+            finished_good_id: Number(product.id),
+          },
+          token
+        );
+      }
+
+      await loadItems();
+      announceDataRefresh("permissions");
+      announceDataRefresh("finished-goods");
+      announceDataRefresh("finished-goods-user");
+      announceDataRefresh("on-hold");
+
+      showToast({
+        tone: "success",
+        title: shouldShow ? "Product shown" : "Product hidden",
+        message: `${label} is now ${shouldShow ? "shown to" : "hidden from"} ${userLabel}.`,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: shouldShow ? "Show failed" : "Hide failed",
+        message: error.message || "Could not update this user's product access.",
+      });
+    } finally {
+      setSavingUserProductKey("");
+    }
+  };
+
+  const renderUserProductTable = (products, mode) => {
+    if (!selectedUserId) {
+      return (
+        <div className="rounded-xl border border-dashed border-slate-200 py-8 text-center text-sm text-slate-500">
+          Select a user to review their product display.
+        </div>
+      );
+    }
+
+    if (!products.length) {
+      return (
+        <div className="rounded-xl border border-dashed border-slate-200 py-8 text-center text-sm text-slate-500">
+          No products in this list.
+        </div>
+      );
+    }
+
+    return (
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <table className="w-full text-left">
+          <thead className="bg-slate-50">
+            <tr>
+              <th className="min-w-64 px-4 py-3 text-xs font-semibold uppercase text-slate-500">Product</th>
+              <th className="min-w-48 px-4 py-3 text-xs font-semibold uppercase text-slate-500">Variant</th>
+              <th className="w-36 px-4 py-3 text-xs font-semibold uppercase text-slate-500">Stock</th>
+              <th className="w-40 px-4 py-3 text-xs font-semibold uppercase text-slate-500">Catalog</th>
+              <th className="w-32 px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Action</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {products.map((product) => {
+              const saving = savingUserProductKey === `${selectedUserId}:${product.id}`;
+              const globallyVisible = Number(product.is_visible) === 1;
+              const actionIsShow = mode !== "shown";
+
+              return (
+                <tr key={`${mode}-${product.id}`} className="hover:bg-slate-50">
+                  <td className="px-4 py-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      {product.image_url ? (
+                        <img
+                          src={`${APP_BASE_URL}${product.image_url}`}
+                          alt={product.article_code || product.name}
+                          className="h-12 w-12 shrink-0 rounded-lg object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400">
+                          No image
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-950">
+                          {product.article_code || product.name || `Product #${product.id}`}
+                        </p>
+                        <p className="mt-0.5 text-xs text-slate-500">FG.ID {product.id}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-slate-700">
+                    <p className="font-medium text-slate-900">
+                      {[product.color, product.size].filter(Boolean).join(" / ") || "-"}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">{product.sole_code || "No sole code"}</p>
+                  </td>
+                  <td className="px-4 py-3 text-sm font-semibold text-slate-900">
+                    {formatNumber(product.quantity)} {product.unit || "pairs"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <StatusBadge tone={globallyVisible ? "success" : "neutral"}>
+                      {globallyVisible ? "Displayed" : "Global hidden"}
+                    </StatusBadge>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <Button
+                      type="button"
+                      variant={actionIsShow ? "primary" : "secondary"}
+                      size="sm"
+                      icon={actionIsShow ? "eye" : "eyeOff"}
+                      disabled={saving}
+                      onClick={() => setProductForSelectedUser(product, actionIsShow)}
+                    >
+                      {saving ? "Saving" : actionIsShow ? "Show" : "Hide"}
+                    </Button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
   };
 
   const saveDisplayQuantity = async (item) => {
@@ -359,7 +594,7 @@ export default function ProductDisplayPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <PageHeader
         eyebrow="Catalog control"
         title="Product Display"
@@ -386,11 +621,156 @@ export default function ProductDisplayPage() {
         </div>
       </div>
 
-      <SectionCard
-        title="Customer Catalog Controls"
-        subtitle="Visible pairs is the maximum stock number customers can see and order for that exact variant."
-        icon="finishedGoods"
-      >
+      <div className="order-2">
+        <SectionCard
+          title="User Product Display"
+          subtitle="Select one user to see which products are shown or hidden for that account."
+          icon="users"
+        >
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+          <div className="grid gap-4 lg:grid-cols-[minmax(240px,340px)_1fr_auto] lg:items-end">
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                User
+              </label>
+              <select
+                value={selectedUserId}
+                onChange={(event) => setSelectedUserId(event.target.value)}
+                className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+              >
+                {users.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name || item.email} ({item.role})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Search products
+              </label>
+              <div className="relative">
+                <Icon name="search" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={selectedUserProductSearch}
+                  onChange={(event) => setSelectedUserProductSearch(event.target.value)}
+                  placeholder="Search article, color, size, or FG.ID..."
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 lg:w-56">
+              <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2">
+                <p className="text-xs text-slate-500">Shown</p>
+                <p className="text-lg font-semibold text-emerald-700">{selectedUserProducts.shown.length}</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <p className="text-xs text-slate-500">Hidden</p>
+                <p className="text-lg font-semibold text-slate-800">{selectedUserProducts.hidden.length}</p>
+              </div>
+            </div>
+          </div>
+
+          {selectedUser ? (
+            <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-slate-600">
+              <span className="inline-flex h-9 items-center rounded-lg bg-white px-3 font-semibold text-slate-900 ring-1 ring-slate-200">
+                {selectedUser.name || selectedUser.email}
+              </span>
+              <span className="inline-flex h-9 items-center rounded-lg bg-white px-3 text-xs font-semibold uppercase tracking-wide text-indigo-700 ring-1 ring-indigo-100">
+                {selectedUser.role}
+              </span>
+              {selectedUser.email ? <span className="text-sm text-slate-500">{selectedUser.email}</span> : null}
+            </div>
+          ) : null}
+
+          <div className="mt-4 inline-flex rounded-lg border border-slate-200 bg-white p-1">
+            {[
+              { key: "shown", label: "Shown", count: selectedUserProducts.shown.length, icon: "eye" },
+              { key: "hidden", label: "Hidden", count: selectedUserProducts.hidden.length, icon: "eyeOff" },
+            ].map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setSelectedUserProductMode(option.key)}
+                className={`inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm font-semibold transition ${
+                  selectedUserProductMode === option.key
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                <Icon name={option.icon} className="h-4 w-4" />
+                {option.label}
+                <span
+                  className={`rounded-full px-2 py-0.5 text-xs ${
+                    selectedUserProductMode === option.key ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"
+                  }`}
+                >
+                  {option.count}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-slate-900">
+              {selectedUserProductMode === "shown" ? "Shown products" : "Hidden products"}
+            </h3>
+            <StatusBadge tone={selectedUserProductMode === "shown" ? "success" : "neutral"}>
+              {selectedUserProductList.length} products
+            </StatusBadge>
+          </div>
+          {renderUserProductTable(paginatedSelectedUserProducts, selectedUserProductMode)}
+          {selectedUserId && selectedUserProductList.length ? (
+            <div className="mt-4 flex flex-col items-center justify-between gap-3 border-t border-slate-100 pt-4 sm:flex-row">
+              <p className="text-sm text-slate-500">
+                Showing {(selectedUserProductPage - 1) * userProductsPerPage + 1}-
+                {Math.min(selectedUserProductPage * userProductsPerPage, selectedUserProductList.length)} of{" "}
+                {selectedUserProductList.length}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={selectedUserProductPage === 1}
+                  onClick={() => setSelectedUserProductPage((page) => Math.max(1, page - 1))}
+                >
+                  Prev
+                </Button>
+                <span className="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700">
+                  Page {selectedUserProductPage} of {selectedUserProductTotalPages}
+                </span>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={selectedUserProductPage === selectedUserProductTotalPages}
+                  onClick={() =>
+                    setSelectedUserProductPage((page) =>
+                      Math.min(selectedUserProductTotalPages, page + 1)
+                    )
+                  }
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+        </SectionCard>
+      </div>
+
+      <div className="order-1">
+        <SectionCard
+          title="Customer Catalog Controls"
+          subtitle="Visible pairs is the maximum stock number customers can see and order for that exact variant."
+          icon="finishedGoods"
+        >
         <div className="grid gap-3 border-b border-slate-100 px-6 py-4 md:grid-cols-3">
           <div className="rounded-lg bg-slate-50 px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Physical stock</p>
@@ -713,7 +1093,8 @@ export default function ProductDisplayPage() {
             </div>
           </div>
         ) : null}
-      </SectionCard>
+        </SectionCard>
+      </div>
     </div>
   );
 }

@@ -19,11 +19,12 @@ import { useDataRefresh } from "../../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../../services/api";
 import { getCustomerVisibleStock } from "../../utils/displayStock";
 import { formatNumber, formatPrice } from "../../utils/format";
+import {
+  sortProductGroupsByDisplayOrder,
+  sortProductsByDisplayOrder,
+} from "../../utils/productOrdering";
 
 const getAvailableQty = getCustomerVisibleStock;
-
-const getGroupDisplayOrder = (variants = []) =>
-  Math.min(...variants.map((variant) => Number(variant.display_order || 999999)));
 
 const getNextSort = (current) => {
   if (current === "display") return "newest";
@@ -308,7 +309,9 @@ export default function ElderFinishedGoods() {
       if (!groups[baseCode]) groups[baseCode] = [];
       groups[baseCode].push(item);
     });
-    return Object.values(groups);
+    return Object.values(groups)
+      .map((variants) => [...variants].sort(sortProductsByDisplayOrder))
+      .sort(sortProductGroupsByDisplayOrder);
   }, [items]);
 
   const sizes = [...new Set(items.map((i) => i.size).filter(Boolean))];
@@ -350,9 +353,10 @@ export default function ElderFinishedGoods() {
 
   return variants.length > 0;
 })
+      .map((variants) => [...variants].sort(sortProductsByDisplayOrder))
       .sort((a, b) => {
         if (sort === "display") {
-          return getGroupDisplayOrder(a) - getGroupDisplayOrder(b);
+          return sortProductGroupsByDisplayOrder(a, b);
         }
 
         const dateA = new Date(a[0]?.created_at || 0);

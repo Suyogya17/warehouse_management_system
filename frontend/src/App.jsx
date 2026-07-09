@@ -1,37 +1,49 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 
 import AppShell from "./layouts/AppShell";
 import ProtectedRoute from "./components/ProtectedRoute";
 
-import DashboardPage from "./pages/DashboardPage";
-import RawMaterialsPage from "./pages/RawMaterialsPage";
-import FinishedGoodsPage from "./pages/FinishedGoodsPage";
-import FinishedGoodsUserPage from "./pages/Users/FinishedGoodsUserPage";
-import ReceiveStockPage from "./pages/ReceiveStockPage";
-import ConsumptionPage from "./pages/ConsumptionPage";
-import FormulasPage from "./pages/FormulasPage";
-import ProductionPage from "./pages/ProductionPage";
-import PermissionsPage from "./pages/PermissionsPage";
-import UsersPage from "./pages/UsersPage";
-import OrdersPage from "./pages/OrdersPage";
-import LoginPage from "./pages/LoginPage";
-import NotFoundPage from "./pages/NotFoundPage";
-import CustomerOrdersPage from "./pages/Users/CustomerOrdersPage";
-import ElderFinishedPage from "./pages/Elder/ElderFinishedPage";
-import StockPage from "./pages/StockPage";
-import WareHousePage from "./pages/WareHousePage";
-import MemberFinishedPage from "./pages/Member/MemberFinishedGoodPage";
-import MemberStockPage from "./pages/Member/MemberStockPage";
-import MemberOrderPage from "./pages/Member/MemberOrderPage";
-import OnHoldPage from "./pages/OnHoldPage";
-import SummaryPage from "./pages/SummaryPage";
-import ProductLedgerPage from "./pages/ProductLedgerPage";
-import ProductDisplayPage from "./pages/ProductDisplayPage";
-import AdvertisementsPage from "./pages/AdvertisementsPage";
-import AnalyticsPage from "./pages/AnalyticsPage";
-import ActivityLogPage from "./pages/ActivityLogPage";
-import ImportTrackingPage from "./pages/ImportTrackingPage";
+const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const RawMaterialsPage = lazy(() => import("./pages/RawMaterialsPage"));
+const FinishedGoodsPage = lazy(() => import("./pages/FinishedGoodsPage"));
+const FinishedGoodsUserPage = lazy(() => import("./pages/Users/FinishedGoodsUserPage"));
+const ReceiveStockPage = lazy(() => import("./pages/ReceiveStockPage"));
+const ConsumptionPage = lazy(() => import("./pages/ConsumptionPage"));
+const FormulasPage = lazy(() => import("./pages/FormulasPage"));
+const ProductionPage = lazy(() => import("./pages/ProductionPage"));
+const PermissionsPage = lazy(() => import("./pages/PermissionsPage"));
+const UsersPage = lazy(() => import("./pages/UsersPage"));
+const OrdersPage = lazy(() => import("./pages/OrdersPage"));
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
+const CustomerOrdersPage = lazy(() => import("./pages/Users/CustomerOrdersPage"));
+const ElderFinishedPage = lazy(() => import("./pages/Elder/ElderFinishedPage"));
+const StockPage = lazy(() => import("./pages/StockPage"));
+const WareHousePage = lazy(() => import("./pages/WareHousePage"));
+const MemberFinishedPage = lazy(() => import("./pages/Member/MemberFinishedGoodPage"));
+const MemberStockPage = lazy(() => import("./pages/Member/MemberStockPage"));
+const MemberOrderPage = lazy(() => import("./pages/Member/MemberOrderPage"));
+const OnHoldPage = lazy(() => import("./pages/OnHoldPage"));
+const SummaryPage = lazy(() => import("./pages/SummaryPage"));
+const ProductLedgerPage = lazy(() => import("./pages/ProductLedgerPage"));
+const ProductDisplayPage = lazy(() => import("./pages/ProductDisplayPage"));
+const AdvertisementsPage = lazy(() => import("./pages/AdvertisementsPage"));
+const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage"));
+const ActivityLogPage = lazy(() => import("./pages/ActivityLogPage"));
+const ImportTrackingPage = lazy(() => import("./pages/ImportTrackingPage"));
+
+const PageFallback = () => (
+  <div className="flex min-h-[45vh] items-center justify-center text-sm font-medium text-slate-500">
+    Loading...
+  </div>
+);
+
+const withSuspense = (element) => (
+  <Suspense fallback={<PageFallback />}>{element}</Suspense>
+);
+
 export default function App() {
   const { isAuthenticated, user } = useAuth();
 
@@ -41,7 +53,7 @@ export default function App() {
       <Route
         path="/login"
         element={
-          isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage />
+          isAuthenticated ? <Navigate to="/dashboard" replace /> : withSuspense(<LoginPage />)
         }
       />
 
@@ -60,7 +72,7 @@ export default function App() {
           path="dashboard"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER", "USER"]}>
-              <DashboardPage />
+              {withSuspense(<DashboardPage />)}
             </ProtectedRoute>
           }
         />
@@ -69,7 +81,7 @@ export default function App() {
           path="raw-materials"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <RawMaterialsPage />
+              {withSuspense(<RawMaterialsPage />)}
             </ProtectedRoute>
           }
         />        
@@ -78,11 +90,11 @@ export default function App() {
   path="finished-goods"
   element={
     <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "USER"]}>
-      {user?.role === "USER" ? (
+      {withSuspense(user?.role === "USER" ? (
         <FinishedGoodsUserPage />
       ) : (
         <FinishedGoodsPage />
-      )}
+      ))}
     </ProtectedRoute>
   }
 />
@@ -91,7 +103,7 @@ export default function App() {
           path="receive-stock"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <ReceiveStockPage />
+              {withSuspense(<ReceiveStockPage />)}
             </ProtectedRoute>
           }
         />
@@ -100,7 +112,7 @@ export default function App() {
           path="import-tracking"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <ImportTrackingPage />
+              {withSuspense(<ImportTrackingPage />)}
             </ProtectedRoute>
           }
         />
@@ -109,7 +121,7 @@ export default function App() {
           path="consumption"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <ConsumptionPage />
+              {withSuspense(<ConsumptionPage />)}
             </ProtectedRoute>
           }
         />
@@ -118,7 +130,7 @@ export default function App() {
           path="formulas"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <FormulasPage />
+              {withSuspense(<FormulasPage />)}
             </ProtectedRoute>
           }
         />
@@ -127,7 +139,7 @@ export default function App() {
           path="production"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <ProductionPage />
+              {withSuspense(<ProductionPage />)}
             </ProtectedRoute>
           }
         />
@@ -136,7 +148,7 @@ export default function App() {
           path="orders"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <OrdersPage />
+              {withSuspense(<OrdersPage />)}
             </ProtectedRoute>
           }
         />
@@ -145,7 +157,7 @@ export default function App() {
           path="analytics"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <AnalyticsPage />
+              {withSuspense(<AnalyticsPage />)}
             </ProtectedRoute>
           }
         />
@@ -154,7 +166,7 @@ export default function App() {
           path="activity-logs"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <ActivityLogPage />
+              {withSuspense(<ActivityLogPage />)}
             </ProtectedRoute>
           }
         />
@@ -163,7 +175,7 @@ export default function App() {
           path="stock"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <StockPage />
+              {withSuspense(<StockPage />)}
             </ProtectedRoute>
           }
         />
@@ -172,7 +184,7 @@ export default function App() {
           path="warehouses"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER"]}>
-              <WareHousePage />
+              {withSuspense(<WareHousePage />)}
             </ProtectedRoute>
           }
         />
@@ -181,7 +193,7 @@ export default function App() {
           path="order-customer"
           element={
             <ProtectedRoute roles={["USER"]}>
-              <CustomerOrdersPage />
+              {withSuspense(<CustomerOrdersPage />)}
             </ProtectedRoute>
           }
         />
@@ -190,7 +202,7 @@ export default function App() {
           path="elder-finished"
           element={
             <ProtectedRoute roles={["ELDER"]}>
-              <ElderFinishedPage />
+              {withSuspense(<ElderFinishedPage />)}
             </ProtectedRoute>
           }
         />
@@ -199,7 +211,7 @@ export default function App() {
           path="finished-goods-member"
           element={
             <ProtectedRoute roles={["MEMBER"]}>
-              <MemberFinishedPage />
+              {withSuspense(<MemberFinishedPage />)}
             </ProtectedRoute>
           }
         />
@@ -208,7 +220,7 @@ export default function App() {
           path="stock-member"
           element={
             <ProtectedRoute roles={["MEMBER"]}>
-              <MemberStockPage />
+              {withSuspense(<MemberStockPage />)}
             </ProtectedRoute>
           }
         />
@@ -217,7 +229,7 @@ export default function App() {
           path="order-member"
           element={
             <ProtectedRoute roles={["MEMBER"]}>
-              <MemberOrderPage />
+              {withSuspense(<MemberOrderPage />)}
             </ProtectedRoute>
           }
         />
@@ -226,7 +238,7 @@ export default function App() {
           path="permissions"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <PermissionsPage />
+              {withSuspense(<PermissionsPage />)}
             </ProtectedRoute>
           }
         />
@@ -235,7 +247,7 @@ export default function App() {
           path="product-display"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <ProductDisplayPage />
+              {withSuspense(<ProductDisplayPage />)}
             </ProtectedRoute>
           }
         />
@@ -244,7 +256,7 @@ export default function App() {
           path="advertisements"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <AdvertisementsPage />
+              {withSuspense(<AdvertisementsPage />)}
             </ProtectedRoute>
           }
         />
@@ -253,7 +265,7 @@ export default function App() {
           path="on-hold"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
-              <OnHoldPage />
+              {withSuspense(<OnHoldPage />)}
             </ProtectedRoute>
           }
         />
@@ -262,7 +274,7 @@ export default function App() {
           path="summary"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER"]}>
-              <SummaryPage />
+              {withSuspense(<SummaryPage />)}
             </ProtectedRoute>
           }
         />
@@ -271,7 +283,7 @@ export default function App() {
           path="product-ledger"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER"]}>
-              <ProductLedgerPage />
+              {withSuspense(<ProductLedgerPage />)}
             </ProtectedRoute>
           }
         />
@@ -280,7 +292,7 @@ export default function App() {
           path="users"
           element={
             <ProtectedRoute roles={["ADMIN"]}>
-              <UsersPage />
+              {withSuspense(<UsersPage />)}
             </ProtectedRoute>
           }
         />
@@ -293,7 +305,7 @@ export default function App() {
         path="*"
         element={
           isAuthenticated ? (
-            <NotFoundPage />
+            withSuspense(<NotFoundPage />)
           ) : (
             <Navigate to="/login" replace />
           )

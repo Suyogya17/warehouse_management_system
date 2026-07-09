@@ -36,6 +36,7 @@ const paths = {
   cart: "M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0",
   ledger: "M4 4h16v16H4zM4 9h16M4 14h16M9 9v11",
   refresh: "M20 6v5h-5M4 18v-5h5M18.5 9A7 7 0 0 0 6.6 6.6L4 9m2 6a7 7 0 0 0 11.4 2.4L20 15",
+  search: "M21 21l-4.35-4.35M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14",
 };
 
 export default function Icon({ name, className = "h-4 w-4", strokeWidth = 1.8 }) {

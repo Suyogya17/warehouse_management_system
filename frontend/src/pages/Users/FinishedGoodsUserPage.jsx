@@ -21,11 +21,12 @@ import { useDataRefresh } from "../../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../../services/api";
 import { getCustomerVisibleStock } from "../../utils/displayStock";
 import { formatNumber, formatPrice } from "../../utils/format";
+import {
+  sortProductGroupsByDisplayOrder,
+  sortProductsByDisplayOrder,
+} from "../../utils/productOrdering";
 
 const getAvailableQty = getCustomerVisibleStock;
-
-const getGroupDisplayOrder = (variants = []) =>
-  Math.min(...variants.map((variant) => Number(variant.display_order || 999999)));
 
 const getArticleKey = (item) =>
   item.article_code || item.name?.split("_")?.[0] || `product-${item.id}`;
@@ -34,13 +35,6 @@ const getSeriesName = (soleCode = "") =>
   String(soleCode)
     .replace(/[-_\s]*sole$/i, "")
     .trim();
-
-const sortByDisplayOrder = (a, b) => {
-  const orderDiff = Number(a.display_order || 999999) - Number(b.display_order || 999999);
-  if (orderDiff !== 0) return orderDiff;
-
-  return Number(a.id || 0) - Number(b.id || 0);
-};
 
 const getNextSort = (current) => {
   if (current === "display") return "newest";
@@ -498,8 +492,8 @@ export default function FinishedGoodsUserPage() {
     });
 
     return Array.from(groups.values())
-      .map((variants) => [...variants].sort(sortByDisplayOrder))
-      .sort((a, b) => getGroupDisplayOrder(a) - getGroupDisplayOrder(b));
+      .map((variants) => [...variants].sort(sortProductsByDisplayOrder))
+      .sort(sortProductGroupsByDisplayOrder);
   }, [items]);
 
   const sizes = [...new Set(items.map((i) => i.size).filter(Boolean))];
@@ -541,16 +535,11 @@ export default function FinishedGoodsUserPage() {
           
         })
       )
-      .map((variants) => variants.sort(sortByDisplayOrder))
+      .map((variants) => [...variants].sort(sortProductsByDisplayOrder))
       .filter((variants) => variants.some((v) => getAvailableQty(v) > 0))
       .sort((a, b) => {
         if (sort === "display") {
-          const orderDiff = getGroupDisplayOrder(a) - getGroupDisplayOrder(b);
-          if (orderDiff !== 0) return orderDiff;
-
-          return String(a[0]?.article_code || a[0]?.name || "").localeCompare(
-            String(b[0]?.article_code || b[0]?.name || "")
-          );
+          return sortProductGroupsByDisplayOrder(a, b);
         }
 
         const dateA = new Date(a[0]?.created_at || 0);

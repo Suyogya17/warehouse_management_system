@@ -316,7 +316,7 @@ const getAvailability = async (req, res, next) => {
     }`;
     const params = [];
 
-    if (['USER', 'ELDER'].includes(req.user.role)) {
+    if (['USER', 'MEMBER', 'ELDER'].includes(req.user.role)) {
       sql += ` AND EXISTS (
         SELECT 1 FROM user_product_permissions upp
         WHERE upp.finished_good_id = finished_goods.id
@@ -332,7 +332,7 @@ const getAvailability = async (req, res, next) => {
     }
 
     sql += supportsDisplayOrder
-      ? ' ORDER BY display_order ASC, article_code, color, id'
+      ? ' ORDER BY (display_order IS NULL), display_order ASC, article_code, color, id'
       : ' ORDER BY article_code, color, id';
 
     const products = await query(sql, params);

@@ -2,6 +2,7 @@ const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { hasColumn } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
+const { clearCache } = require('../middleware/cacheMiddleware');
 
 const DEFAULT_DISPLAY_QUANTITY = 450;
 
@@ -25,7 +26,7 @@ const getFinishedGoodsOrderClause = async (alias = '') => {
   const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
 
   return supportsDisplayOrder
-    ? `ORDER BY ${prefix}display_order ASC, ${prefix}article_code, ${prefix}color, ${prefix}id`
+    ? `ORDER BY (${prefix}display_order IS NULL), ${prefix}display_order ASC, ${prefix}article_code, ${prefix}color, ${prefix}id`
     : `ORDER BY ${prefix}article_code, ${prefix}color, ${prefix}id`;
 };
 
@@ -424,6 +425,8 @@ const setVisibility = async (req, res, next) => {
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false });
     }
+
+    clearCache();
 
     const product = productRows.rows[0];
     const actionType = is_visible ? 'SHOW' : 'HIDE';
