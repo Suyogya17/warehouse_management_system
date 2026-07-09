@@ -10,6 +10,7 @@ import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber, formatPrice } from "../utils/format";
+import { canManageProductVisibility } from "../utils/pagePermissions";
 
 const getAvailableQty = (product) =>
   Number(product?.available_qty ?? product?.display_quantity ?? product?.quantity ?? 0);
@@ -498,8 +499,9 @@ export default function DashboardPage() {
   const PRODUCTS_PER_PAGE = 12;
 
   const isAdmin = user.role === "ADMIN" || user.role === "CO_ADMIN";
+  const canManageVisibility = canManageProductVisibility(user);
   const canViewDashboard = isAdmin || user.role === "MEMBER";
-  const canViewOnHold = isAdmin || user.role === "MEMBER";
+  const canViewOnHold = canManageVisibility || user.role === "MEMBER";
 
   const load = useCallback(async () => {
     const [
@@ -519,10 +521,10 @@ export default function DashboardPage() {
       user.role !== "USER" ? api.getProductionHistory(token, { limit: 20, include_total: 0 }) : Promise.resolve({ data: [] }),
       user.role !== "MEMBER" ? api.getConsumptionLogs(token, { limit: 20, include_total: 0 }) : Promise.resolve({ data: [] }),
       user.role !== "MEMBER" ? api.getOrders(token, { limit: 100 }) : Promise.resolve({ data: [] }),
-      isAdmin || user.role === "MEMBER"
-        ? api.getAvailability(token, { includeHidden: isAdmin || user.role === "MEMBER" })
+      canManageVisibility || user.role === "MEMBER"
+        ? api.getAvailability(token, { includeHidden: canManageVisibility || user.role === "MEMBER" })
         : Promise.resolve({ data: [] }),
-      isAdmin ? api.getPermissions(token) : Promise.resolve({ data: [] }),
+      canManageVisibility ? api.getPermissions(token) : Promise.resolve({ data: [] }),
       user.role === "USER" ? api.getAdvertisements(token) : Promise.resolve({ data: [] }),
     ]);
 
@@ -537,13 +539,13 @@ export default function DashboardPage() {
       permissions:   permissions.data   || [],
       advertisements: advertisements.data || [],
     });
-  }, [token, user.role, isAdmin]);
+  }, [token, user.role, canManageVisibility]);
 
   useEffect(() => { load().catch(console.error); }, [load]);
   useDataRefresh(load, "dashboard");
 
   const toggleVisibility = async (product) => {
-    if (!isAdmin || !product) return;
+    if (!canManageVisibility || !product) return;
 
     const nextVisible = Number(product.is_visible) !== 1;
     const label = product.article_code || product.name || "Product";
@@ -633,7 +635,7 @@ export default function DashboardPage() {
   }, [groupedProducts, search, stockFilter, seriesFilter]);
 
   const onHoldBaseItems = useMemo(() => {
-    if (!isAdmin) {
+    if (!canManageVisibility) {
       return state.availability.filter((product) => Number(product.is_visible) !== 1);
     }
 
@@ -654,7 +656,7 @@ export default function DashboardPage() {
           Number(product.is_visible) !== 1 ||
           !activeProductIds.has(Number(product.id))
       );
-  }, [isAdmin, state.permissions, state.finishedGoods, state.availability]);
+  }, [canManageVisibility, state.permissions, state.finishedGoods, state.availability]);
 
   const onHoldSeriesList = useMemo(
     () =>
@@ -804,7 +806,7 @@ export default function DashboardPage() {
                   <ProductCard
                     key={variants.map((v) => v.id).join("-")}
                     variants={variants}
-                    canManageVisibility={isAdmin}
+                    canManageVisibility={canManageVisibility}
                     onToggleVisibility={toggleVisibility}
                   />
                 ))}
@@ -853,7 +855,7 @@ export default function DashboardPage() {
                   <OnHoldCard
                     key={variants.map((v) => v.id).join("-")}
                     variants={variants}
-                    canManageVisibility={isAdmin}
+                    canManageVisibility={canManageVisibility}
                     onToggleVisibility={toggleVisibility}
                   />
                 ))}
