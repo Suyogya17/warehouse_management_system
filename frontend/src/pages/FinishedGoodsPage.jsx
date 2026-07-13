@@ -13,6 +13,7 @@ import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber, formatPrice } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
+import { getCommissionLabel, isCommissionProduct, matchesCommissionFilter } from "../utils/commission";
 import Select from "react-select";
 import * as XLSX from "xlsx";
 
@@ -24,6 +25,7 @@ const initialForm = {
   size: "",
   unit: "pairs",
   price: 0,
+  is_commission: false,
   min_quantity: 5,
   inner_box_per_pair: 1,
   inner_boxes_per_outer_box: "",
@@ -38,6 +40,7 @@ const buildFormData = (values, editingId) => {
   formData.append("color", values.color);
   formData.append("unit", values.unit);
   formData.append("price", Number(values.price || 0));
+  formData.append("is_commission", values.is_commission ? 1 : 0);
   formData.append("min_quantity", Number(values.min_quantity));
   formData.append("size", values.size || "");
   formData.append("inner_box_per_pair", Number(values.inner_box_per_pair || 1));
@@ -73,6 +76,7 @@ export default function FinishedGoodsPage() {
   const [search, setSearch] = useState("");
   const [searchId, setSearchId] = useState("");
   const [seriesFilter, setSeriesFilter] = useState("");
+  const [commissionFilter, setCommissionFilter] = useState("all");
 
   const loadItems = useCallback(async () => {
     const [goodsResult, materialsResult] = await Promise.all([
@@ -160,6 +164,7 @@ export default function FinishedGoodsPage() {
       size: item.size || "",
       unit: item.unit || "pairs",
       price: Number(item.price || 0),
+      is_commission: Number(item.is_commission || 0) === 1,
       min_quantity: item.min_quantity || 5,
       inner_box_per_pair: item.inner_box_per_pair || 1,
       inner_boxes_per_outer_box: item.inner_boxes_per_outer_box ?? "",
@@ -244,6 +249,7 @@ export default function FinishedGoodsPage() {
     if (!canViewHidden && !item.is_visible) return false;
 
     if (seriesFilter && getSeriesName(item.sole_code) !== seriesFilter) return false;
+    if (!matchesCommissionFilter(item, commissionFilter)) return false;
 
     const qId = searchId.trim().toLowerCase();
     if (qId && !String(item.id || "").toLowerCase().includes(qId)) return false;
@@ -289,6 +295,7 @@ export default function FinishedGoodsPage() {
       Stock: Number(item.quantity || 0),
       Unit: item.unit || "",
       "Min Qty": Number(item.min_quantity || 0),
+      "Commission": getCommissionLabel(item),
       "Inner Boxes Per Pair": Number(item.inner_box_per_pair || 0),
       "Inner Boxes Per Outer Box": item.inner_boxes_per_outer_box || "",
       Visibility: item.is_visible ? "Displayed" : "Hidden",
@@ -307,6 +314,7 @@ export default function FinishedGoodsPage() {
       { wch: 12 },
       { wch: 10 },
       { wch: 10 },
+      { wch: 18 },
       { wch: 20 },
       { wch: 24 },
       { wch: 12 },
@@ -514,6 +522,35 @@ export default function FinishedGoodsPage() {
               />
             </Field>
 
+            <Field label="Commission type">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={form.is_commission}
+                onClick={() =>
+                  setForm((current) => ({ ...current, is_commission: !current.is_commission }))
+                }
+                className={`flex h-11 w-full items-center justify-between rounded-xl border px-3.5 text-sm font-medium transition ${
+                  form.is_commission
+                    ? "border-amber-300 bg-amber-50 text-amber-800"
+                    : "border-slate-200 bg-white text-slate-700"
+                }`}
+              >
+                <span>{form.is_commission ? "Percentage" : "Non commission"}</span>
+                <span
+                  className={`relative h-6 w-11 rounded-full transition ${
+                    form.is_commission ? "bg-amber-500" : "bg-slate-300"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition ${
+                      form.is_commission ? "left-6" : "left-1"
+                    }`}
+                  />
+                </span>
+              </button>
+            </Field>
+
             <Field label="Inner boxes per pair">
               <TextInput
                 type="number"
@@ -627,6 +664,15 @@ export default function FinishedGoodsPage() {
               </option>
             ))}
           </select>
+          <select
+            value={commissionFilter}
+            onChange={(e) => setCommissionFilter(e.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100 md:w-52"
+          >
+            <option value="all">All commission</option>
+            <option value="commission">Percentage only</option>
+            <option value="non_commission">Non commission only</option>
+          </select>
         </div>
 
         <DataTable
@@ -656,6 +702,17 @@ export default function FinishedGoodsPage() {
             { key: "quantity", label: "Stock", render: (row) => `${formatNumber(row.quantity)} ${row.unit}` },
             ...(isAdmin ? [{ key: "min_quantity", label: "Min Qty" }] : []),
             ...(isAdmin ? [{ key: "price", label: "Price (NPR)", render: (row) => formatPrice(row.price) }] : []),
+            ...(isAdmin
+              ? [{
+                  key: "is_commission",
+                  label: "Commission",
+                  render: (row) => (
+                    <StatusBadge tone={isCommissionProduct(row) ? "warning" : "neutral"}>
+                      {getCommissionLabel(row)}
+                    </StatusBadge>
+                  ),
+                }]
+              : []),
             ...(isAdmin
               ? [{
                   key: "packaging",

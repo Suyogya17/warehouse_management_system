@@ -1,0 +1,1 @@
+const i=(s={})=>Number((s==null?void 0:s.is_commission)||0)===1,m=(s={})=>i(s)?"Percentage":"Non commission",o=(s={},n="all")=>n==="commission"?i(s):n==="non_commission"?!i(s):!0;export{m as g,i,o as m};

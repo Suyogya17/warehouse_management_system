@@ -3,12 +3,32 @@ const jwt = require('jsonwebtoken');
 const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
+const { hasColumn } = require('../utils/schemaSupport');
 const { PRODUCT_VISIBILITY_PAGE_KEY, getUserPagePermissions } = require('../utils/userPagePermissions');
+
+const DEFAULT_EXCHANGE_RATES = {
+  NPR: 1,
+  INR: 1.6,
+};
 
 const normalizeLocale = (countryCode, currencyCode) => ({
   countryCode: String(countryCode || 'NP').trim().toUpperCase().slice(0, 2),
   currencyCode: String(currencyCode || 'NPR').trim().toUpperCase().slice(0, 3),
 });
+
+const normalizeExchangeRate = (exchangeRate, currencyCode = 'NPR') => {
+  const rate = Number(exchangeRate);
+  if (Number.isFinite(rate) && rate > 0) return rate;
+
+  return DEFAULT_EXCHANGE_RATES[String(currencyCode || 'NPR').toUpperCase()] || 1;
+};
+
+const getUserSelectColumns = async () => {
+  const supportsExchangeRate = await hasColumn('users', 'exchange_rate');
+  return `id, name, email, role, country_code, currency_code${
+    supportsExchangeRate ? ', exchange_rate' : ''
+  }, created_at`;
+};
 
 const mapPagePermissions = (rows = []) =>
   rows.reduce((acc, row) => {
@@ -31,6 +51,7 @@ const buildUserPayload = async (user) => {
     role: user.role,
     country_code: user.country_code,
     currency_code: user.currency_code,
+    exchange_rate: normalizeExchangeRate(user.exchange_rate, user.currency_code),
     page_permissions: mapPagePermissions(pagePermissions),
   };
 };
@@ -38,8 +59,9 @@ const buildUserPayload = async (user) => {
 // ─── REGISTER ────────────────────────────────────────────────────────────────
 const register = async (req, res, next) => {
   try {
-    const { name, email, password, role = 'USER', country_code, currency_code } = req.body;
+    const { name, email, password, role = 'USER', country_code, currency_code, exchange_rate } = req.body;
     const locale = normalizeLocale(country_code, currency_code);
+    const supportsExchangeRate = await hasColumn('users', 'exchange_rate');
 
     const exists = await query(
       'SELECT id FROM users WHERE email = ?',
@@ -54,11 +76,18 @@ const register = async (req, res, next) => {
     }
 
     const hashed = await bcrypt.hash(password, 10);
+    const userColumns = ['name', 'email', 'password', 'role', 'country_code', 'currency_code'];
+    const userValues = [name, email, hashed, role.toUpperCase(), locale.countryCode, locale.currencyCode];
+
+    if (supportsExchangeRate) {
+      userColumns.push('exchange_rate');
+      userValues.push(normalizeExchangeRate(exchange_rate, locale.currencyCode));
+    }
 
     const userInsert = await appendFiscalInsertFields(
       'users',
-      ['name', 'email', 'password', 'role', 'country_code', 'currency_code'],
-      [name, email, hashed, role.toUpperCase(), locale.countryCode, locale.currencyCode]
+      userColumns,
+      userValues
     );
     const result = await query(
       `INSERT INTO users (${userInsert.columns.join(', ')})
@@ -75,6 +104,7 @@ const register = async (req, res, next) => {
       role: role.toUpperCase(),
       country_code: locale.countryCode,
       currency_code: locale.currencyCode,
+      exchange_rate: supportsExchangeRate ? normalizeExchangeRate(exchange_rate, locale.currencyCode) : 1,
     });
 
     await auditLog({
@@ -147,7 +177,7 @@ const login = async (req, res, next) => {
 const getProfile = async (req, res, next) => {
   try {
     const result = await query(
-      'SELECT id, name, email, role, country_code, currency_code, created_at FROM users WHERE id = ?',
+      `SELECT ${await getUserSelectColumns()} FROM users WHERE id = ?`,
       [req.user.id]
     );
 
@@ -170,7 +200,7 @@ const getProfile = async (req, res, next) => {
 const listUsers = async (req, res, next) => {
   try {
     const result = await query(
-      'SELECT id, name, email, role, country_code, currency_code, created_at FROM users ORDER BY created_at DESC'
+      `SELECT ${await getUserSelectColumns()} FROM users ORDER BY created_at DESC`
     );
 
     return res.json({ success: true, data: result });
@@ -182,8 +212,26 @@ const listUsers = async (req, res, next) => {
 // ─── UPDATE USER ─────────────────────────────────────────────────────────────
 const updateUser = async (req, res, next) => {
   try {
-    const { name, email, password, role, country_code, currency_code } = req.body;
+    const { name, email, password, role, country_code, currency_code, exchange_rate } = req.body;
     const userId = req.params.id;
+    const supportsExchangeRate = await hasColumn('users', 'exchange_rate');
+    const locale = normalizeLocale(country_code, currency_code);
+    const updateFields = [
+      'name = COALESCE(?, name)',
+      'email = COALESCE(?, email)',
+      'password = COALESCE(?, password)',
+      'role = COALESCE(?, role)',
+      'country_code = COALESCE(?, country_code)',
+      'currency_code = COALESCE(?, currency_code)',
+    ];
+    const updateParams = [
+      name,
+      email,
+      null,
+      role ? role.toUpperCase() : null,
+      country_code ? locale.countryCode : null,
+      currency_code ? locale.currencyCode : null,
+    ];
 
     const existing = await query(
       'SELECT id, email FROM users WHERE id = ?',
@@ -198,25 +246,18 @@ const updateUser = async (req, res, next) => {
     }
 
     const hashed = password ? await bcrypt.hash(password, 10) : null;
+    updateParams[2] = hashed;
+
+    if (supportsExchangeRate) {
+      updateFields.push('exchange_rate = COALESCE(?, exchange_rate)');
+      updateParams.push(exchange_rate ? normalizeExchangeRate(exchange_rate, locale.currencyCode) : null);
+    }
 
     await query(
       `UPDATE users
-       SET name = COALESCE(?, name),
-           email = COALESCE(?, email),
-           password = COALESCE(?, password),
-           role = COALESCE(?, role),
-           country_code = COALESCE(?, country_code),
-           currency_code = COALESCE(?, currency_code)
+       SET ${updateFields.join(',\n           ')}
        WHERE id = ?`,
-      [
-        name,
-        email,
-        hashed,
-        role ? role.toUpperCase() : null,
-        country_code ? normalizeLocale(country_code, currency_code).countryCode : null,
-        currency_code ? normalizeLocale(country_code, currency_code).currencyCode : null,
-        userId,
-      ]
+      [...updateParams, userId]
     );
 
     await auditLog({

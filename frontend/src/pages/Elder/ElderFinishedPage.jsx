@@ -18,7 +18,8 @@ import { useDataRefresh } from "../../hooks/useDataRefresh";
 
 import { api, APP_BASE_URL } from "../../services/api";
 import { getCustomerVisibleStock } from "../../utils/displayStock";
-import { formatNumber, formatPrice } from "../../utils/format";
+import { formatNumber, formatUserPrice } from "../../utils/format";
+import { getCommissionLabel, isCommissionProduct, matchesCommissionFilter } from "../../utils/commission";
 import {
   sortProductGroupsByDisplayOrder,
   sortProductsByDisplayOrder,
@@ -38,7 +39,7 @@ const getSortLabel = (sort) => {
   return "Oldest";
 };
 
-function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
+function ProductCard({ variants = [], onAddToCart, cartProductIds, user }) {
   const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
 
   useEffect(() => {
@@ -157,6 +158,18 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
             Size: <span className="font-semibold">{selectedVariant.size}</span>
           </div>
         )}
+
+        <div>
+          <span
+            className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${
+              isCommissionProduct(selectedVariant)
+                ? "bg-amber-100 text-amber-700"
+                : "bg-slate-100 text-slate-600"
+            }`}
+          >
+            {getCommissionLabel(selectedVariant)}
+          </span>
+        </div>
         
         {/* COLOR VARIANTS */}
         {variants.length > 0 && (
@@ -187,7 +200,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500">Price</span>
             <span className="text-sm font-bold text-emerald-700">
-              {formatPrice(selectedVariant.price)}
+              {formatUserPrice(selectedVariant.price, user)}
             </span>
           </div>
           <div className="flex items-center justify-between">
@@ -240,7 +253,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds }) {
 }
 
 export default function ElderFinishedGoods() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const navigate = useNavigate();
 
   const [items, setItems] = useState([]);
@@ -252,6 +265,7 @@ export default function ElderFinishedGoods() {
   search: "",
   size: "",
   stock: "all",
+  commission: "all",
 });
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -330,6 +344,7 @@ export default function ElderFinishedGoods() {
             // console.log("Group sample:", groupedProducts[0]?.map(v => ({ name: v.name, available_qty: v.available_qty })));
 
           const matchSize = !filters.size || item.size === filters.size;
+          const matchCommission = matchesCommissionFilter(item, filters.commission);
 
           // FIX: Filter by available_qty (reserved-aware), not raw quantity
           const availableQty = getAvailableQty(item);
@@ -341,7 +356,7 @@ export default function ElderFinishedGoods() {
           : filters.stock === "out"
           ? availableQty > 0 && availableQty < 1
           : true;
-          return matchSearch && matchSize && matchStock;
+          return matchSearch && matchSize && matchStock && matchCommission;
           
         })
       )
@@ -516,7 +531,7 @@ export default function ElderFinishedGoods() {
               ))}
             </select>
 
-            <select
+<select
   value={filters.stock}
   onChange={(e) => setFilters((f) => ({ ...f, stock: e.target.value }))}
   className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
@@ -526,8 +541,18 @@ export default function ElderFinishedGoods() {
   <option value="out">Out of Stock</option>
 </select>
 
+            <select
+              value={filters.commission}
+              onChange={(e) => setFilters((f) => ({ ...f, commission: e.target.value }))}
+              className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            >
+              <option value="all">All commission</option>
+              <option value="commission">Percentage only</option>
+              <option value="non_commission">Non commission only</option>
+            </select>
+
             <button
-              onClick={() => setFilters({ search: "", size: "", stock: "all" })}
+              onClick={() => setFilters({ search: "", size: "", stock: "all", commission: "all" })}
               className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition-all"
             >
               Clear
@@ -550,6 +575,7 @@ export default function ElderFinishedGoods() {
                 variants={variants}
                 onAddToCart={handleAddToCart}
                 cartProductIds={cartProductIds}
+                user={user}
               />
             ))}
           </div>

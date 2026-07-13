@@ -262,6 +262,8 @@ export default function OrdersPage() {
         pairs,
         pairsPerCarton,
         cartons,
+        finished_good_id: item.finished_good_id || product?.id || "-",
+        product_id: item.product_id || item.article_code || product?.article_code || "-",
         product_size: item.product_size || product?.size || "-",
         warehouse_name: warehouseName,
       };
@@ -276,6 +278,12 @@ export default function OrdersPage() {
           <tr>
             <td style="border:1px solid black;padding:6px;text-align:center;">
               ${index + 1}
+            </td>
+            <td style="border:1px solid black;padding:6px;text-align:center;">
+              ${escapeHtml(item.finished_good_id)}
+            </td>
+            <td style="border:1px solid black;padding:6px;text-align:center;">
+              ${escapeHtml(item.product_id)}
             </td>
             <td style="border:1px solid black;padding:6px;">
               ${escapeHtml(item.product_size)}
@@ -456,9 +464,11 @@ export default function OrdersPage() {
             <thead>
               <tr>
                 <th width="3%">SN</th>
-                <th width="9%">Size</th>
-                <th width="30%">Description of Goods</th>
-                <th width="9%">Warehouse</th>
+                <th width="7%">F.G. ID</th>
+                <th width="11%">Product ID</th>
+                <th width="8%">Size</th>
+                <th width="27%">Description of Goods</th>
+                <th width="15%">Warehouse</th>
                 <th width="9%">Carton</th>
                 <th width="10%">Pairs</th>
               </tr>
@@ -470,10 +480,9 @@ export default function OrdersPage() {
 
           <table class="totals">
             <tr>
-              <td class="label" width="55%">Total</td>
-               <td class="value" width="18%"></td>
-              <td class="value" width="16%">${formatPrintNumber(totalCartons)}</td>
-              <td class="value" width="11%">${formatPrintNumber(totalPairs)} pairs</td>
+              <td class="label" width="81%">Total</td>
+              <td class="value" width="9%">${formatPrintNumber(totalCartons)}</td>
+              <td class="value" width="10%">${formatPrintNumber(totalPairs)} pairs</td>
             </tr>
           </table>
 

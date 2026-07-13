@@ -10,6 +10,7 @@ import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber, formatPrice } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
+import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
 
 const DEFAULT_DISPLAY_QUANTITY = 450;
 const managedUserRoles = new Set(["USER", "MEMBER", "ELDER"]);
@@ -878,6 +879,11 @@ export default function ProductDisplayPage() {
                               <StatusBadge tone={item.is_visible ? "success" : "neutral"}>
                                 {item.is_visible ? "Shown to users" : "Hidden from users"}
                               </StatusBadge>
+                              <div className="mt-2">
+                                <StatusBadge tone={isCommissionProduct(item) ? "warning" : "neutral"}>
+                                  {getCommissionLabel(item)}
+                                </StatusBadge>
+                              </div>
                             </div>
 
                             <div className="grid grid-cols-2 gap-2 text-sm">

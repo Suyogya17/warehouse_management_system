@@ -18,6 +18,7 @@ const initialForm = {
   role: "USER",
   country_code: "NP",
   currency_code: "NPR",
+  exchange_rate: 1,
 };
 
 const countries = [
@@ -29,6 +30,11 @@ const countries = [
 ];
 
 const currencies = ["NPR", "INR", "CNY", "USD", "GBP"];
+
+const defaultExchangeRates = {
+  NPR: 1,
+  INR: 1.6,
+};
 
 export default function UsersPage() {
   const { token, user: currentUser } = useAuth();
@@ -106,6 +112,7 @@ export default function UsersPage() {
       role: row.role || "USER",
       country_code: row.country_code || "NP",
       currency_code: row.currency_code || "NPR",
+      exchange_rate: Number(row.exchange_rate || defaultExchangeRates[row.currency_code] || 1),
     });
     setShowPassword(false);
   };
@@ -244,6 +251,8 @@ export default function UsersPage() {
                   ...current,
                   country_code: event.target.value,
                   currency_code: country?.currency || current.currency_code,
+                  exchange_rate:
+                    defaultExchangeRates[country?.currency] || current.exchange_rate || 1,
                 }));
               }}
             >
@@ -259,7 +268,11 @@ export default function UsersPage() {
             <SelectInput
               value={form.currency_code}
               onChange={(event) =>
-                setForm((current) => ({ ...current, currency_code: event.target.value }))
+                setForm((current) => ({
+                  ...current,
+                  currency_code: event.target.value,
+                  exchange_rate: defaultExchangeRates[event.target.value] || current.exchange_rate || 1,
+                }))
               }
             >
               {currencies.map((currency) => (
@@ -268,6 +281,19 @@ export default function UsersPage() {
                 </option>
               ))}
             </SelectInput>
+          </Field>
+
+          <Field label="Exchange rate" hint="NPR per 1 selected currency. INR should be 1.6.">
+            <TextInput
+              type="number"
+              min="0.000001"
+              step="0.000001"
+              value={form.exchange_rate}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, exchange_rate: event.target.value }))
+              }
+              required
+            />
           </Field>
 
           <div className="flex items-center gap-3 md:col-span-2 xl:col-span-4">
@@ -298,6 +324,7 @@ export default function UsersPage() {
                 "-",
             },
             { key: "currency_code", label: "Currency" },
+            { key: "exchange_rate", label: "Exchange rate" },
             { key: "created_at", label: "Created", type: "date" },
             {
               key: "actions",

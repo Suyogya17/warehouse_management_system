@@ -17,7 +17,11 @@ const hasColumn = async (tableName, columnName) => {
   );
 
   const exists = result.length > 0;
-  cache.set(key, exists);
+  if (exists) {
+    cache.set(key, exists);
+  } else {
+    cache.delete(key);
+  }
   return exists;
 };
 

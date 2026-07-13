@@ -146,7 +146,7 @@ const getAllPermissions = async (req, res, next) => {
     const supportsImage = await hasColumn('finished_goods', 'image_url');
     const supportsVisibility = await hasColumn('finished_goods', 'is_visible');
     const result = await query(
-      `SELECT upp.*, u.name AS user_name, u.email, u.role AS user_role,
+      `SELECT upp.*, u.name AS user_name, u.email, u.role AS user_role, u.country_code AS user_country_code,
               fg.name AS product_name, fg.article_code, fg.sole_code, fg.color,
               fg.size, fg.quantity, fg.min_quantity,
               ${supportsImage ? 'fg.image_url' : 'CAST(NULL AS CHAR) AS image_url'},

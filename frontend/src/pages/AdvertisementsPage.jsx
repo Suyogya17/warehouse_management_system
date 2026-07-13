@@ -29,9 +29,11 @@ const placementLabels = {
   BELOW_STATUS: "Carousel below status cards",
   FACEBOOK_FEED: "Facebook feed",
   INSTAGRAM_FEED: "Instagram feed",
+  NOTICE: "Published notice",
 };
 const normalizedPlacement = (item) => String(item?.placement || "BELOW_STATUS").trim().toUpperCase();
 const isFeedPlacement = (item) => ["FACEBOOK_FEED", "INSTAGRAM_FEED"].includes(normalizedPlacement(item));
+const isNotice = (item) => normalizedPlacement(item) === "NOTICE";
 
 const toLocalInput = (value) => (value ? String(value).replace(" ", "T").slice(0, 16) : "");
 
@@ -55,6 +57,7 @@ export default function AdvertisementsPage() {
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [draggedId, setDraggedId] = useState(null);
+  const isNoticeForm = form.placement === "NOTICE";
 
   const load = useCallback(async () => {
     const result = await api.getAdvertisements(token);
@@ -84,7 +87,13 @@ export default function AdvertisementsPage() {
       reset();
       await load();
       announceDataRefresh("advertisements");
-      showToast({ tone: "success", title: editingId ? "Advertisement updated" : "Advertisement created", message: "The user dashboard was refreshed." });
+      showToast({
+        tone: "success",
+        title: editingId
+          ? isNoticeForm ? "Notice updated" : "Advertisement updated"
+          : isNoticeForm ? "Notice published" : "Advertisement created",
+        message: "The user dashboard was refreshed.",
+      });
     } catch (error) {
       showToast({ tone: "error", title: "Advertisement save failed", message: error.message });
     } finally {
@@ -146,33 +155,57 @@ export default function AdvertisementsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="Customer communication" title="Advertisements" description="Create and schedule banners for the user dashboard." icon="image" />
+      <PageHeader eyebrow="Customer communication" title="Advertisements" description="Create banners and notices for the user dashboard." icon="image" />
 
-      <SectionCard title={editingId ? "Edit advertisement" : "Create advertisement"} subtitle="Choose carousel for banners, or feed placement for Facebook and Instagram style posts." icon="image">
+      <SectionCard title={editingId ? isNoticeForm ? "Edit notice" : "Edit advertisement" : isNoticeForm ? "Publish notice" : "Create advertisement"} subtitle="Choose a dashboard placement for banners, feeds, or notices." icon="image">
         <form onSubmit={submit} className="grid gap-4 p-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="flex gap-2 md:col-span-2 xl:col-span-4">
+            <button
+              type="button"
+              onClick={() => setForm((current) => ({ ...current, placement: "BELOW_STATUS", image: null }))}
+              className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                isNoticeForm
+                  ? "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                  : "border-indigo-500 bg-indigo-500 text-white"
+              }`}
+            >
+              Advertisement
+            </button>
+            <button
+              type="button"
+              onClick={() => setForm((current) => ({ ...current, placement: "NOTICE", image: null, link_url: "" }))}
+              className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                isNoticeForm
+                  ? "border-indigo-500 bg-indigo-500 text-white"
+                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              Publish notice
+            </button>
+          </div>
           <Field label="Title"><TextInput value={form.title} onChange={(e) => setForm((c) => ({ ...c, title: e.target.value }))} required /></Field>
-          <Field label="Link (optional)"><TextInput type="url" placeholder="https://..." value={form.link_url} onChange={(e) => setForm((c) => ({ ...c, link_url: e.target.value }))} /></Field>
+          {!isNoticeForm && <Field label="Link (optional)"><TextInput type="url" placeholder="https://..." value={form.link_url} onChange={(e) => setForm((c) => ({ ...c, link_url: e.target.value }))} /></Field>}
           <Field label="Start date"><TextInput type="datetime-local" value={form.starts_at} onChange={(e) => setForm((c) => ({ ...c, starts_at: e.target.value }))} /></Field>
           <Field label="End date"><TextInput type="datetime-local" value={form.ends_at} onChange={(e) => setForm((c) => ({ ...c, ends_at: e.target.value }))} /></Field>
-          <Field label="Message"><TextAreaInput value={form.message} onChange={(e) => setForm((c) => ({ ...c, message: e.target.value }))} /></Field>
-          <Field label="Banner image or video" hint="Use JPG/PNG images or MP4/WebM videos."><input type="file" accept="image/*,video/mp4,video/webm" onChange={(e) => setForm((c) => ({ ...c, image: e.target.files?.[0] || null }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" /></Field>
+          <Field label={isNoticeForm ? "Notice" : "Message"}><TextAreaInput value={form.message} onChange={(e) => setForm((c) => ({ ...c, message: e.target.value }))} /></Field>
+          {!isNoticeForm && <Field label="Banner image or video" hint="Use JPG/PNG images or MP4/WebM videos."><input type="file" accept="image/*,video/mp4,video/webm" onChange={(e) => setForm((c) => ({ ...c, image: e.target.files?.[0] || null }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" /></Field>}
           <Field label="Display order"><TextInput type="number" min="0" value={form.display_order} onChange={(e) => setForm((c) => ({ ...c, display_order: e.target.value }))} /></Field>
-          <Field label="Dashboard position">
+          {!isNoticeForm && <Field label="Dashboard position">
             <SelectInput value={form.placement} onChange={(e) => setForm((c) => ({ ...c, placement: e.target.value }))}>
               <option value="ABOVE_STATUS">Carousel above status cards</option>
               <option value="BELOW_STATUS">Carousel below status cards</option>
               <option value="FACEBOOK_FEED">Facebook feed</option>
               <option value="INSTAGRAM_FEED">Instagram feed</option>
             </SelectInput>
-          </Field>
-          <Field label="Banner width (%)" hint="Between 50% and 100% of the dashboard.">
+          </Field>}
+          {!isNoticeForm && <Field label="Banner width (%)" hint="Between 50% and 100% of the dashboard.">
             <TextInput type="number" min="50" max="100" step="5" value={form.width_percent} onChange={(e) => setForm((c) => ({ ...c, width_percent: e.target.value }))} required />
-          </Field>
-          <Field label="Banner height (px)" hint="Between 180px and 600px.">
+          </Field>}
+          {!isNoticeForm && <Field label="Banner height (px)" hint="Between 180px and 600px.">
             <TextInput type="number" min="180" max="600" step="10" value={form.height_px} onChange={(e) => setForm((c) => ({ ...c, height_px: e.target.value }))} required />
-          </Field>
+          </Field>}
           <Field label="Status"><label className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 px-3"><input type="checkbox" checked={form.is_active} onChange={(e) => setForm((c) => ({ ...c, is_active: e.target.checked }))} className="h-4 w-4 accent-indigo-600" /> Active</label></Field>
-          <div className="flex gap-3 md:col-span-2 xl:col-span-4"><Button type="submit" icon="check" disabled={saving}>{saving ? "Saving..." : editingId ? "Save changes" : "Create advertisement"}</Button>{editingId && <Button type="button" variant="secondary" onClick={reset}>Cancel</Button>}</div>
+          <div className="flex gap-3 md:col-span-2 xl:col-span-4"><Button type="submit" icon="check" disabled={saving}>{saving ? "Saving..." : editingId ? "Save changes" : isNoticeForm ? "Publish notice" : "Create advertisement"}</Button>{editingId && <Button type="button" variant="secondary" onClick={reset}>Cancel</Button>}</div>
         </form>
       </SectionCard>
 
@@ -188,7 +221,13 @@ export default function AdvertisementsPage() {
               onDrop={() => dropAdvertisement(item.id)}
               className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition ${Number(draggedId) === Number(item.id) ? "border-indigo-400 opacity-50" : "border-slate-200 hover:border-indigo-300"}`}
             >
-              {item.image_url ? (
+              {isNotice(item) ? (
+                <div className="border-l-4 border-amber-400 bg-amber-50 px-4 py-5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Published notice</p>
+                  <h3 className="mt-1 font-semibold text-slate-950">{item.title}</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-700">{item.message || "No message"}</p>
+                </div>
+              ) : item.image_url ? (
                 item.media_type === "VIDEO" ? (
                   <video src={`${APP_BASE_URL}${item.image_url}`} controls preload="metadata" className={`${isFeedPlacement(item) ? "aspect-square" : "aspect-[16/5]"} w-full bg-black object-cover`} />
                 ) : (

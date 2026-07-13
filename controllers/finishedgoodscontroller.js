@@ -21,6 +21,9 @@ const getActor = (req) => ({
 const getProductName = (product = {}) =>
   [product.name, product.article_code, product.color].filter(Boolean).join(' / ') || `Product #${product.id}`;
 
+const normalizeCommissionFlag = (value) =>
+  value === true || value === 1 || value === '1' || value === 'true' ? 1 : 0;
+
 const getFinishedGoodsOrderClause = async (alias = '') => {
   const prefix = alias ? `${alias}.` : '';
   const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
@@ -154,6 +157,7 @@ const create = async (req, res, next) => {
       unit,
       quantity,
       price,
+      is_commission,
       min_quantity,
       inner_box_per_pair,
       inner_boxes_per_outer_box
@@ -163,6 +167,7 @@ const create = async (req, res, next) => {
 
     const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
     const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
+    const supportsCommissionFlag = await hasColumn('finished_goods', 'is_commission');
     let nextDisplayOrder = null;
 
     if (supportsDisplayOrder) {
@@ -213,6 +218,11 @@ const create = async (req, res, next) => {
       baseValues.push(getDisplayQuantityLimit(quantity));
     }
 
+    if (supportsCommissionFlag) {
+      baseColumns.push('is_commission');
+      baseValues.push(normalizeCommissionFlag(is_commission));
+    }
+
     const { columns, values } = await appendFiscalInsertFields('finished_goods', baseColumns, baseValues);
     const sql = `
       INSERT INTO finished_goods (${columns.join(', ')})
@@ -261,10 +271,12 @@ const update = async (req, res, next) => {
       size,
       unit,
       price,
+      is_commission,
       min_quantity,
       inner_box_per_pair,           
       inner_boxes_per_outer_box
     } = req.body;
+    const supportsCommissionFlag = await hasColumn('finished_goods', 'is_commission');
 
     const existingRows = await query(
       'SELECT id, name, article_code, color, size, unit FROM finished_goods WHERE id = ? AND is_deleted = 0',
@@ -313,6 +325,11 @@ const update = async (req, res, next) => {
       parsedOuterBox,
 
     ];
+
+    if (supportsCommissionFlag) {
+      sql += `, is_commission = ?`;
+      params.push(normalizeCommissionFlag(is_commission));
+    }
 
     if (image_url) {
       sql += `, image_url = ?`;

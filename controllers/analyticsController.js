@@ -638,6 +638,7 @@ const getSales = async (req, res, next) => {
       monthlyOrderTrend,
       dailyOrderTrend,
       topSellingProducts,
+      productDailyTrend,
       orderStatusSummary,
       fulfilledDeliveredOrders,
     ] = await Promise.all([
@@ -674,6 +675,29 @@ const getSales = async (req, res, next) => {
          LIMIT 20`
       ),
       run(
+        `SELECT fg.id AS finished_good_id,
+                fg.name, fg.article_code, fg.color, fg.size, fg.unit,
+                DATE_FORMAT(o.created_at, '%Y-%m-%d') AS day,
+                COUNT(DISTINCT o.id) AS order_count,
+                COALESCE(SUM(oi.qty_ordered), 0) AS total_quantity
+         FROM order_items oi
+         JOIN orders o ON o.id = oi.order_id
+         JOIN finished_goods fg ON fg.id = oi.finished_good_id
+         JOIN (
+           SELECT oi2.finished_good_id
+           FROM order_items oi2
+           JOIN orders o2 ON o2.id = oi2.order_id
+           WHERE o2.status <> 'CANCELLED'
+           GROUP BY oi2.finished_good_id
+           ORDER BY COALESCE(SUM(oi2.qty_ordered), 0) DESC
+           LIMIT 20
+         ) top_products ON top_products.finished_good_id = oi.finished_good_id
+         WHERE o.status <> 'CANCELLED'
+           AND o.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 180 DAY)
+         GROUP BY fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit, DATE_FORMAT(o.created_at, '%Y-%m-%d')
+         ORDER BY fg.id, day`
+      ),
+      run(
         `SELECT status,
                 COUNT(*) AS order_count
          FROM orders
@@ -698,6 +722,7 @@ const getSales = async (req, res, next) => {
         monthly_order_trend: mapNumeric(monthlyOrderTrend, ["order_count", "total_quantity"]),
         daily_order_trend: mapNumeric(dailyOrderTrend, ["order_count", "total_quantity"]),
         top_selling_products: mapNumeric(topSellingProducts, ["total_quantity", "order_count"]),
+        product_daily_order_trend: mapNumeric(productDailyTrend, ["order_count", "total_quantity"]),
         order_status_summary: mapNumeric(orderStatusSummary, ["order_count"]),
         fulfilled_delivered_orders: mapNumeric(fulfilledDeliveredOrders, ["total_quantity"]),
       },

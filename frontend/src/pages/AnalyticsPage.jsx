@@ -56,6 +56,23 @@ function ChartFrame({ children, height = 300 }) {
   return <div className="h-[300px] w-full px-2 py-4 md:px-6" style={{ height }}>{children}</div>;
 }
 
+function ChartSummary({ items = [] }) {
+  if (!items.length) return null;
+
+  return (
+    <div className="grid gap-3 px-4 pt-4 sm:grid-cols-2 xl:grid-cols-4">
+      {items.map((item) => (
+        <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+          <p className="mt-1 text-xl font-semibold text-slate-950">{item.value}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const sumRows = (rows = [], key) => rows.reduce((sum, row) => sum + Number(row[key] || 0), 0);
+
 function WorkflowTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
 
@@ -150,6 +167,14 @@ function DashboardTab({ data }) {
       </div>
 
       <SectionCard title="Customer Catalog by Country" subtitle="How many products customers can see in Nepal and India." icon="eye">
+        <ChartSummary
+          items={[
+            { label: "Countries", value: formatNumber(countryVisibilitySummary.length) },
+            { label: "Can See", value: formatNumber(totalShownProducts) },
+            { label: "Hidden", value: formatNumber(totalOnHoldProducts) },
+            { label: "Visible Stock", value: formatNumber(totalShownStock) },
+          ]}
+        />
         <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
           <ChartFrame height={280}>
             <ResponsiveContainer width="100%" height="100%">
@@ -185,6 +210,13 @@ function DashboardTab({ data }) {
       </SectionCard>
 
       <SectionCard title="Hidden Products by Country" subtitle="Products that no customer can see in each country." icon="eye">
+        <ChartSummary
+          items={[
+            { label: "Countries", value: formatNumber(countryVisibilitySummary.length) },
+            { label: "Hidden Products", value: formatNumber(totalOnHoldProducts) },
+            { label: "Hidden Stock", value: formatNumber(totalOnHoldStock) },
+          ]}
+        />
         <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
           <ChartFrame height={260}>
             <ResponsiveContainer width="100%" height="100%">
@@ -462,14 +494,26 @@ function ProductionTab({ data }) {
   );
   const productionUserChartHeight = Math.max(300, productionUserRows.length * 44 + 96);
   const producedProductChartHeight = Math.max(300, producedProductRows.length * 44 + 96);
+  const monthlyProductionRows = data?.monthly_production_trend || [];
+  const totalProducedQty = sumRows(monthlyProductionRows, "total_quantity");
+  const totalProductionRuns = sumRows(monthlyProductionRows, "production_runs");
+  const topProducedProduct = producedProductRows[0];
+  const topProductionUser = productionUserRows[0];
 
   return (
     <div className="space-y-4">
       <div className="grid gap-4 xl:grid-cols-2">
         <SectionCard title="Monthly Production Trend" icon="production">
+          <ChartSummary
+            items={[
+              { label: "Months", value: formatNumber(monthlyProductionRows.length) },
+              { label: "Produced Qty", value: formatNumber(totalProducedQty) },
+              { label: "Production Runs", value: formatNumber(totalProductionRuns) },
+            ]}
+          />
           <ChartFrame>
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data?.monthly_production_trend || []} margin={{ top: 8, right: 18, bottom: 8, left: 0 }}>
+              <LineChart data={monthlyProductionRows} margin={{ top: 8, right: 18, bottom: 8, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                 <YAxis tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
@@ -484,30 +528,40 @@ function ProductionTab({ data }) {
 
         <SectionCard title="Production By User" icon="users">
           {productionUserRows.length ? (
-            <ChartFrame height={productionUserChartHeight}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={productionUserRows}
-                  layout="vertical"
-                  margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
-                  barCategoryGap={12}
-                >
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                  <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                  <YAxis
-                    type="category"
-                    dataKey="user_label"
-                    width={118}
-                    tick={{ fontSize: 12, fill: "#475569" }}
-                    interval={0}
-                  />
-                  <Tooltip content={<WorkflowTooltip />} />
-                  <Bar dataKey="total_quantity" name="Produced Qty" fill="#0f766e" radius={[0, 6, 6, 0]}>
-                    <LabelList dataKey="total_quantity" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartFrame>
+            <>
+              <ChartSummary
+                items={[
+                  { label: "Users", value: formatNumber(productionUserRows.length) },
+                  { label: "Produced Qty", value: formatNumber(sumRows(productionUserRows, "total_quantity")) },
+                  { label: "Runs", value: formatNumber(sumRows(productionUserRows, "production_runs")) },
+                  { label: "Top User", value: topProductionUser?.user_name || "-" },
+                ]}
+              />
+              <ChartFrame height={productionUserChartHeight}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={productionUserRows}
+                    layout="vertical"
+                    margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
+                    barCategoryGap={12}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                    <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                    <YAxis
+                      type="category"
+                      dataKey="user_label"
+                      width={118}
+                      tick={{ fontSize: 12, fill: "#475569" }}
+                      interval={0}
+                    />
+                    <Tooltip content={<WorkflowTooltip />} />
+                    <Bar dataKey="total_quantity" name="Produced Qty" fill="#0f766e" radius={[0, 6, 6, 0]}>
+                      <LabelList dataKey="total_quantity" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartFrame>
+            </>
           ) : (
             <div className="px-6 py-10 text-sm text-slate-500">No user production to chart yet.</div>
           )}
@@ -516,30 +570,40 @@ function ProductionTab({ data }) {
 
       <SectionCard title="Top Produced Products Chart" subtitle="Products ranked by produced quantity." icon="finishedGoods">
         {producedProductRows.length ? (
-          <ChartFrame height={producedProductChartHeight}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={producedProductRows}
-                layout="vertical"
-                margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
-                barCategoryGap={12}
-              >
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                <YAxis
-                  type="category"
-                  dataKey="product_label"
-                  width={150}
-                  tick={{ fontSize: 12, fill: "#475569" }}
-                  interval={0}
-                />
-                <Tooltip content={<WorkflowTooltip />} />
-                <Bar dataKey="total_quantity" name="Produced Qty" fill="#4f46e5" radius={[0, 6, 6, 0]}>
-                  <LabelList dataKey="total_quantity" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartFrame>
+          <>
+            <ChartSummary
+              items={[
+                { label: "Products", value: formatNumber(producedProductRows.length) },
+                { label: "Produced Qty", value: formatNumber(sumRows(producedProductRows, "total_quantity")) },
+                { label: "Runs", value: formatNumber(sumRows(producedProductRows, "production_runs")) },
+                { label: "Top Product", value: topProducedProduct?.tooltip_label || "-" },
+              ]}
+            />
+            <ChartFrame height={producedProductChartHeight}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={producedProductRows}
+                  layout="vertical"
+                  margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
+                  barCategoryGap={12}
+                >
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                  <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                  <YAxis
+                    type="category"
+                    dataKey="product_label"
+                    width={150}
+                    tick={{ fontSize: 12, fill: "#475569" }}
+                    interval={0}
+                  />
+                  <Tooltip content={<WorkflowTooltip />} />
+                  <Bar dataKey="total_quantity" name="Produced Qty" fill="#4f46e5" radius={[0, 6, 6, 0]}>
+                    <LabelList dataKey="total_quantity" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </ChartFrame>
+          </>
         ) : (
           <div className="px-6 py-10 text-sm text-slate-500">No produced products to chart yet.</div>
         )}
@@ -585,6 +649,7 @@ function ProductionTab({ data }) {
 function SalesTab({ data }) {
   const [trendMode, setTrendMode] = useState("month");
   const [expandedTrend, setExpandedTrend] = useState(false);
+  const [selectedProductId, setSelectedProductId] = useState("");
   const statusRows = useMemo(
     () =>
       (data?.order_status_summary || [])
@@ -613,12 +678,36 @@ function SalesTab({ data }) {
         }),
     [data?.top_selling_products]
   );
+  const productOptions = useMemo(
+    () =>
+      (data?.top_selling_products || []).map((row) => ({
+        id: String(row.id),
+        label: productName(row),
+      })),
+    [data?.top_selling_products]
+  );
   const statusChartHeight = Math.max(260, statusRows.length * 46 + 72);
   const sellingProductChartHeight = Math.max(300, sellingProductRows.length * 44 + 96);
   const trendRows = trendMode === "day" ? data?.daily_order_trend || [] : data?.monthly_order_trend || [];
   const trendLabelKey = trendMode === "day" ? "day" : "month";
   const trendTitle = trendMode === "day" ? "Daily Order Trend" : "Monthly Order Trend";
   const trendHeight = expandedTrend ? 520 : 340;
+  const selectedProduct = productOptions.find((product) => product.id === selectedProductId);
+  const selectedProductTrendRows = (data?.product_daily_order_trend || []).filter(
+    (row) => String(row.finished_good_id) === selectedProductId
+  );
+  const topSellingProduct = sellingProductRows[0];
+
+  useEffect(() => {
+    if (!productOptions.length) {
+      setSelectedProductId("");
+      return;
+    }
+
+    if (!productOptions.some((product) => product.id === selectedProductId)) {
+      setSelectedProductId(productOptions[0].id);
+    }
+  }, [productOptions, selectedProductId]);
 
   return (
     <div className="space-y-4">
@@ -665,27 +754,36 @@ function SalesTab({ data }) {
         }
       >
         {trendRows.length ? (
-          <ChartFrame height={trendHeight}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trendRows} margin={{ top: 8, right: 36, bottom: expandedTrend ? 28 : 8, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis
-                  dataKey={trendLabelKey}
-                  tick={{ fontSize: 12 }}
-                  angle={trendMode === "day" && expandedTrend ? -35 : 0}
-                  textAnchor={trendMode === "day" && expandedTrend ? "end" : "middle"}
-                  interval={trendMode === "day" ? (expandedTrend ? 4 : 9) : 0}
-                  height={trendMode === "day" && expandedTrend ? 56 : 30}
-                />
-                <YAxis yAxisId="orders" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                <YAxis yAxisId="quantity" orientation="right" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                <Tooltip formatter={numberTooltip} />
-                <Legend />
-                <Line yAxisId="orders" type="monotone" dataKey="order_count" name="Orders" stroke="#4f46e5" strokeWidth={2} />
-                <Line yAxisId="quantity" type="monotone" dataKey="total_quantity" name="Qty Ordered" stroke="#dc2626" strokeWidth={2} />
-              </LineChart>
-            </ResponsiveContainer>
-          </ChartFrame>
+          <>
+            <ChartSummary
+              items={[
+                { label: trendMode === "day" ? "Days" : "Months", value: formatNumber(trendRows.length) },
+                { label: "Orders", value: formatNumber(sumRows(trendRows, "order_count")) },
+                { label: "Qty Ordered", value: formatNumber(sumRows(trendRows, "total_quantity")) },
+              ]}
+            />
+            <ChartFrame height={trendHeight}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={trendRows} margin={{ top: 8, right: 36, bottom: expandedTrend ? 28 : 8, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis
+                    dataKey={trendLabelKey}
+                    tick={{ fontSize: 12 }}
+                    angle={trendMode === "day" && expandedTrend ? -35 : 0}
+                    textAnchor={trendMode === "day" && expandedTrend ? "end" : "middle"}
+                    interval={trendMode === "day" ? (expandedTrend ? 4 : 9) : 0}
+                    height={trendMode === "day" && expandedTrend ? 56 : 30}
+                  />
+                  <YAxis yAxisId="orders" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="quantity" orientation="right" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                  <Tooltip formatter={numberTooltip} />
+                  <Legend />
+                  <Line yAxisId="orders" type="monotone" dataKey="order_count" name="Orders" stroke="#4f46e5" strokeWidth={2} />
+                  <Line yAxisId="quantity" type="monotone" dataKey="total_quantity" name="Qty Ordered" stroke="#dc2626" strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
+            </ChartFrame>
+          </>
         ) : (
           <div className="px-6 py-10 text-sm text-slate-500">No sales trend data to chart yet.</div>
         )}
@@ -694,30 +792,39 @@ function SalesTab({ data }) {
       <div className="grid gap-4 xl:grid-cols-2">
         <SectionCard title="Order Status Summary" icon="orders">
           {statusRows.length ? (
-            <ChartFrame height={statusChartHeight}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={statusRows}
-                  layout="vertical"
-                  margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
-                  barCategoryGap={14}
-                >
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                  <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                  <YAxis
-                    type="category"
-                    dataKey="status_label"
-                    width={112}
-                    tick={{ fontSize: 12, fill: "#475569" }}
-                    interval={0}
-                  />
-                  <Tooltip content={<WorkflowTooltip />} />
-                  <Bar dataKey="order_count" name="Orders" fill="#7c3aed" radius={[0, 6, 6, 0]}>
-                    <LabelList dataKey="order_count" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartFrame>
+            <>
+              <ChartSummary
+                items={[
+                  { label: "Statuses", value: formatNumber(statusRows.length) },
+                  { label: "Orders", value: formatNumber(sumRows(statusRows, "order_count")) },
+                  { label: "Top Status", value: statusRows[0]?.status || "-" },
+                ]}
+              />
+              <ChartFrame height={statusChartHeight}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={statusRows}
+                    layout="vertical"
+                    margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
+                    barCategoryGap={14}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                    <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                    <YAxis
+                      type="category"
+                      dataKey="status_label"
+                      width={112}
+                      tick={{ fontSize: 12, fill: "#475569" }}
+                      interval={0}
+                    />
+                    <Tooltip content={<WorkflowTooltip />} />
+                    <Bar dataKey="order_count" name="Orders" fill="#7c3aed" radius={[0, 6, 6, 0]}>
+                      <LabelList dataKey="order_count" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartFrame>
+            </>
           ) : (
             <div className="px-6 py-10 text-sm text-slate-500">No order status data to chart yet.</div>
           )}
@@ -726,32 +833,92 @@ function SalesTab({ data }) {
 
       <SectionCard title="Top Selling Products Chart" subtitle="Products ranked by ordered quantity." icon="finishedGoods">
         {sellingProductRows.length ? (
-          <ChartFrame height={sellingProductChartHeight}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={sellingProductRows}
-                layout="vertical"
-                margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
-                barCategoryGap={12}
-              >
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                <YAxis
-                  type="category"
-                  dataKey="product_label"
-                  width={150}
-                  tick={{ fontSize: 12, fill: "#475569" }}
-                  interval={0}
-                />
-                <Tooltip content={<WorkflowTooltip />} />
-                <Bar dataKey="total_quantity" name="Qty Ordered" fill="#dc2626" radius={[0, 6, 6, 0]}>
-                  <LabelList dataKey="total_quantity" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartFrame>
+          <>
+            <ChartSummary
+              items={[
+                { label: "Products", value: formatNumber(sellingProductRows.length) },
+                { label: "Qty Ordered", value: formatNumber(sumRows(sellingProductRows, "total_quantity")) },
+                { label: "Orders", value: formatNumber(sumRows(sellingProductRows, "order_count")) },
+                { label: "Top Product", value: topSellingProduct?.tooltip_label || "-" },
+              ]}
+            />
+            <ChartFrame height={sellingProductChartHeight}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={sellingProductRows}
+                  layout="vertical"
+                  margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
+                  barCategoryGap={12}
+                >
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                  <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                  <YAxis
+                    type="category"
+                    dataKey="product_label"
+                    width={150}
+                    tick={{ fontSize: 12, fill: "#475569" }}
+                    interval={0}
+                  />
+                  <Tooltip content={<WorkflowTooltip />} />
+                  <Bar dataKey="total_quantity" name="Qty Ordered" fill="#dc2626" radius={[0, 6, 6, 0]}>
+                    <LabelList dataKey="total_quantity" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </ChartFrame>
+          </>
         ) : (
           <div className="px-6 py-10 text-sm text-slate-500">No product sales to chart yet.</div>
+        )}
+      </SectionCard>
+
+      <SectionCard
+        title="Individual Product Sales Trend"
+        subtitle={selectedProduct ? `Daily movement for ${selectedProduct.label}.` : "Select a product to see daily sales movement."}
+        icon="orders"
+        actions={
+          productOptions.length ? (
+            <select
+              value={selectedProductId}
+              onChange={(event) => setSelectedProductId(event.target.value)}
+              className="h-9 min-w-[260px] rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            >
+              {productOptions.map((product) => (
+                <option key={product.id} value={product.id}>
+                  {product.label}
+                </option>
+              ))}
+            </select>
+          ) : null
+        }
+      >
+        {selectedProductTrendRows.length ? (
+          <>
+            <ChartSummary
+              items={[
+                { label: "Order Dates", value: formatNumber(selectedProductTrendRows.length) },
+                { label: "Orders", value: formatNumber(sumRows(selectedProductTrendRows, "order_count")) },
+                { label: "Qty Ordered", value: formatNumber(sumRows(selectedProductTrendRows, "total_quantity")) },
+                { label: "Last Order Date", value: selectedProductTrendRows.at(-1)?.day || "-" },
+              ]}
+            />
+            <ChartFrame height={360}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={selectedProductTrendRows} margin={{ top: 8, right: 36, bottom: 28, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="day" tick={{ fontSize: 12 }} angle={-30} textAnchor="end" interval="preserveStartEnd" height={56} />
+                  <YAxis yAxisId="orders" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="quantity" orientation="right" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                  <Tooltip formatter={numberTooltip} />
+                  <Legend />
+                  <Line yAxisId="orders" type="monotone" dataKey="order_count" name="Orders" stroke="#4f46e5" strokeWidth={2} />
+                  <Line yAxisId="quantity" type="monotone" dataKey="total_quantity" name="Qty Ordered" stroke="#0f766e" strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
+            </ChartFrame>
+          </>
+        ) : (
+          <div className="px-6 py-10 text-sm text-slate-500">No daily trend found for this product yet.</div>
         )}
       </SectionCard>
 
@@ -852,36 +1019,49 @@ function DealersTab({ data }) {
   const dealerQuantityChartHeight = Math.max(300, dealerQuantityRows.length * 44 + 96);
   const dealerOrderChartHeight = Math.max(300, dealerOrderRows.length * 44 + 96);
   const dealerStatusChartHeight = Math.max(300, dealerStatusRows.length * 44 + 96);
+  const topDealerByQuantity = dealerQuantityRows[0];
+  const topDealerByOrders = dealerOrderRows[0];
+  const topDealerByStatus = dealerStatusRows[0];
 
   return (
     <div className="space-y-4">
       <div className="grid gap-4 xl:grid-cols-2">
         <SectionCard title="Dealer Quantity Ranking" subtitle="Top dealers by total quantity ordered." icon="users">
           {dealerQuantityRows.length ? (
-            <ChartFrame height={dealerQuantityChartHeight}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={dealerQuantityRows}
-                  layout="vertical"
-                  margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
-                  barCategoryGap={12}
-                >
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                  <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                  <YAxis
-                    type="category"
-                    dataKey="dealer_label"
-                    width={136}
-                    tick={{ fontSize: 12, fill: "#475569" }}
-                    interval={0}
-                  />
-                  <Tooltip content={<WorkflowTooltip />} />
-                  <Bar dataKey="total_quantity" name="Qty Ordered" fill="#0f766e" radius={[0, 6, 6, 0]}>
-                    <LabelList dataKey="total_quantity" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartFrame>
+            <>
+              <ChartSummary
+                items={[
+                  { label: "Dealers", value: formatNumber(dealerQuantityRows.length) },
+                  { label: "Qty Ordered", value: formatNumber(sumRows(dealerQuantityRows, "total_quantity")) },
+                  { label: "Orders", value: formatNumber(sumRows(dealerQuantityRows, "order_count")) },
+                  { label: "Top Dealer", value: topDealerByQuantity?.dealer_name || "-" },
+                ]}
+              />
+              <ChartFrame height={dealerQuantityChartHeight}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={dealerQuantityRows}
+                    layout="vertical"
+                    margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
+                    barCategoryGap={12}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                    <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                    <YAxis
+                      type="category"
+                      dataKey="dealer_label"
+                      width={136}
+                      tick={{ fontSize: 12, fill: "#475569" }}
+                      interval={0}
+                    />
+                    <Tooltip content={<WorkflowTooltip />} />
+                    <Bar dataKey="total_quantity" name="Qty Ordered" fill="#0f766e" radius={[0, 6, 6, 0]}>
+                      <LabelList dataKey="total_quantity" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartFrame>
+            </>
           ) : (
             <div className="px-6 py-10 text-sm text-slate-500">No dealer quantity to chart yet.</div>
           )}
@@ -889,30 +1069,40 @@ function DealersTab({ data }) {
 
         <SectionCard title="Dealer Order Ranking" subtitle="Top dealers by number of orders." icon="orders">
           {dealerOrderRows.length ? (
-            <ChartFrame height={dealerOrderChartHeight}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={dealerOrderRows}
-                  layout="vertical"
-                  margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
-                  barCategoryGap={12}
-                >
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                  <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                  <YAxis
-                    type="category"
-                    dataKey="dealer_label"
-                    width={136}
-                    tick={{ fontSize: 12, fill: "#475569" }}
-                    interval={0}
-                  />
-                  <Tooltip content={<WorkflowTooltip />} />
-                  <Bar dataKey="order_count" name="Orders" fill="#4f46e5" radius={[0, 6, 6, 0]}>
-                    <LabelList dataKey="order_count" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartFrame>
+            <>
+              <ChartSummary
+                items={[
+                  { label: "Dealers", value: formatNumber(dealerOrderRows.length) },
+                  { label: "Orders", value: formatNumber(sumRows(dealerOrderRows, "order_count")) },
+                  { label: "Qty Ordered", value: formatNumber(sumRows(dealerOrderRows, "total_quantity")) },
+                  { label: "Top Dealer", value: topDealerByOrders?.dealer_name || "-" },
+                ]}
+              />
+              <ChartFrame height={dealerOrderChartHeight}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={dealerOrderRows}
+                    layout="vertical"
+                    margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
+                    barCategoryGap={12}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                    <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                    <YAxis
+                      type="category"
+                      dataKey="dealer_label"
+                      width={136}
+                      tick={{ fontSize: 12, fill: "#475569" }}
+                      interval={0}
+                    />
+                    <Tooltip content={<WorkflowTooltip />} />
+                    <Bar dataKey="order_count" name="Orders" fill="#4f46e5" radius={[0, 6, 6, 0]}>
+                      <LabelList dataKey="order_count" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartFrame>
+            </>
           ) : (
             <div className="px-6 py-10 text-sm text-slate-500">No dealer orders to chart yet.</div>
           )}
@@ -921,36 +1111,46 @@ function DealersTab({ data }) {
 
       <SectionCard title="Dealer Orders By Status" subtitle="Top dealers split by current order status." icon="orders">
         {dealerStatusRows.length ? (
-          <ChartFrame height={dealerStatusChartHeight}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={dealerStatusRows}
-                layout="vertical"
-                margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
-                barCategoryGap={12}
-              >
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                <YAxis
-                  type="category"
-                  dataKey="dealer_label"
-                  width={136}
-                  tick={{ fontSize: 12, fill: "#475569" }}
-                  interval={0}
-                />
-                <Tooltip content={<WorkflowTooltip />} />
-                <Legend verticalAlign="top" height={32} />
-                <Bar dataKey="PENDING" name="Pending" stackId="dealerStatus" fill="#f59e0b" />
-                <Bar dataKey="CONFIRMED" name="Confirmed" stackId="dealerStatus" fill="#059669" />
-                <Bar dataKey="PACKED" name="Packed" stackId="dealerStatus" fill="#4f46e5" />
-                <Bar dataKey="DELIVERED" name="Delivered" stackId="dealerStatus" fill="#0f766e" />
-                <Bar dataKey="FULFILLED" name="Fulfilled" stackId="dealerStatus" fill="#22c55e" />
-                <Bar dataKey="CANCELLED" name="Cancelled" stackId="dealerStatus" fill="#dc2626" radius={[0, 6, 6, 0]}>
-                  <LabelList dataKey="total_orders" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartFrame>
+          <>
+            <ChartSummary
+              items={[
+                { label: "Dealers", value: formatNumber(dealerStatusRows.length) },
+                { label: "Orders", value: formatNumber(sumRows(dealerStatusRows, "total_orders")) },
+                { label: "Pending", value: formatNumber(sumRows(dealerStatusRows, "PENDING")) },
+                { label: "Top Dealer", value: topDealerByStatus?.dealer_name || "-" },
+              ]}
+            />
+            <ChartFrame height={dealerStatusChartHeight}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={dealerStatusRows}
+                  layout="vertical"
+                  margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
+                  barCategoryGap={12}
+                >
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                  <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                  <YAxis
+                    type="category"
+                    dataKey="dealer_label"
+                    width={136}
+                    tick={{ fontSize: 12, fill: "#475569" }}
+                    interval={0}
+                  />
+                  <Tooltip content={<WorkflowTooltip />} />
+                  <Legend verticalAlign="top" height={32} />
+                  <Bar dataKey="PENDING" name="Pending" stackId="dealerStatus" fill="#f59e0b" />
+                  <Bar dataKey="CONFIRMED" name="Confirmed" stackId="dealerStatus" fill="#059669" />
+                  <Bar dataKey="PACKED" name="Packed" stackId="dealerStatus" fill="#4f46e5" />
+                  <Bar dataKey="DELIVERED" name="Delivered" stackId="dealerStatus" fill="#0f766e" />
+                  <Bar dataKey="FULFILLED" name="Fulfilled" stackId="dealerStatus" fill="#22c55e" />
+                  <Bar dataKey="CANCELLED" name="Cancelled" stackId="dealerStatus" fill="#dc2626" radius={[0, 6, 6, 0]}>
+                    <LabelList dataKey="total_orders" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </ChartFrame>
+          </>
         ) : (
           <div className="px-6 py-10 text-sm text-slate-500">No dealer status data to chart yet.</div>
         )}
@@ -1068,6 +1268,7 @@ function UsersTab({ data }) {
     [data?.user_workflow_report]
   );
   const chartHeight = Math.max(300, chartRows.length * 44 + 96);
+  const topWorkflowUser = chartRows[0];
 
   return (
     <div className="space-y-4">
@@ -1093,33 +1294,43 @@ function UsersTab({ data }) {
       <div className="grid gap-4 xl:grid-cols-2">
         <SectionCard title="Orders Handled By User" subtitle="Top users ranked by total workflow actions." icon="users">
           {chartRows.length ? (
-            <ChartFrame height={chartHeight}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={chartRows}
-                  layout="vertical"
-                  margin={{ top: 8, right: 28, bottom: 8, left: 10 }}
-                  barCategoryGap={12}
-                >
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                  <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                  <YAxis
-                    type="category"
-                    dataKey="user_label"
-                    width={118}
-                    tick={{ fontSize: 12, fill: "#475569" }}
-                    interval={0}
-                  />
-                  <Tooltip content={<WorkflowTooltip />} />
-                  <Legend verticalAlign="top" height={32} />
-                  <Bar dataKey="confirmed_orders" name="Confirmed" stackId="orders" fill="#059669" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="packed_orders" name="Packed" stackId="orders" fill="#4f46e5" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="delivered_orders" name="Delivered" stackId="orders" fill="#dc2626" radius={[0, 6, 6, 0]}>
-                    <LabelList dataKey="total_actions" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartFrame>
+            <>
+              <ChartSummary
+                items={[
+                  { label: "Users", value: formatNumber(chartRows.length) },
+                  { label: "Total Actions", value: formatNumber(sumRows(chartRows, "total_actions")) },
+                  { label: "Delivered", value: formatNumber(sumRows(chartRows, "delivered_orders")) },
+                  { label: "Top User", value: topWorkflowUser?.user_name || "-" },
+                ]}
+              />
+              <ChartFrame height={chartHeight}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={chartRows}
+                    layout="vertical"
+                    margin={{ top: 8, right: 28, bottom: 8, left: 10 }}
+                    barCategoryGap={12}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                    <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                    <YAxis
+                      type="category"
+                      dataKey="user_label"
+                      width={118}
+                      tick={{ fontSize: 12, fill: "#475569" }}
+                      interval={0}
+                    />
+                    <Tooltip content={<WorkflowTooltip />} />
+                    <Legend verticalAlign="top" height={32} />
+                    <Bar dataKey="confirmed_orders" name="Confirmed" stackId="orders" fill="#059669" radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="packed_orders" name="Packed" stackId="orders" fill="#4f46e5" radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="delivered_orders" name="Delivered" stackId="orders" fill="#dc2626" radius={[0, 6, 6, 0]}>
+                      <LabelList dataKey="total_actions" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartFrame>
+            </>
           ) : (
             <div className="px-6 py-10 text-sm text-slate-500">No workflow activity to chart yet.</div>
           )}
@@ -1127,33 +1338,43 @@ function UsersTab({ data }) {
 
         <SectionCard title="Quantity Handled By User" subtitle="Total product quantity across confirmed, packed, and delivered stages." icon="orders">
           {chartRows.length ? (
-            <ChartFrame height={chartHeight}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={chartRows}
-                  layout="vertical"
-                  margin={{ top: 8, right: 28, bottom: 8, left: 10 }}
-                  barCategoryGap={12}
-                >
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                  <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                  <YAxis
-                    type="category"
-                    dataKey="user_label"
-                    width={118}
-                    tick={{ fontSize: 12, fill: "#475569" }}
-                    interval={0}
-                  />
-                  <Tooltip content={<WorkflowTooltip />} />
-                  <Legend verticalAlign="top" height={32} />
-                  <Bar dataKey="confirmed_quantity" name="Confirmed Qty" stackId="quantity" fill="#0f766e" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="packed_quantity" name="Packed Qty" stackId="quantity" fill="#7c3aed" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="delivered_quantity" name="Delivered Qty" stackId="quantity" fill="#ea580c" radius={[0, 6, 6, 0]}>
-                    <LabelList dataKey="total_quantity_handled" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartFrame>
+            <>
+              <ChartSummary
+                items={[
+                  { label: "Users", value: formatNumber(chartRows.length) },
+                  { label: "Total Qty", value: formatNumber(sumRows(chartRows, "total_quantity_handled")) },
+                  { label: "Delivered Qty", value: formatNumber(sumRows(chartRows, "delivered_quantity")) },
+                  { label: "Top User", value: topWorkflowUser?.user_name || "-" },
+                ]}
+              />
+              <ChartFrame height={chartHeight}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={chartRows}
+                    layout="vertical"
+                    margin={{ top: 8, right: 28, bottom: 8, left: 10 }}
+                    barCategoryGap={12}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                    <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                    <YAxis
+                      type="category"
+                      dataKey="user_label"
+                      width={118}
+                      tick={{ fontSize: 12, fill: "#475569" }}
+                      interval={0}
+                    />
+                    <Tooltip content={<WorkflowTooltip />} />
+                    <Legend verticalAlign="top" height={32} />
+                    <Bar dataKey="confirmed_quantity" name="Confirmed Qty" stackId="quantity" fill="#0f766e" radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="packed_quantity" name="Packed Qty" stackId="quantity" fill="#7c3aed" radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="delivered_quantity" name="Delivered Qty" stackId="quantity" fill="#ea580c" radius={[0, 6, 6, 0]}>
+                      <LabelList dataKey="total_quantity_handled" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartFrame>
+            </>
           ) : (
             <div className="px-6 py-10 text-sm text-slate-500">No workflow quantity to chart yet.</div>
           )}
@@ -1216,6 +1437,7 @@ function SupportTab({ data }) {
     [data?.make_recommendations]
   );
   const makeSuggestionChartHeight = Math.max(300, makeSuggestionRows.length * 46 + 108);
+  const topMakeSuggestion = makeSuggestionRows[0];
 
   return (
     <div className="space-y-4">
@@ -1228,31 +1450,41 @@ function SupportTab({ data }) {
 
       <SectionCard title="Products Suitable To Make" subtitle="Recommended products ranked by shortage, demand, and stock level." icon="production">
         {makeSuggestionRows.length ? (
-          <ChartFrame height={makeSuggestionChartHeight}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={makeSuggestionRows}
-                layout="vertical"
-                margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
-                barCategoryGap={12}
-              >
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                <YAxis
-                  type="category"
-                  dataKey="product_label"
-                  width={166}
-                  tick={{ fontSize: 12, fill: "#475569" }}
-                  interval={0}
-                />
-                <Tooltip content={<WorkflowTooltip />} />
-                <Legend verticalAlign="top" height={32} />
-                <Bar dataKey="suggested_quantity" name="Suggested Qty" fill="#dc2626" radius={[0, 6, 6, 0]}>
-                  <LabelList dataKey="suggested_quantity" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartFrame>
+          <>
+            <ChartSummary
+              items={[
+                { label: "Products", value: formatNumber(makeSuggestionRows.length) },
+                { label: "Suggested Qty", value: formatNumber(sumRows(makeSuggestionRows, "suggested_quantity")) },
+                { label: "Urgent Shortages", value: formatNumber(summary.urgent_order_shortage_count) },
+                { label: "Top Product", value: topMakeSuggestion?.tooltip_label || "-" },
+              ]}
+            />
+            <ChartFrame height={makeSuggestionChartHeight}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={makeSuggestionRows}
+                  layout="vertical"
+                  margin={{ top: 8, right: 34, bottom: 8, left: 10 }}
+                  barCategoryGap={12}
+                >
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                  <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                  <YAxis
+                    type="category"
+                    dataKey="product_label"
+                    width={166}
+                    tick={{ fontSize: 12, fill: "#475569" }}
+                    interval={0}
+                  />
+                  <Tooltip content={<WorkflowTooltip />} />
+                  <Legend verticalAlign="top" height={32} />
+                  <Bar dataKey="suggested_quantity" name="Suggested Qty" fill="#dc2626" radius={[0, 6, 6, 0]}>
+                    <LabelList dataKey="suggested_quantity" position="right" formatter={formatNumber} className="fill-slate-600 text-xs" />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </ChartFrame>
+          </>
         ) : (
           <div className="px-6 py-10 text-sm text-slate-500">No products need production right now.</div>
         )}

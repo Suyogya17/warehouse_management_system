@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Package as PackageIcon, Eye, EyeOff } from "lucide-react";
+import { ChevronLeft, ChevronRight, Package as PackageIcon, Eye, EyeOff, Megaphone } from "lucide-react";
 
 import PageHeader from "../components/PageHeader";
 import ProductImageGallery from "../components/ProductImageGallery";
@@ -9,8 +9,9 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
-import { formatNumber, formatPrice } from "../utils/format";
+import { formatNumber, formatUserPrice } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
+import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
 
 const getAvailableQty = (product) =>
   Number(product?.available_qty ?? product?.display_quantity ?? product?.quantity ?? 0);
@@ -33,10 +34,24 @@ const getSeriesName = (soleCode = "") =>
 const advertisementPlacement = (advertisement) =>
   String(advertisement?.placement || "BELOW_STATUS").trim().toUpperCase();
 
+const countryNames = {
+  NP: "Nepal",
+  IN: "India",
+};
+
+const getCountryLabel = (countryCode = "NP") =>
+  countryNames[String(countryCode || "NP").toUpperCase()] || String(countryCode || "NP").toUpperCase();
+
 // ─────────────────────────────────────────────────────────────
 // ProductCard — dashboard product card with lightbox
 // ─────────────────────────────────────────────────────────────
-function ProductCard({ variants = [], canManageVisibility = false, onToggleVisibility }) {
+function ProductCard({
+  variants = [],
+  canManageVisibility = false,
+  onShowForCountry,
+  onHideForCountry,
+  user,
+}) {
   const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
 
   useEffect(() => {
@@ -120,6 +135,17 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
         {selectedVariant.size && (
           <div className="text-xs text-slate-600">Size: <span className="font-semibold">{selectedVariant.size}</span></div>
         )}
+        <div>
+          <span
+            className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${
+              isCommissionProduct(selectedVariant)
+                ? "bg-amber-100 text-amber-700"
+                : "bg-slate-100 text-slate-600"
+            }`}
+          >
+            {getCommissionLabel(selectedVariant)}
+          </span>
+        </div>
         {variants.length >= 1 && (
           <div className="flex gap-1 overflow-x-auto whitespace-wrap">
             {variants.map((variant) => (
@@ -134,7 +160,7 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
        <div className=" rounded-xl p-2 space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-emerald-700">Price</span>
-            <span className="text-sm font-bold text-emerald-700">{formatPrice(selectedVariant.price)}</span>
+            <span className="text-sm font-bold text-emerald-700">{formatUserPrice(selectedVariant.price, user)}</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-indigo-900">Available pairs: </span>
@@ -148,19 +174,36 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
           )}
         </div>
         {canManageVisibility && (
-          <button
-            type="button"
-            onClick={() => onToggleVisibility?.(selectedVariant)}
-            aria-label={isHidden ? "Show product" : "Hide product"}
-            title={isHidden ? "Show product" : "Hide product"}
-            className={`mt-1 inline-flex h-9 w-9 items-center justify-center self-end rounded-xl transition ${
-              isHidden
-                ? "bg-indigo-500 text-white hover:bg-indigo-600"
-                : "bg-amber-100 text-amber-700 hover:bg-amber-200"
-            }`}
-          >
-            {isHidden ? <Eye size={18} /> : <EyeOff size={18} />}
-          </button>
+          <div className="mt-1 rounded-xl border border-slate-100 bg-white p-2">
+            <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              {isHidden ? <Eye size={13} /> : <EyeOff size={13} />}
+              {isHidden ? "Show to" : "Hide from"}
+            </div>
+            <div className="grid grid-cols-3 gap-1.5">
+              {[
+                ["NP", "Nepal"],
+                ["IN", "India"],
+                ["both", "Both"],
+              ].map(([scope, label]) => (
+                <button
+                  key={scope}
+                  type="button"
+                  onClick={() =>
+                    isHidden
+                      ? onShowForCountry?.(selectedVariant, scope)
+                      : onHideForCountry?.(selectedVariant, scope)
+                  }
+                  className={`h-8 rounded-lg px-2 text-[11px] font-bold transition focus:outline-none focus:ring-2 ${
+                    isHidden
+                      ? "bg-indigo-500 text-white hover:bg-indigo-600 focus:ring-indigo-300"
+                      : "bg-amber-100 text-amber-700 hover:bg-amber-200 focus:ring-amber-300"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
       </div>
 
@@ -171,7 +214,7 @@ function ProductCard({ variants = [], canManageVisibility = false, onToggleVisib
 // ─────────────────────────────────────────────────────────────
 // OnHoldCard — with lightbox
 // ─────────────────────────────────────────────────────────────
-function OnHoldCard({ variants = [], canManageVisibility = false, onToggleVisibility }) {
+function OnHoldCard({ variants = [], canManageVisibility = false, onShowForCountry }) {
   const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
 
   useEffect(() => {
@@ -271,16 +314,29 @@ function OnHoldCard({ variants = [], canManageVisibility = false, onToggleVisibi
             </div>
           )}
         </div>
-        {canManageVisibility && Number(selectedVariant.is_visible) !== 1 && (
-          <button
-            type="button"
-            onClick={() => onToggleVisibility?.(selectedVariant)}
-            aria-label="Show product"
-            title="Show product"
-            className="mt-1 inline-flex h-9 w-9 items-center justify-center self-end rounded-xl bg-indigo-500 text-white transition hover:bg-indigo-600"
-          >
-            <Eye size={18} />
-          </button>
+        {canManageVisibility && (
+          <div className="mt-1 rounded-xl border border-amber-100 bg-white p-2">
+            <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              <Eye size={13} />
+              Show to
+            </div>
+            <div className="grid grid-cols-3 gap-1.5">
+              {[
+                ["NP", "Nepal"],
+                ["IN", "India"],
+                ["both", "Both"],
+              ].map(([scope, label]) => (
+                <button
+                  key={scope}
+                  type="button"
+                  onClick={() => onShowForCountry?.(selectedVariant, scope)}
+                  className="h-8 rounded-lg bg-indigo-500 px-2 text-[11px] font-bold text-white transition hover:bg-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
       </div>
 
@@ -376,8 +432,8 @@ function AdvertisementBanner({ advertisements = [] }) {
       ) : null}
       <div className="absolute inset-0 " />
       <div className="relative flex h-full max-w-3xl flex-col justify-center px-8 py-12 text-white sm:px-16">
-        {/* <h2 className="max-w-2xl text-3xl font-black leading-tight tracking-tight drop-shadow-lg sm:text-5xl">{item.title}</h2> */}
-        {/* {item.message ? <p className="mt-4 max-w-xl text-sm leading-6 text-white/90 drop-shadow sm:text-lg">{item.message}</p> : null} */}
+        <h2 className="max-w-2xl text-3xl font-black leading-tight tracking-tight drop-shadow-lg sm:text-5xl">{item.title}</h2>
+        {item.message ? <p className="mt-4 max-w-xl text-sm leading-6 text-white/90 drop-shadow sm:text-lg">{item.message}</p> : null}
         {item.link_url ? <span className="mt-6 inline-flex w-fit items-center rounded-full bg-white px-5 py-2.5 text-sm font-bold text-slate-950 shadow-lg transition group-hover:bg-indigo-50">View offer <span className="ml-2">→</span></span> : null}
       </div>
       {advertisements.length > 1 ? <span className="absolute right-5 top-5 rounded-full border border-white/20 bg-black/35 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-md">{current + 1} / {advertisements.length}</span> : null}
@@ -470,6 +526,35 @@ function AdvertisementFeed({ advertisements = [], variant = "facebook" }) {
   );
 }
 
+function PublishedNotices({ notices = [] }) {
+  if (!notices.length) return null;
+
+  return (
+    <section aria-label="Notices" className="space-y-3">
+      {notices.map((notice) => (
+        <article
+          key={notice.id}
+          className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-slate-900 shadow-sm"
+        >
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+              <Megaphone size={18} />
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold leading-5 text-slate-950">{notice.title}</h2>
+              {notice.message ? (
+                <p className="mt-1 whitespace-pre-line text-sm leading-6 text-slate-700">
+                  {notice.message}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </article>
+      ))}
+    </section>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // DashboardPage — unchanged
 // ─────────────────────────────────────────────────────────────
@@ -486,6 +571,7 @@ export default function DashboardPage() {
     orders: [],
     availability: [],
     permissions: [],
+    users: [],
     advertisements: [],
   });
 
@@ -494,6 +580,7 @@ export default function DashboardPage() {
   const [seriesFilter, setSeriesFilter] = useState("");
   const [onHoldSearch, setOnHoldSearch] = useState("");
   const [onHoldSeriesFilter, setOnHoldSeriesFilter] = useState("");
+  const [selectedHoldCountry, setSelectedHoldCountry] = useState("NP");
   const [currentPage, setCurrentPage]   = useState(1);
   const [onHoldPage, setOnHoldPage]     = useState(1);
   const PRODUCTS_PER_PAGE = 12;
@@ -513,6 +600,7 @@ export default function DashboardPage() {
       orders,
       availability,
       permissions,
+      users,
       advertisements,
     ] = await Promise.all([
       user.role !== "USER" ? api.getStockSummary(token) : Promise.resolve(null),
@@ -525,6 +613,7 @@ export default function DashboardPage() {
         ? api.getAvailability(token, { includeHidden: canManageVisibility || user.role === "MEMBER" })
         : Promise.resolve({ data: [] }),
       canManageVisibility ? api.getPermissions(token) : Promise.resolve({ data: [] }),
+      canManageVisibility ? api.getUsers(token) : Promise.resolve({ data: [] }),
       user.role === "USER" ? api.getAdvertisements(token) : Promise.resolve({ data: [] }),
     ]);
 
@@ -537,6 +626,7 @@ export default function DashboardPage() {
       orders:        orders.data        || [],
       availability:  availability.data  || [],
       permissions:   permissions.data   || [],
+      users: users.data || [],
       advertisements: advertisements.data || [],
     });
   }, [token, user.role, canManageVisibility]);
@@ -544,25 +634,97 @@ export default function DashboardPage() {
   useEffect(() => { load().catch(console.error); }, [load]);
   useDataRefresh(load, "dashboard");
 
-  const toggleVisibility = async (product) => {
+  const getProductCountryTargets = (countryScope = "both") => {
+    const scopeCodes = countryScope === "both" ? ["NP", "IN"] : [String(countryScope || "NP").toUpperCase()];
+    const scopeLabel =
+      countryScope === "both"
+        ? "Nepal and India"
+        : getCountryLabel(scopeCodes[0]);
+    const customerRoles = new Set(["USER", "MEMBER", "ELDER"]);
+    const targetUsers = (state.users || []).filter((item) => {
+      const role = String(item.role || "").toUpperCase();
+      const countryCode = String(item.country_code || "NP").toUpperCase();
+      return customerRoles.has(role) && scopeCodes.includes(countryCode);
+    });
+
+    return { scopeLabel, targetUsers };
+  };
+
+  const showProductForCountries = async (product, countryScope = "both") => {
     if (!canManageVisibility || !product) return;
 
-    const nextVisible = Number(product.is_visible) !== 1;
+    const { scopeLabel, targetUsers } = getProductCountryTargets(countryScope);
     const label = product.article_code || product.name || "Product";
 
+    if (!targetUsers.length) {
+      showToast({
+        tone: "error",
+        title: "No users found",
+        message: `No ${scopeLabel} customers were found for this product.`,
+      });
+      return;
+    }
+
     try {
-      await api.setFinishedGoodVisibility(product.id, { is_visible: nextVisible }, token);
+      await Promise.all(
+        targetUsers.map((targetUser) =>
+          api.grantPermission(
+            { user_id: targetUser.id, finished_good_ids: [product.id] },
+            token
+          )
+        )
+      );
       showToast({
         tone: "success",
-        title: nextVisible ? "Product unhidden" : "Product hidden",
-        message: `${label} was ${nextVisible ? "shown" : "hidden"} successfully.`,
+        title: "Product shown",
+        message: `${label} is now visible to ${scopeLabel} customers.`,
       });
       await load();
       announceDataRefresh("finished-goods");
     } catch (error) {
       showToast({
         tone: "error",
-        title: "Visibility update failed",
+        title: "Show product failed",
+        message: error.message,
+      });
+    }
+  };
+
+  const hideProductForCountries = async (product, countryScope = "both") => {
+    if (!canManageVisibility || !product) return;
+
+    const { scopeLabel, targetUsers } = getProductCountryTargets(countryScope);
+    const label = product.article_code || product.name || "Product";
+
+    if (!targetUsers.length) {
+      showToast({
+        tone: "error",
+        title: "No users found",
+        message: `No ${scopeLabel} customers were found for this product.`,
+      });
+      return;
+    }
+
+    try {
+      await Promise.all(
+        targetUsers.map((targetUser) =>
+          api.revokePermission(
+            { user_id: targetUser.id, finished_good_id: product.id },
+            token
+          )
+        )
+      );
+      showToast({
+        tone: "success",
+        title: "Product hidden",
+        message: `${label} is now hidden from ${scopeLabel} customers.`,
+      });
+      await load();
+      announceDataRefresh("finished-goods");
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Hide product failed",
         message: error.message,
       });
     }
@@ -693,8 +855,121 @@ export default function DashboardPage() {
     return Object.values(groups);
   }, [onHoldBaseItems, onHoldSearch, onHoldSeriesFilter]);
 
+  const usersByCountry = useMemo(() => {
+    const grouped = new Map();
+    (state.users || [])
+      .filter((item) => ["USER", "MEMBER", "ELDER"].includes(String(item.role || "").toUpperCase()))
+      .forEach((item) => {
+        const countryCode = String(item.country_code || "NP").toUpperCase();
+        if (!grouped.has(countryCode)) grouped.set(countryCode, []);
+        grouped.get(countryCode).push(item);
+      });
+    return grouped;
+  }, [state.users]);
+
+  const countryOptions = useMemo(() => {
+    const codes = new Set(["NP", "IN"]);
+    usersByCountry.forEach((_, countryCode) => codes.add(countryCode));
+    return Array.from(codes).sort((a, b) => {
+      const priority = { NP: 0, IN: 1 };
+      return (priority[a] ?? 10) - (priority[b] ?? 10) || getCountryLabel(a).localeCompare(getCountryLabel(b));
+    });
+  }, [usersByCountry]);
+
+  const countryHoldGroups = useMemo(() => {
+    if (!canManageVisibility) return [];
+
+    const deniedKeys = new Set(
+      state.permissions
+        .filter((permission) => Number(permission.can_view) === 0)
+        .map((permission) => `${Number(permission.user_id)}:${Number(permission.finished_good_id)}`)
+    );
+    const grantedKeys = new Set(
+      state.permissions
+        .filter((permission) => Number(permission.can_view) === 1)
+        .map((permission) => `${Number(permission.user_id)}:${Number(permission.finished_good_id)}`)
+    );
+    const q = onHoldSearch.trim().toLowerCase();
+    const matchesProduct = (product) => {
+      const matchesSearch = !q || (
+        (product.name || "").toLowerCase().includes(q) ||
+        (product.article_code || "").toLowerCase().includes(q) ||
+        (product.sole_code || "").toLowerCase().includes(q) ||
+        (product.color || "").toLowerCase().includes(q) ||
+        (product.size || "").toLowerCase().includes(q)
+      );
+      const matchesSeries =
+        !onHoldSeriesFilter || getSeriesName(product.sole_code) === onHoldSeriesFilter;
+      return matchesSearch && matchesSeries;
+    };
+
+    return countryOptions.map((countryCode) => {
+      const countryUsers = usersByCountry.get(countryCode) || [];
+      if (!countryUsers.length) {
+        return {
+          countryCode,
+          users: countryUsers,
+          products: [],
+        };
+      }
+      const holdItems = state.finishedGoods.filter((product) => {
+        if (!matchesProduct(product)) return false;
+        const hasVisibleUser = countryUsers.some((countryUser) => {
+          const key = `${Number(countryUser.id)}:${Number(product.id)}`;
+          return grantedKeys.has(key) && !deniedKeys.has(key);
+        });
+        return !hasVisibleUser;
+      });
+      const groups = {};
+      holdItems.forEach((item) => {
+        const key =
+          item.article_code ||
+          item.name?.split("_")?.slice(0, -1)?.join("_") ||
+          item.name ||
+          `product-${item.id}`;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(item);
+      });
+      return {
+        countryCode,
+        users: countryUsers,
+        products: Object.values(groups),
+      };
+    });
+  }, [
+    canManageVisibility,
+    countryOptions,
+    onHoldSearch,
+    onHoldSeriesFilter,
+    state.finishedGoods,
+    state.permissions,
+    usersByCountry,
+  ]);
+
+  const countryHoldTotal = countryHoldGroups.reduce(
+    (sum, group) => sum + group.products.length,
+    0
+  );
+  const selectedCountryHoldGroup =
+    countryHoldGroups.find((group) => group.countryCode === selectedHoldCountry) ||
+    countryHoldGroups[0] ||
+    null;
+  const selectedCountryHoldProducts = selectedCountryHoldGroup?.products || [];
+  const selectedCountryHoldTotal = Math.ceil(selectedCountryHoldProducts.length / PRODUCTS_PER_PAGE);
+  const paginatedSelectedCountryHold = selectedCountryHoldProducts.slice(
+    (onHoldPage - 1) * PRODUCTS_PER_PAGE,
+    onHoldPage * PRODUCTS_PER_PAGE
+  );
+
   useEffect(() => { setCurrentPage(1); }, [search, stockFilter, seriesFilter]);
   useEffect(() => { setOnHoldPage(1); }, [onHoldSearch, onHoldSeriesFilter]);
+  useEffect(() => { setOnHoldPage(1); }, [selectedHoldCountry]);
+  useEffect(() => {
+    if (!countryHoldGroups.length) return;
+    if (!countryHoldGroups.some((group) => group.countryCode === selectedHoldCountry)) {
+      setSelectedHoldCountry(countryHoldGroups[0].countryCode);
+    }
+  }, [countryHoldGroups, selectedHoldCountry]);
 
   const totalPages        = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE);
   const onHoldTotal       = Math.ceil(onHoldProducts.length / PRODUCTS_PER_PAGE);
@@ -702,6 +977,9 @@ export default function DashboardPage() {
   const paginatedOnHold   = onHoldProducts.slice((onHoldPage - 1) * PRODUCTS_PER_PAGE, onHoldPage * PRODUCTS_PER_PAGE);
   const advertisementsAboveStatus = state.advertisements.filter(
     (advertisement) => advertisementPlacement(advertisement) === "ABOVE_STATUS"
+  );
+  const publishedNotices = state.advertisements.filter(
+    (advertisement) => advertisementPlacement(advertisement) === "NOTICE"
   );
   const advertisementsBelowStatus = state.advertisements.filter(
     (advertisement) => advertisementPlacement(advertisement) === "BELOW_STATUS"
@@ -726,6 +1004,10 @@ export default function DashboardPage() {
         <AdvertisementBanner advertisements={advertisementsAboveStatus} />
       )}
 
+      {user.role === "USER" && publishedNotices.length > 0 && (
+        <PublishedNotices notices={publishedNotices} />
+      )}
+
       {/* STAT CARDS */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {user.role === "USER" ? (
@@ -745,7 +1027,12 @@ export default function DashboardPage() {
               tone="alert" icon="orders"
             />
             {canViewOnHold && (
-              <StatCard label="On Hold Products" value={formatNumber(onHoldProducts.length)} tone="alert" icon="hidden" />
+              <StatCard
+                label="On Hold Products"
+                value={formatNumber(canManageVisibility ? countryHoldTotal : onHoldProducts.length)}
+                tone="alert"
+                icon="hidden"
+              />
             )}
           </>
         )}
@@ -807,7 +1094,9 @@ export default function DashboardPage() {
                     key={variants.map((v) => v.id).join("-")}
                     variants={variants}
                     canManageVisibility={canManageVisibility}
-                    onToggleVisibility={toggleVisibility}
+                    onShowForCountry={showProductForCountries}
+                    onHideForCountry={hideProductForCountries}
+                    user={user}
                   />
                 ))}
               </div>
@@ -826,7 +1115,9 @@ export default function DashboardPage() {
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
               <EyeOff size={18} className="text-amber-500" />
               On Hold&nbsp;
-              <span className="text-slate-400 font-normal text-base">({onHoldProducts.length})</span>
+              <span className="text-slate-400 font-normal text-base">
+                ({canManageVisibility ? countryHoldTotal : onHoldProducts.length})
+              </span>
             </h2>
             <div className="flex gap-2 flex-wrap">
               <input type="text" placeholder="Search on hold…" value={onHoldSearch}
@@ -848,7 +1139,77 @@ export default function DashboardPage() {
               )}
             </div>
           </div>
-          {paginatedOnHold.length ? (
+          {canManageVisibility ? (
+            <div className="space-y-6">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                {countryHoldGroups.map((group) => (
+                  <button
+                    key={group.countryCode}
+                    type="button"
+                    onClick={() => setSelectedHoldCountry(group.countryCode)}
+                    className={`rounded-xl border px-4 py-3 text-left shadow-sm transition ${
+                      selectedHoldCountry === group.countryCode
+                        ? "border-amber-300 bg-amber-50 ring-4 ring-amber-100"
+                        : "border-slate-200 bg-white hover:border-amber-200 hover:bg-amber-50/40"
+                    }`}
+                  >
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      {getCountryLabel(group.countryCode)}
+                    </p>
+                    <p className="mt-1 text-2xl font-bold text-slate-950">
+                      {formatNumber(group.products.length)}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      on hold for {formatNumber(group.users.length)} customer{group.users.length === 1 ? "" : "s"}
+                    </p>
+                  </button>
+                ))}
+              </div>
+
+              {selectedCountryHoldGroup ? (
+                <section className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">
+                        {getCountryLabel(selectedCountryHoldGroup.countryCode)} on hold
+                      </h3>
+                      <p className="text-sm text-slate-500">
+                        Products hidden from every customer in {getCountryLabel(selectedCountryHoldGroup.countryCode)}.
+                      </p>
+                    </div>
+                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                      selectedCountryHoldGroup.products.length ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
+                    }`}>
+                      {selectedCountryHoldGroup.products.length ? `${formatNumber(selectedCountryHoldGroup.products.length)} needs review` : "All shown"}
+                    </span>
+                  </div>
+                  {selectedCountryHoldGroup.products.length ? (
+                    <>
+                      <div className="grid grid-cols-2 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                        {paginatedSelectedCountryHold.map((variants) => (
+                          <OnHoldCard
+                            key={`${selectedCountryHoldGroup.countryCode}-${variants.map((v) => v.id).join("-")}`}
+                            variants={variants}
+                            canManageVisibility={canManageVisibility}
+                            onShowForCountry={showProductForCountries}
+                          />
+                        ))}
+                      </div>
+                      <PaginationBar
+                        total={selectedCountryHoldTotal}
+                        current={onHoldPage}
+                        setPage={setOnHoldPage}
+                      />
+                    </>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-white py-8 text-center text-sm text-slate-400">
+                      No products are on hold for {getCountryLabel(selectedCountryHoldGroup.countryCode)}.
+                    </div>
+                  )}
+                </section>
+              ) : null}
+            </div>
+          ) : paginatedOnHold.length ? (
             <>
               <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
                 {paginatedOnHold.map((variants) => (
@@ -856,7 +1217,7 @@ export default function DashboardPage() {
                     key={variants.map((v) => v.id).join("-")}
                     variants={variants}
                     canManageVisibility={canManageVisibility}
-                    onToggleVisibility={toggleVisibility}
+                    onShowForCountry={showProductForCountries}
                   />
                 ))}
               </div>

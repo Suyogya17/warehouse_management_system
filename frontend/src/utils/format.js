@@ -25,6 +25,25 @@ export const formatPrice = (value, currency = "NPR") => {
   }).format(amount);
 };
 
+export const convertPriceForUser = (value, user = {}) => {
+  const amount = Number(value || 0);
+  const currency = String(user?.currency_code || "NPR").trim().toUpperCase();
+  const defaultRates = { NPR: 1, INR: 1.6 };
+  const exchangeRate = Number(user?.exchange_rate || defaultRates[currency] || 1);
+
+  if (!Number.isFinite(amount)) return null;
+  if (!Number.isFinite(exchangeRate) || exchangeRate <= 0) return amount;
+
+  return amount / exchangeRate;
+};
+
+export const formatUserPrice = (value, user = {}) => {
+  const currency = String(user?.currency_code || "NPR").trim().toUpperCase() || "NPR";
+  const amount = convertPriceForUser(value, user);
+
+  return amount === null ? "-" : formatPrice(amount, currency);
+};
+
 export const formatEnglishDate = (value, options = {}) => {
   const date = normalizeDate(value);
   if (!date) return "-";
