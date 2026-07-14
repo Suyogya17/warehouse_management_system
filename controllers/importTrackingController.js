@@ -28,7 +28,7 @@ const CONTAINER_STATUSES = new Set([
 const normalizeDate = (value) => value || null;
 const normalizeNumber = (value) => {
   const number = Number(value || 0);
-  return Number.isFinite(number) ? Math.max(0, Math.trunc(number)) : 0;
+  return Number.isFinite(number) ? Math.max(0, number) : 0;
 };
 
 const normalizeBoolean = (value, fallback = 0) => {
@@ -74,10 +74,15 @@ const normalizeOrderPayload = async (body = {}) => {
     transport_company: String(body.transport_company || '').trim() || null,
     tracking_number: String(body.tracking_number || '').trim() || null,
     order_date: normalizeDate(body.order_date),
+    loading_date: normalizeDate(body.loading_date),
     expected_delivery_date: normalizeDate(body.expected_delivery_date),
     shipped_date: normalizeDate(body.shipped_date),
     delivered_date: normalizeDate(body.delivered_date),
     reached_site_date: normalizeDate(body.reached_site_date),
+    vehicle_no: String(body.vehicle_no || '').trim() || null,
+    vehicle_size: String(body.vehicle_size || '').trim() || null,
+    destination: String(body.destination || '').trim() || null,
+    ocean_company: String(body.ocean_company || '').trim() || null,
     status,
     is_test: normalizeBoolean(body.is_test, 1),
     notes: String(body.notes || '').trim() || null,
@@ -97,10 +102,14 @@ const normalizeOrderPayload = async (body = {}) => {
       article_code: String(item.article_code || '').trim() || null,
       category: String(item.category || '').trim() || null,
       color: String(item.color || '').trim() || null,
+      size: String(item.size || '').trim() || null,
       unit: String(item.unit || 'pcs').trim() || 'pcs',
+      carton_qty: normalizeNumber(item.carton_qty),
+      qty_per_carton: normalizeNumber(item.qty_per_carton),
       ordered_qty: normalizeNumber(item.ordered_qty),
       unit_price: normalizeNumber(item.unit_price),
       price_currency: String(item.price_currency || 'RMB').trim().toUpperCase() || 'RMB',
+      creditor: String(item.creditor || '').trim() || null,
       received_qty: normalizeNumber(item.received_qty),
       damaged_qty: normalizeNumber(item.damaged_qty),
       short_qty: normalizeNumber(item.short_qty),
@@ -367,7 +376,7 @@ const saveContainerItems = async (client, containerId, containerItems = [], save
   }
 };
 
-const insertImportOrderItem = async (client, importOrderId, item, supportsItemPrice, supportsPriceCurrency) => {
+const insertImportOrderItem = async (client, importOrderId, item, supportedItemColumns = {}) => {
   const columns = [
     'import_order_id', 'raw_material_id', 'material_name', 'article_code', 'category',
     'color', 'unit', 'ordered_qty',
@@ -383,14 +392,34 @@ const insertImportOrderItem = async (client, importOrderId, item, supportsItemPr
     item.ordered_qty,
   ];
 
-  if (supportsItemPrice) {
+  if (supportedItemColumns.carton_qty) {
+    columns.push('carton_qty');
+    values.push(item.carton_qty);
+  }
+
+  if (supportedItemColumns.size) {
+    columns.push('size');
+    values.push(item.size);
+  }
+
+  if (supportedItemColumns.qty_per_carton) {
+    columns.push('qty_per_carton');
+    values.push(item.qty_per_carton);
+  }
+
+  if (supportedItemColumns.unit_price) {
     columns.push('unit_price');
     values.push(item.unit_price);
   }
 
-  if (supportsPriceCurrency) {
+  if (supportedItemColumns.price_currency) {
     columns.push('price_currency');
     values.push(item.price_currency);
+  }
+
+  if (supportedItemColumns.creditor) {
+    columns.push('creditor');
+    values.push(item.creditor);
   }
 
   columns.push('received_qty', 'damaged_qty', 'short_qty', 'notes');
@@ -408,8 +437,21 @@ const create = async (req, res, next) => {
   try {
     const payload = await normalizeOrderPayload(req.body);
     const supportsTestMode = await hasColumn('import_orders', 'is_test');
-    const supportsItemPrice = await hasColumn('import_order_items', 'unit_price');
-    const supportsPriceCurrency = await hasColumn('import_order_items', 'price_currency');
+    const supportedOrderColumns = {
+      loading_date: await hasColumn('import_orders', 'loading_date'),
+      vehicle_no: await hasColumn('import_orders', 'vehicle_no'),
+      vehicle_size: await hasColumn('import_orders', 'vehicle_size'),
+      destination: await hasColumn('import_orders', 'destination'),
+      ocean_company: await hasColumn('import_orders', 'ocean_company'),
+    };
+    const supportedItemColumns = {
+      size: await hasColumn('import_order_items', 'size'),
+      carton_qty: await hasColumn('import_order_items', 'carton_qty'),
+      qty_per_carton: await hasColumn('import_order_items', 'qty_per_carton'),
+      unit_price: await hasColumn('import_order_items', 'unit_price'),
+      price_currency: await hasColumn('import_order_items', 'price_currency'),
+      creditor: await hasColumn('import_order_items', 'creditor'),
+    };
 
     await client.query('START TRANSACTION');
 
@@ -441,6 +483,12 @@ const create = async (req, res, next) => {
       orderValues.push(payload.order.is_test);
     }
 
+    Object.entries(supportedOrderColumns).forEach(([column, supported]) => {
+      if (!supported) return;
+      orderColumns.push(column);
+      orderValues.push(payload.order[column]);
+    });
+
     orderColumns.push('notes', 'created_by', 'updated_by');
     orderValues.push(payload.order.notes, req.user.id, req.user.id);
 
@@ -454,7 +502,7 @@ const create = async (req, res, next) => {
     const savedItems = [];
 
     for (const item of payload.items) {
-      const itemResult = await insertImportOrderItem(client, orderId, item, supportsItemPrice, supportsPriceCurrency);
+      const itemResult = await insertImportOrderItem(client, orderId, item, supportedItemColumns);
       savedItems.push({ ...item, id: itemResult.insertId });
     }
 
@@ -515,8 +563,21 @@ const update = async (req, res, next) => {
   try {
     const payload = await normalizeOrderPayload(req.body);
     const supportsTestMode = await hasColumn('import_orders', 'is_test');
-    const supportsItemPrice = await hasColumn('import_order_items', 'unit_price');
-    const supportsPriceCurrency = await hasColumn('import_order_items', 'price_currency');
+    const supportedOrderColumns = {
+      loading_date: await hasColumn('import_orders', 'loading_date'),
+      vehicle_no: await hasColumn('import_orders', 'vehicle_no'),
+      vehicle_size: await hasColumn('import_orders', 'vehicle_size'),
+      destination: await hasColumn('import_orders', 'destination'),
+      ocean_company: await hasColumn('import_orders', 'ocean_company'),
+    };
+    const supportedItemColumns = {
+      size: await hasColumn('import_order_items', 'size'),
+      carton_qty: await hasColumn('import_order_items', 'carton_qty'),
+      qty_per_carton: await hasColumn('import_order_items', 'qty_per_carton'),
+      unit_price: await hasColumn('import_order_items', 'unit_price'),
+      price_currency: await hasColumn('import_order_items', 'price_currency'),
+      creditor: await hasColumn('import_order_items', 'creditor'),
+    };
 
     await client.query('START TRANSACTION');
 
@@ -554,6 +615,12 @@ const update = async (req, res, next) => {
       updateValues.push(payload.order.is_test);
     }
 
+    Object.entries(supportedOrderColumns).forEach(([column, supported]) => {
+      if (!supported) return;
+      updateFields.push(`${column} = ?`);
+      updateValues.push(payload.order[column]);
+    });
+
     updateFields.push('notes = ?', 'updated_by = ?');
     updateValues.push(payload.order.notes, req.user.id, req.params.id);
 
@@ -570,7 +637,7 @@ const update = async (req, res, next) => {
 
     const savedItems = [];
     for (const item of payload.items) {
-      const itemResult = await insertImportOrderItem(client, req.params.id, item, supportsItemPrice, supportsPriceCurrency);
+      const itemResult = await insertImportOrderItem(client, req.params.id, item, supportedItemColumns);
       savedItems.push({ ...item, id: itemResult.insertId });
     }
 
@@ -905,8 +972,7 @@ const receiveItemStock = async (req, res, next) => {
               ${supportsTestMode ? 'io.is_test' : '1'} AS is_test,
               ioi.*,
               rm.name AS linked_material_name,
-              rm.unit AS linked_material_unit,
-              rm.quantity AS current_stock_qty
+              rm.unit AS linked_material_unit
        FROM import_order_items ioi
        JOIN import_orders io ON io.id = ioi.import_order_id
        LEFT JOIN raw_materials rm ON rm.id = ioi.raw_material_id
@@ -926,44 +992,6 @@ const receiveItemStock = async (req, res, next) => {
     const nextDamagedQty = Number(item.damaged_qty || 0) + damagedQty;
     const nextShortQty = Number(item.short_qty || 0) + shortQty;
 
-    if (!isTest && !item.raw_material_id) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        message: 'Create or link a raw material before receiving real stock',
-      });
-    }
-
-    let batchId = null;
-    let newStockQty = null;
-
-    if (!isTest) {
-      const prevQty = Number(item.current_stock_qty || 0);
-      newStockQty = prevQty + qtyReceived;
-      const stockInsert = await appendFiscalInsertFields(
-        'stock',
-        ['raw_material_id', 'qty_added', 'qty_remaining', 'notes'],
-        [
-          item.raw_material_id,
-          qtyReceived,
-          qtyReceived,
-          notes || `Received from import order ${item.order_number}`,
-        ]
-      );
-
-      const batchResult = await client.query(
-        `INSERT INTO stock (${stockInsert.columns.join(', ')})
-         VALUES (${stockInsert.columns.map(() => '?').join(', ')})`,
-        stockInsert.values
-      );
-      batchId = batchResult.insertId;
-
-      await client.query(
-        'UPDATE raw_materials SET quantity = ? WHERE id = ?',
-        [newStockQty, item.raw_material_id]
-      );
-    }
-
     await client.query(
       `UPDATE import_order_items
        SET received_qty = ?, damaged_qty = ?, short_qty = ?, notes = COALESCE(?, notes)
@@ -975,24 +1003,22 @@ const receiveItemStock = async (req, res, next) => {
 
     await auditLog({
       ...getActor(req),
-      actionType: isTest ? 'TEST_RECEIVED' : 'STOCK_ADDED',
+      actionType: isTest ? 'TEST_RECEIVED' : 'IMPORT_RECEIVED_RECORDED',
       module: 'import_tracking',
       entity_type: 'import_order_item',
       entity_id: item.id,
       entityName: item.material_name,
       description: isTest
         ? `Marked test import stock received for ${item.material_name} from ${item.order_number}`
-        : `Received ${qtyReceived} ${item.unit || ''} into raw material stock from import order ${item.order_number}`,
+        : `Recorded ${qtyReceived} ${item.unit || ''} received for ${item.material_name} from import order ${item.order_number}`,
       metadata: {
         import_order_id: item.import_order_id,
         order_number: item.order_number,
         raw_material_id: item.raw_material_id,
-        stock_batch_id: batchId,
         qty_received: qtyReceived,
         damaged_qty: damagedQty,
         short_qty: shortQty,
         total_received_qty: nextReceivedQty,
-        new_stock_quantity: newStockQty,
         is_test: isTest,
         notes,
       },
@@ -1002,16 +1028,14 @@ const receiveItemStock = async (req, res, next) => {
       success: true,
       message: isTest
         ? 'Test slip marked as received. Real stock was not changed.'
-        : 'Stock received from import slip',
+        : 'Import receipt recorded. Raw material stock was not changed.',
       data: {
         import_order_item_id: item.id,
         raw_material_id: item.raw_material_id,
-        stock_batch_id: batchId,
         qty_received: qtyReceived,
         total_received_qty: nextReceivedQty,
         damaged_qty: nextDamagedQty,
         short_qty: nextShortQty,
-        new_stock_quantity: newStockQty,
         is_test: isTest,
       },
     });

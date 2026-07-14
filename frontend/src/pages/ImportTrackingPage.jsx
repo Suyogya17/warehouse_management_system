@@ -1,7 +1,7 @@
 import * as XLSX from "xlsx";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Button from "../components/Button";
-import { Field, SelectInput, TextAreaInput, TextInput } from "../components/Field";
+import { Field, SelectInput, TextInput } from "../components/Field";
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import StatCard from "../components/StatCard";
@@ -59,6 +59,11 @@ const emptySlip = {
   shipping_method: "Sea",
   transport_company: "",
   tracking_number: "",
+  loading_date: "",
+  vehicle_no: "",
+  vehicle_size: "",
+  destination: "",
+  ocean_company: "",
   order_date: new Date().toISOString().slice(0, 10),
   expected_delivery_date: "",
   container_number: "",
@@ -67,6 +72,7 @@ const emptySlip = {
   article_code: "",
   category: "",
   color: "",
+  size: "",
   unit: "pcs",
   ordered_qty: "",
   notes: "",
@@ -80,10 +86,14 @@ const createSlipItem = (item = {}) => ({
   article_code: item.article_code || "",
   category: item.category || "",
   color: item.color || "",
+  size: item.size || "",
   unit: item.unit || "pcs",
+  carton_qty: item.carton_qty || "",
+  qty_per_carton: item.qty_per_carton || "",
   ordered_qty: item.ordered_qty || "",
   unit_price: item.unit_price || "",
   price_currency: item.price_currency || "RMB",
+  creditor: item.creditor || "",
   received_qty: Number(item.received_qty || 0),
   damaged_qty: Number(item.damaged_qty || 0),
   short_qty: Number(item.short_qty || 0),
@@ -92,13 +102,14 @@ const createSlipItem = (item = {}) => ({
 
 const compactDate = (value) => (value ? String(value).slice(0, 10) : "");
 const label = (value = "") => String(value).replace(/_/g, " ");
-const wholeNumberValue = (value) => String(value || "").replace(/\D/g, "");
-const wholeNumberInputProps = {
-  type: "text",
-  inputMode: "numeric",
-  pattern: "[0-9]*",
+const decimalNumberValue = (value) => {
+  const cleaned = String(value || "").replace(/[^\d.]/g, "");
+  const [first, ...rest] = cleaned.split(".");
+  return rest.length ? `${first}.${rest.join("")}` : first;
 };
 const formatMoney = (amount, currency = "RMB") => `${currency || "RMB"} ${formatNumber(amount)}`;
+const VIEWING_ITEMS_PER_PAGE = 15;
+const RECEIVED_ROWS_PER_PAGE = 15;
 
 const firstItem = (order) => order.items?.[0] || {};
 const firstContainer = (order) => order.containers?.[0] || {};
@@ -108,18 +119,18 @@ const getItemStockStatus = (item) => {
   const receivedQty = Number(item.received_qty || 0);
 
   if (orderedQty > 0 && receivedQty >= orderedQty) {
-    return { label: "Stock added", tone: "success", remaining: 0 };
+    return { label: "Received", tone: "success", remaining: 0 };
   }
 
   if (receivedQty > 0) {
     return {
-      label: "Partially added",
+      label: "Partially received",
       tone: "warning",
       remaining: Math.max(orderedQty - receivedQty, 0),
     };
   }
 
-  return { label: "Not added", tone: "neutral", remaining: orderedQty };
+  return { label: "Not received", tone: "neutral", remaining: orderedQty };
 };
 
 const getStockEntryStatus = (order) => {
@@ -128,22 +139,22 @@ const getStockEntryStatus = (order) => {
   const receivedQty = items.reduce((sum, item) => sum + Number(item.received_qty || 0), 0);
 
   if (orderedQty > 0 && receivedQty >= orderedQty) {
-    return { label: "Stock added", tone: "success", remaining: 0 };
+    return { label: "Received", tone: "success", remaining: 0 };
   }
 
   if (receivedQty > 0) {
     return {
-      label: "Partially added",
+      label: "Partially received",
       tone: "warning",
       remaining: Math.max(orderedQty - receivedQty, 0),
     };
   }
 
   if (["DELIVERED", "REACHED_SITE", "RECEIVED"].includes(order.status)) {
-    return { label: "Pending stock entry", tone: "warning", remaining: orderedQty };
+    return { label: "Pending receipt", tone: "warning", remaining: orderedQty };
   }
 
-  return { label: "Not added", tone: "neutral", remaining: orderedQty };
+  return { label: "Not received", tone: "neutral", remaining: orderedQty };
 };
 
 const orderToPayload = (order, status = order.status) => {
@@ -159,11 +170,16 @@ const orderToPayload = (order, status = order.status) => {
     transport_company: order.transport_company || "",
     tracking_number: order.tracking_number || "",
     order_date: compactDate(order.order_date) || today,
+    loading_date: compactDate(order.loading_date),
     expected_delivery_date: compactDate(order.expected_delivery_date),
     shipped_date: compactDate(order.shipped_date) || (status === "SHIPPED" ? today : ""),
     delivered_date: compactDate(order.delivered_date) || (status === "DELIVERED" ? today : ""),
     reached_site_date: compactDate(order.reached_site_date) || (status === "REACHED_SITE" ? today : ""),
     status,
+    vehicle_no: order.vehicle_no || "",
+    vehicle_size: order.vehicle_size || "",
+    destination: order.destination || "",
+    ocean_company: order.ocean_company || "",
     is_test: Number(order.is_test ?? 1) === 1,
     notes: order.notes || "",
     items: (order.items || []).map((item) => ({
@@ -172,10 +188,14 @@ const orderToPayload = (order, status = order.status) => {
       article_code: item.article_code || "",
       category: item.category || "",
       color: item.color || "",
+      size: item.size || "",
       unit: item.unit || "pcs",
+      carton_qty: Number(item.carton_qty || 0),
+      qty_per_carton: Number(item.qty_per_carton || 0),
       ordered_qty: Number(item.ordered_qty || 0),
       unit_price: Number(item.unit_price || 0),
       price_currency: item.price_currency || "RMB",
+      creditor: item.creditor || "",
       received_qty: Number(item.received_qty || 0),
       damaged_qty: Number(item.damaged_qty || 0),
       short_qty: Number(item.short_qty || 0),
@@ -221,9 +241,9 @@ export default function ImportTrackingPage() {
   const [loading, setLoading] = useState(true);
   const [draggingId, setDraggingId] = useState(null);
   const [viewingOrder, setViewingOrder] = useState(null);
-  const [receivingOrder, setReceivingOrder] = useState(null);
-  const [receivingItem, setReceivingItem] = useState(null);
-  const [receiveForm, setReceiveForm] = useState({ qty_received: "", damaged_qty: "", short_qty: "", notes: "" });
+  const [viewingItemsPage, setViewingItemsPage] = useState(1);
+  const [receivedRowsPage, setReceivedRowsPage] = useState(1);
+  const [receivingItemIds, setReceivingItemIds] = useState([]);
   const [customCategoryItems, setCustomCategoryItems] = useState({});
 
   const materialById = useMemo(
@@ -313,23 +333,64 @@ export default function ImportTrackingPage() {
               article_code: item.article_code,
               category: item.category,
               color: item.color,
+              size: item.size || "",
               unit: item.unit || "",
+              carton_qty: Number(item.carton_qty || 0),
+              qty_per_carton: Number(item.qty_per_carton || 0),
               ordered_qty: orderedQty,
               unit_price: Number(item.unit_price || 0),
               price_currency: item.price_currency || "RMB",
               total_price: orderedQty * Number(item.unit_price || 0),
+              creditor: item.creditor || "",
+              notes: item.notes || "",
               received_qty: receivedQty,
               damaged_qty: Number(item.damaged_qty || 0),
               short_qty: Number(item.short_qty || 0),
               remaining_qty: remainingQty,
               supplier_name: order.supplier_name,
               container_number: firstContainer(order).container_number || "-",
-              status: remainingQty > 0 ? "Partially added" : "Stock added",
+              status: remainingQty > 0 ? "Partially received" : "Received",
             };
           })
       ),
     [orders]
   );
+
+  const receivedPageCount = Math.max(1, Math.ceil(receivedRows.length / RECEIVED_ROWS_PER_PAGE));
+  const receivedPage = Math.min(receivedRowsPage, receivedPageCount);
+  const paginatedReceivedRows = receivedRows.slice(
+    (receivedPage - 1) * RECEIVED_ROWS_PER_PAGE,
+    receivedPage * RECEIVED_ROWS_PER_PAGE
+  );
+
+  const receivedPageNumbers = useMemo(() => {
+    const pages = new Set([1, receivedPageCount]);
+    for (let page = receivedPage - 2; page <= receivedPage + 2; page += 1) {
+      if (page >= 1 && page <= receivedPageCount) pages.add(page);
+    }
+    return Array.from(pages).sort((a, b) => a - b);
+  }, [receivedPage, receivedPageCount]);
+
+  const viewingItems = viewingOrder?.items || [];
+  const viewingPageCount = Math.max(1, Math.ceil(viewingItems.length / VIEWING_ITEMS_PER_PAGE));
+  const viewingPage = Math.min(viewingItemsPage, viewingPageCount);
+  const paginatedViewingItems = viewingItems.slice(
+    (viewingPage - 1) * VIEWING_ITEMS_PER_PAGE,
+    viewingPage * VIEWING_ITEMS_PER_PAGE
+  );
+
+  const viewingPageNumbers = useMemo(() => {
+    const pages = new Set([1, viewingPageCount]);
+    for (let page = viewingPage - 2; page <= viewingPage + 2; page += 1) {
+      if (page >= 1 && page <= viewingPageCount) pages.add(page);
+    }
+    return Array.from(pages).sort((a, b) => a - b);
+  }, [viewingPage, viewingPageCount]);
+
+  const openViewingOrder = (order) => {
+    setViewingItemsPage(1);
+    setViewingOrder(order);
+  };
 
   const updateSlip = (key, value) => {
     setSlip((current) => ({ ...current, [key]: value }));
@@ -359,7 +420,15 @@ export default function ImportTrackingPage() {
           };
         }
 
-        return { ...item, [key]: value };
+        const nextItem = { ...item, [key]: value };
+        if (["carton_qty", "qty_per_carton"].includes(key)) {
+          const cartons = Number(nextItem.carton_qty || 0);
+          const qtyPerCarton = Number(nextItem.qty_per_carton || 0);
+          if (cartons > 0 && qtyPerCarton > 0) {
+            nextItem.ordered_qty = String(cartons * qtyPerCarton);
+          }
+        }
+        return nextItem;
       })
     );
   };
@@ -402,10 +471,14 @@ export default function ImportTrackingPage() {
         article_code: item.article_code,
         category: item.category,
         color: item.color,
+        size: item.size,
         unit: item.unit || "pcs",
+        carton_qty: Number(item.carton_qty || 0),
+        qty_per_carton: Number(item.qty_per_carton || 0),
         ordered_qty: Number(item.ordered_qty || 0),
         unit_price: Number(item.unit_price || 0),
         price_currency: item.price_currency || "RMB",
+        creditor: item.creditor || "",
         received_qty: Number(item.received_qty || 0),
         damaged_qty: Number(item.damaged_qty || 0),
         short_qty: Number(item.short_qty || 0),
@@ -422,6 +495,11 @@ export default function ImportTrackingPage() {
       shipping_method: slip.shipping_method,
       transport_company: slip.transport_company,
       tracking_number: slip.tracking_number,
+      loading_date: slip.loading_date,
+      vehicle_no: slip.vehicle_no,
+      vehicle_size: slip.vehicle_size,
+      destination: slip.destination,
+      ocean_company: slip.ocean_company,
       order_date: slip.order_date,
       expected_delivery_date: slip.expected_delivery_date,
       status: "ORDERED",
@@ -504,6 +582,11 @@ export default function ImportTrackingPage() {
       shipping_method: order.shipping_method || "Sea",
       transport_company: order.transport_company || "",
       tracking_number: order.tracking_number || "",
+      loading_date: compactDate(order.loading_date),
+      vehicle_no: order.vehicle_no || "",
+      vehicle_size: order.vehicle_size || "",
+      destination: order.destination || "",
+      ocean_company: order.ocean_company || "",
       order_date: compactDate(order.order_date) || emptySlip.order_date,
       expected_delivery_date: compactDate(order.expected_delivery_date),
       container_number: container.container_number || "",
@@ -565,26 +648,7 @@ export default function ImportTrackingPage() {
     }
   };
 
-  const openReceiveModal = (order, item) => {
-    if (!canEditImport) return;
-
-    const remainingQty = Math.max(Number(item.ordered_qty || 0) - Number(item.received_qty || 0), 0);
-
-    setReceivingOrder(order);
-    setReceivingItem(item);
-    setViewingOrder(null);
-    setReceiveForm({
-      qty_received: remainingQty || item.ordered_qty || "",
-      damaged_qty: "",
-      short_qty: "",
-      notes: "",
-    });
-  };
-
-  const submitReceiveStock = async (event) => {
-    event.preventDefault();
-    if (!receivingOrder || !receivingItem) return;
-
+  const quickReceiveItem = async (order, item) => {
     if (!canEditImport) {
       showToast({
         tone: "error",
@@ -594,48 +658,30 @@ export default function ImportTrackingPage() {
       return;
     }
 
-    const item = receivingItem;
-    const isTest = Number(receivingOrder.is_test ?? 1) === 1;
-    const qtyReceived = Number(receiveForm.qty_received || 0);
+    const qtyReceived = Math.max(Number(item.ordered_qty || 0) - Number(item.received_qty || 0), 0);
+    if (!order || !item || qtyReceived <= 0 || receivingItemIds.includes(item.id)) return;
 
-    if (!isTest && !item.raw_material_id) {
-      showToast({
-        tone: "error",
-        title: "Material not linked",
-        message: "Create or link the raw material before adding real stock.",
-      });
-      return;
-    }
-
-    const confirmed = window.confirm(
-      isTest
-        ? "Mark this test slip as received? Real raw material stock will not change."
-        : `Add ${formatNumber(qtyReceived)} ${item.unit || ""} to raw material stock?`
-    );
-
-    if (!confirmed) return;
-
+    setReceivingItemIds((current) => [...current, item.id]);
     try {
       const result = await api.receiveImportItemStock(
-        receivingOrder.id,
+        order.id,
         item.id,
         {
           qty_received: qtyReceived,
-          damaged_qty: Number(receiveForm.damaged_qty || 0),
-          short_qty: Number(receiveForm.short_qty || 0),
-          notes: receiveForm.notes,
+          damaged_qty: 0,
+          short_qty: 0,
+          notes: "Quick received from slip item list",
         },
         token
       );
 
+      const refreshedOrder = await api.getImportOrder(order.id, token);
       showToast({
         tone: "success",
-        title: isTest ? "Test slip received" : "Stock added",
-        message: result.message || "Import slip stock status updated.",
+        title: Number(order.is_test ?? 1) === 1 ? "Marked received" : "Receipt recorded",
+        message: result.message || "Import slip receipt status updated.",
       });
-      setReceivingOrder(null);
-      setReceivingItem(null);
-      setReceiveForm({ qty_received: "", damaged_qty: "", short_qty: "", notes: "" });
+      setViewingOrder(refreshedOrder.data || null);
       await load();
     } catch (error) {
       showToast({
@@ -643,6 +689,8 @@ export default function ImportTrackingPage() {
         title: "Receive failed",
         message: error.message || "Could not receive this import slip.",
       });
+    } finally {
+      setReceivingItemIds((current) => current.filter((id) => id !== item.id));
     }
   };
 
@@ -671,35 +719,58 @@ export default function ImportTrackingPage() {
     }
   };
 
-  const exportReport = () => {
-    const rows = orders.flatMap((order) =>
+  const buildExportRows = (exportOrders) =>
+    exportOrders.flatMap((order) =>
       (order.items || []).map((item) => ({
         "Order No": order.order_number,
         Mode: Number(order.is_test ?? 1) === 1 ? "Test" : "Real",
         Supplier: order.supplier_name,
         By: order.agent_name,
         "Transportation": order.shipping_method || "",
+        "Loading Date": compactDate(order.loading_date),
+        "Vehicle No": order.vehicle_no || "",
+        "Vehicle Size": order.vehicle_size || "",
+        Destination: order.destination || "",
+        Ocean: order.ocean_company || "",
         Status: label(order.status),
         Material: item.material_name || "-",
         "Article Code": item.article_code || "",
         Category: item.category || "",
         Color: item.color || "",
+        Size: item.size || "",
+        CTN: Number(item.carton_qty || 0),
+        "QTY/CTN": Number(item.qty_per_carton || 0),
         Quantity: Number(item.ordered_qty || 0),
-        "Unit Price": Number(item.unit_price || 0),
-        Currency: item.price_currency || "RMB",
-        "Total Price": Number(item.ordered_qty || 0) * Number(item.unit_price || 0),
-        Received: Number(item.received_qty || 0),
         Unit: item.unit || "",
+        Rate: Number(item.unit_price || 0),
+        Currency: item.price_currency || "RMB",
+        Amount: Number(item.ordered_qty || 0) * Number(item.unit_price || 0),
+        Creditor: item.creditor || "",
+        Note: item.notes || "",
+        Received: Number(item.received_qty || 0),
         Container: firstContainer(order).container_number || "-",
         "Order Date": compactDate(order.order_date),
         "Expected Date": compactDate(order.expected_delivery_date),
       }))
     );
 
+  const exportReport = () => {
+    const rows = buildExportRows(orders);
     const worksheet = XLSX.utils.json_to_sheet(rows);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Import Board");
     XLSX.writeFile(workbook, "import-tracking-board.xlsx");
+  };
+
+  const exportOrderSlip = (order) => {
+    const rows = buildExportRows([order]);
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    const sheetName = String(order.order_number || "Slip").slice(0, 31);
+    const fileOrder = String(order.order_number || "import-slip").replace(/[^\w-]+/g, "-");
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName || "Slip");
+    XLSX.writeFile(workbook, `${fileOrder}-items.xlsx`);
   };
 
   const renderCard = (order) => {
@@ -709,6 +780,7 @@ export default function ImportTrackingPage() {
     const stockStatus = getStockEntryStatus(order);
     const totalOrdered = items.reduce((sum, item) => sum + Number(item.ordered_qty || 0), 0);
     const totalReceived = items.reduce((sum, item) => sum + Number(item.received_qty || 0), 0);
+    const totalCartons = items.reduce((sum, item) => sum + Number(item.carton_qty || 0), 0);
     const priceTotals = items.reduce((totals, item) => {
       const currency = item.price_currency || "RMB";
       totals[currency] = (totals[currency] || 0) + Number(item.ordered_qty || 0) * Number(item.unit_price || 0);
@@ -749,6 +821,7 @@ export default function ImportTrackingPage() {
           <p className="font-medium text-slate-800">
             {formatNumber(items.length)} {items.length === 1 ? "material" : "materials"}
           </p>
+          <p>CTN total: <span className="font-semibold">{formatNumber(totalCartons)}</span></p>
           <p>Ordered total: <span className="font-semibold">{formatNumber(totalOrdered)}</span></p>
           <p>Received total: <span className="font-semibold">{formatNumber(totalReceived)}</span></p>
           <p>
@@ -770,13 +843,15 @@ export default function ImportTrackingPage() {
             {items.length > 3 ? <p className="text-slate-400">+ {items.length - 3} more</p> : null}
           </div>
           <p>By: {order.agent_name || "-"}</p>
+          <p>Destination: {order.destination || "-"}</p>
+          <p>Vehicle size: {order.vehicle_size || "-"}</p>
           <p>Transportation: {order.shipping_method || "-"}</p>
           <p>Container: {container.container_number || "-"}</p>
           <p>Expected: {order.expected_delivery_date ? formatDate(order.expected_delivery_date, { includeTime: false }) : "-"}</p>
         </div>
 
         <div className="mt-3 grid gap-2">
-          <Button size="sm" icon="check" onClick={() => setViewingOrder(order)}>
+          <Button size="sm" icon="check" onClick={() => openViewingOrder(order)}>
             View / receive items
           </Button>
         </div>
@@ -802,20 +877,8 @@ export default function ImportTrackingPage() {
       <PageHeader
         eyebrow="Raw Material Logistics"
         title="Import Tracking"
-        description="Create an order slip, then drag it through the factory import stages."
+        description="Create slips for supplier lists and record received quantities without adding raw material stock."
         icon="purchase"
-        actions={
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" icon="download" onClick={exportReport} disabled={!orders.length}>
-              Export
-            </Button>
-            {canCreateImport ? (
-              <Button icon="plus" onClick={() => setShowSlipForm((open) => !open)}>
-                New {filters.is_test === "1" ? "test" : "real"} slip
-              </Button>
-            ) : null}
-          </div>
-        }
       />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -826,37 +889,44 @@ export default function ImportTrackingPage() {
         <StatCard label="Received Qty" value={formatNumber(summary.received_qty)} icon="check" />
       </div>
 
-      <SectionCard title="Mode" subtitle="Keep test import slips separate from real import tracking." icon="permission">
-        <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold text-slate-900">
-              {filters.is_test === "1" ? "Testing board" : "Real import board"}
-            </p>
-            <p className="mt-1 text-sm text-slate-500">
+      <SectionCard title="Start" subtitle="Choose the board, then create or export slips." icon="permission">
+        <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="inline-flex w-full rounded-xl border border-slate-200 bg-slate-50 p-1 sm:w-auto">
+              <button
+                type="button"
+                onClick={() => setFilters((current) => ({ ...current, is_test: "1" }))}
+                className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition sm:flex-none ${
+                  filters.is_test === "1" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-white"
+                }`}
+              >
+                Test slips
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilters((current) => ({ ...current, is_test: "0" }))}
+                className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition sm:flex-none ${
+                  filters.is_test === "0" ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-white"
+                }`}
+              >
+                Real slips
+              </button>
+            </div>
+            <p className="text-sm text-slate-500">
               {filters.is_test === "1"
-                ? "New slips are marked as test data and stay out of the real board."
-                : "New slips are real records. Use this after you finish testing."}
+                ? "You are working with test slips."
+                : "You are working with real import records."}
             </p>
           </div>
-          <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
-            <button
-              type="button"
-              onClick={() => setFilters((current) => ({ ...current, is_test: "1" }))}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                filters.is_test === "1" ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              Test slips
-            </button>
-            <button
-              type="button"
-              onClick={() => setFilters((current) => ({ ...current, is_test: "0" }))}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                filters.is_test === "0" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              Real slips
-            </button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            {canCreateImport ? (
+              <Button icon="plus" onClick={() => setShowSlipForm((open) => !open)}>
+                {showSlipForm ? "Close slip form" : `New ${filters.is_test === "1" ? "test" : "real"} slip`}
+              </Button>
+            ) : null}
+            <Button variant="secondary" icon="download" onClick={exportReport} disabled={!orders.length}>
+              Export
+            </Button>
           </div>
         </div>
       </SectionCard>
@@ -867,52 +937,98 @@ export default function ImportTrackingPage() {
           subtitle="Tracking only. This will not add raw material stock."
           icon="purchase"
         >
-          <form className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4" onSubmit={submitSlip}>
-            <Field label="Supplier">
-              <TextInput value={slip.supplier_name} onChange={(event) => updateSlip("supplier_name", event.target.value)} placeholder="Optional" />
-            </Field>
-            <Field label="Order date">
-              <TextInput type="date" value={slip.order_date} onChange={(event) => updateSlip("order_date", event.target.value)} required />
-            </Field>
-            <Field label="By">
-              <TextInput value={slip.agent_name} onChange={(event) => updateSlip("agent_name", event.target.value)} placeholder="Who ordered / handled" />
-            </Field>
-            <Field label="Mode of transportation">
-              <SelectInput value={slip.shipping_method} onChange={(event) => updateSlip("shipping_method", event.target.value)}>
-                {transportOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </SelectInput>
-            </Field>
-            <Field label="Country / place">
-              <TextInput value={slip.supplier_country} onChange={(event) => updateSlip("supplier_country", event.target.value)} placeholder="China, India..." />
-            </Field>
-            <div className="space-y-3 md:col-span-2 xl:col-span-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
+          <form className="grid gap-5 p-4 md:grid-cols-2 xl:grid-cols-4" onSubmit={submitSlip}>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-4">
+              <div className="mb-4 flex items-center gap-3">
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-indigo-600 text-sm font-semibold text-white">1</span>
+                <p className="text-sm font-semibold text-slate-900">Slip details</p>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <Field label="Supplier">
+                  <TextInput value={slip.supplier_name} onChange={(event) => updateSlip("supplier_name", event.target.value)} placeholder="Optional" />
+                </Field>
+                <Field label="Order date">
+                  <TextInput type="date" value={slip.order_date} onChange={(event) => updateSlip("order_date", event.target.value)} required />
+                </Field>
+                <Field label="By">
+                  <TextInput value={slip.agent_name} onChange={(event) => updateSlip("agent_name", event.target.value)} placeholder="Who ordered / handled" />
+                </Field>
+                <Field label="Country / place">
+                  <TextInput value={slip.supplier_country} onChange={(event) => updateSlip("supplier_country", event.target.value)} placeholder="China, India..." />
+                </Field>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-4">
+              <div className="mb-4 flex items-center gap-3">
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-indigo-600 text-sm font-semibold text-white">2</span>
+                <p className="text-sm font-semibold text-slate-900">Loading details</p>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <Field label="Loading date">
+                  <TextInput type="date" value={slip.loading_date} onChange={(event) => updateSlip("loading_date", event.target.value)} />
+                </Field>
+                <Field label="Mode of transportation">
+                  <SelectInput value={slip.shipping_method} onChange={(event) => updateSlip("shipping_method", event.target.value)}>
+                    {transportOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </SelectInput>
+                </Field>
+                <Field label="Destination">
+                  <TextInput value={slip.destination} onChange={(event) => updateSlip("destination", event.target.value)} placeholder="Calcutta, Birgunj..." />
+                </Field>
+                <Field label="Vehicle no.">
+                  <TextInput value={slip.vehicle_no} onChange={(event) => updateSlip("vehicle_no", event.target.value)} />
+                </Field>
+                <Field label="Vehicle size">
+                  <TextInput value={slip.vehicle_size} onChange={(event) => updateSlip("vehicle_size", event.target.value)} placeholder="68 CBM" />
+                </Field>
+                <Field label="Transportation name">
+                  <TextInput value={slip.ocean_company} onChange={(event) => updateSlip("ocean_company", event.target.value)} placeholder="Blue Ocean" />
+                </Field>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-4">
+              <div className="mb-4 flex items-center gap-3">
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-indigo-600 text-sm font-semibold text-white">3</span>
+                <p className="text-sm font-semibold text-slate-900">Other details</p>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <Field label="Expected date">
+                  <TextInput type="date" value={slip.expected_delivery_date} onChange={(event) => updateSlip("expected_delivery_date", event.target.value)} />
+                </Field>
+                <Field label="Tracking / bill no.">
+                  <TextInput value={slip.tracking_number} onChange={(event) => updateSlip("tracking_number", event.target.value)} />
+                </Field>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-4">
+              <div className="mb-4 flex items-center gap-3">
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-indigo-600 text-sm font-semibold text-white">4</span>
                 <div>
                   <p className="text-sm font-semibold text-slate-900">Materials in this order</p>
                   <p className="text-xs text-slate-500">Add every raw material from this purchase slip.</p>
                 </div>
-                <Button size="sm" variant="secondary" icon="plus" onClick={addSlipItem}>
-                  Add material
-                </Button>
               </div>
 
               <div className="space-y-3">
                 {slipItems.map((item, index) => (
-                  <div key={item.client_id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div key={item.client_id} className="rounded-xl border border-slate-200 bg-white p-3">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <p className="text-sm font-semibold text-slate-900">Item {index + 1}</p>
                       <Button
                         size="sm"
-                        variant="danger"
+                        variant="ghost"
                         icon="delete"
                         onClick={() => removeSlipItem(index)}
                         disabled={slipItems.length === 1}
                       >
-                        Remove
+                        Remove row
                       </Button>
                     </div>
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -956,20 +1072,51 @@ export default function ImportTrackingPage() {
                       <Field label="Color">
                         <TextInput value={item.color} onChange={(event) => updateSlipItem(index, "color", event.target.value)} />
                       </Field>
-                      <Field label="Quantity">
+                      <Field label="Size">
                         <TextInput
-                          {...wholeNumberInputProps}
+                          value={item.size}
+                          onChange={(event) => updateSlipItem(index, "size", event.target.value)}
+                          placeholder="26-30, 31-35..."
+                        />
+                      </Field>
+                      <Field label="CTN">
+                        <TextInput
+                          type="text"
+                          inputMode="decimal"
+                          value={item.carton_qty}
+                          onChange={(event) => updateSlipItem(index, "carton_qty", decimalNumberValue(event.target.value))}
+                        />
+                      </Field>
+                      <Field label="QTY/CTN">
+                        <TextInput
+                          type="text"
+                          inputMode="decimal"
+                          value={item.qty_per_carton}
+                          onChange={(event) => updateSlipItem(index, "qty_per_carton", decimalNumberValue(event.target.value))}
+                        />
+                      </Field>
+                      <Field label="Total qty">
+                        <TextInput
+                          type="text"
+                          inputMode="decimal"
                           value={item.ordered_qty}
-                          onChange={(event) => updateSlipItem(index, "ordered_qty", wholeNumberValue(event.target.value))}
+                          onChange={(event) => updateSlipItem(index, "ordered_qty", decimalNumberValue(event.target.value))}
                           required
                         />
                       </Field>
-                      <Field label="Price">
+                      <Field label="Unit">
+                        <TextInput value={item.unit} onChange={(event) => updateSlipItem(index, "unit", event.target.value)} />
+                      </Field>
+                      <Field label="Rate">
                         <TextInput
-                          {...wholeNumberInputProps}
+                          type="text"
+                          inputMode="decimal"
                           value={item.unit_price}
-                          onChange={(event) => updateSlipItem(index, "unit_price", wholeNumberValue(event.target.value))}
+                          onChange={(event) => updateSlipItem(index, "unit_price", decimalNumberValue(event.target.value))}
                         />
+                      </Field>
+                      <Field label="Amount">
+                        <TextInput value={formatMoney(Number(item.ordered_qty || 0) * Number(item.unit_price || 0), item.price_currency)} disabled />
                       </Field>
                       <Field label="Currency">
                         <SelectInput value={item.price_currency || "RMB"} onChange={(event) => updateSlipItem(index, "price_currency", event.target.value)}>
@@ -980,33 +1127,31 @@ export default function ImportTrackingPage() {
                           ))}
                         </SelectInput>
                       </Field>
-                      <Field label="Unit">
-                        <TextInput value={item.unit} onChange={(event) => updateSlipItem(index, "unit", event.target.value)} />
+                      <Field label="Creditor">
+                        <TextInput value={item.creditor} onChange={(event) => updateSlipItem(index, "creditor", event.target.value)} />
+                      </Field>
+                      <Field label="Note">
+                        <TextInput value={item.notes} onChange={(event) => updateSlipItem(index, "notes", event.target.value)} placeholder="SAMBA, BOSS LS..." />
                       </Field>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
-            <Field label="Container no.">
-              <TextInput value={slip.container_number} onChange={(event) => updateSlip("container_number", event.target.value)} />
-            </Field>
-            <Field label="Expected date">
-              <TextInput type="date" value={slip.expected_delivery_date} onChange={(event) => updateSlip("expected_delivery_date", event.target.value)} />
-            </Field>
-            <Field label="Tracking / bill no.">
-              <TextInput value={slip.tracking_number} onChange={(event) => updateSlip("tracking_number", event.target.value)} />
-            </Field>
-            <Field label="Sender">
-              <TextInput value={slip.sender_name} onChange={(event) => updateSlip("sender_name", event.target.value)} />
-            </Field>
-            <div className="flex flex-wrap items-end gap-3 md:col-span-2 xl:col-span-4">
-              <Button type="submit" icon={editingId ? "check" : "plus"}>
-                {editingId ? "Update slip" : "Create slip"}
-              </Button>
-              <Button variant="secondary" onClick={resetSlip}>
-                Cancel
-              </Button>
+            <div className="sticky bottom-3 z-10 md:col-span-2 xl:col-span-4">
+              <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+                <Button variant="secondary" icon="plus" onClick={addSlipItem}>
+                  Add material row
+                </Button>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <Button variant="secondary" onClick={resetSlip}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" icon={editingId ? "check" : "plus"}>
+                    {editingId ? "Update slip" : "Create slip"}
+                  </Button>
+                </div>
+              </div>
             </div>
           </form>
         </SectionCard>
@@ -1094,7 +1239,7 @@ export default function ImportTrackingPage() {
           {receivedRows.length ? (
             <>
               <div className="space-y-3 md:hidden">
-                {receivedRows.map((row) => (
+                {paginatedReceivedRows.map((row) => (
                   <article key={row.id} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -1108,7 +1253,9 @@ export default function ImportTrackingPage() {
                     <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
                       <p>Article: <span className="font-medium text-slate-800">{row.article_code || "-"}</span></p>
                       <p>Color: <span className="font-medium text-slate-800">{row.color || "-"}</span></p>
+                      <p>Size: <span className="font-medium text-slate-800">{row.size || "-"}</span></p>
                       <p>Ordered: <span className="font-medium text-slate-800">{formatNumber(row.ordered_qty)} {row.unit}</span></p>
+                      <p>CTN: <span className="font-medium text-slate-800">{formatNumber(row.carton_qty)}</span></p>
                       <p>Price: <span className="font-medium text-slate-800">{formatMoney(row.unit_price, row.price_currency)}</span></p>
                       <p>Received: <span className="font-medium text-slate-800">{formatNumber(row.received_qty)} {row.unit}</span></p>
                       <p>Total: <span className="font-medium text-slate-800">{formatMoney(row.total_price, row.price_currency)}</span></p>
@@ -1123,7 +1270,7 @@ export default function ImportTrackingPage() {
                 <table className="min-w-full divide-y divide-slate-200 text-sm">
                   <thead className="bg-slate-50">
                     <tr>
-                      {["Mode", "Order", "Material", "Article", "Category", "Color", "Ordered", "Price", "Total", "Received", "Damaged", "Short", "Remaining", "Supplier", "Container", "Status"].map((heading) => (
+                      {["Mode", "Order", "Material", "Article", "Category", "Color", "Size", "CTN", "QTY/CTN", "Qty", "Unit", "Rate", "Amount", "Creditor", "Received", "Damaged", "Short", "Remaining", "Supplier", "Container", "Note", "Status"].map((heading) => (
                         <th key={heading} className="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                           {heading}
                         </th>
@@ -1131,7 +1278,7 @@ export default function ImportTrackingPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
-                    {receivedRows.map((row) => (
+                    {paginatedReceivedRows.map((row) => (
                       <tr key={row.id} className="hover:bg-slate-50">
                         <td className="whitespace-nowrap px-3 py-3">
                           <StatusBadge tone={row.mode === "Test" ? "warning" : "success"}>{row.mode}</StatusBadge>
@@ -1141,15 +1288,21 @@ export default function ImportTrackingPage() {
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{row.article_code || "-"}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{row.category || "-"}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{row.color || "-"}</td>
-                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(row.ordered_qty)} {row.unit}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{row.size || "-"}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(row.carton_qty)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(row.qty_per_carton)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(row.ordered_qty)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{row.unit}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatMoney(row.unit_price, row.price_currency)}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatMoney(row.total_price, row.price_currency)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{row.creditor || "-"}</td>
                         <td className="whitespace-nowrap px-3 py-3 font-semibold text-emerald-700">{formatNumber(row.received_qty)} {row.unit}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(row.damaged_qty)} {row.unit}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(row.short_qty)} {row.unit}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(row.remaining_qty)} {row.unit}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{row.supplier_name || "-"}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{row.container_number}</td>
+                        <td className="min-w-[140px] px-3 py-3 text-slate-600">{row.notes || "-"}</td>
                         <td className="whitespace-nowrap px-3 py-3">
                           <StatusBadge tone={row.remaining_qty > 0 ? "warning" : "success"}>{row.status}</StatusBadge>
                         </td>
@@ -1158,10 +1311,61 @@ export default function ImportTrackingPage() {
                   </tbody>
                 </table>
               </div>
+
+              {receivedPageCount > 1 ? (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+                  <p className="text-sm text-slate-500">
+                    Showing {formatNumber(paginatedReceivedRows.length)} of {formatNumber(receivedRows.length)} received rows · Page {formatNumber(receivedPage)} of {formatNumber(receivedPageCount)}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setReceivedRowsPage((page) => Math.max(1, page - 1))}
+                      disabled={receivedPage <= 1}
+                    >
+                      Previous
+                    </Button>
+                    {receivedPageNumbers.map((page, index) => {
+                      const previousPage = receivedPageNumbers[index - 1];
+                      const showGap = previousPage && page - previousPage > 1;
+
+                      return (
+                        <div key={page} className="flex items-center gap-2">
+                          {showGap ? <span className="text-sm text-slate-400">...</span> : null}
+                          <button
+                            type="button"
+                            onClick={() => setReceivedRowsPage(page)}
+                            className={`h-9 min-w-9 rounded-xl px-3 text-sm font-semibold transition ${
+                              page === receivedPage
+                                ? "bg-indigo-600 text-white"
+                                : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                            }`}
+                          >
+                            {page}
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setReceivedRowsPage((page) => Math.min(receivedPageCount, page + 1))}
+                      disabled={receivedPage >= receivedPageCount}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              ) : receivedRows.length ? (
+                <p className="mt-4 border-t border-slate-100 pt-4 text-sm text-slate-500">
+                  Showing {formatNumber(receivedRows.length)} received row{receivedRows.length === 1 ? "" : "s"}.
+                </p>
+              ) : null}
             </>
           ) : (
             <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-              No received materials yet. Use Mark test received or Receive stock on a slip first.
+              No received materials yet. Use Record received on a slip first.
             </div>
           )}
         </div>
@@ -1174,32 +1378,41 @@ export default function ImportTrackingPage() {
               <div>
                 <p className="text-base font-semibold text-slate-900">Items in {viewingOrder.order_number}</p>
                 <p className="mt-1 text-sm text-slate-500">
-                  Receive each material separately when it arrives.
+                  Showing {formatNumber(paginatedViewingItems.length)} of {formatNumber(viewingItems.length)} items.
                 </p>
               </div>
-              <Button variant="secondary" onClick={() => setViewingOrder(null)}>
-                Close
-              </Button>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button variant="secondary" icon="download" onClick={() => exportOrderSlip(viewingOrder)}>
+                  Export Excel
+                </Button>
+                <Button variant="secondary" onClick={() => setViewingOrder(null)}>
+                  Close
+                </Button>
+              </div>
             </div>
 
             <div className="max-h-[72vh] overflow-auto p-4">
               <div className="space-y-3 md:hidden">
-                {(viewingOrder.items || []).map((item) => {
+                {paginatedViewingItems.map((item) => {
                   const itemStatus = getItemStockStatus(item);
                   const isTest = Number(viewingOrder.is_test ?? 1) === 1;
-                  const canReceiveItem = itemStatus.remaining > 0 && (isTest || item.raw_material_id);
+                  const canReceiveItem = itemStatus.remaining > 0;
+                  const isReceivingItem = receivingItemIds.includes(item.id);
 
                   return (
                     <article key={item.id} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold text-slate-900">{item.material_name}</p>
-                          <p className="mt-1 text-xs text-slate-500">{item.category || "-"} · {item.color || "-"}</p>
+                          <p className="mt-1 text-xs text-slate-500">{item.category || "-"} · {item.color || "-"} · {item.size || "-"}</p>
                         </div>
                         <StatusBadge tone={itemStatus.tone}>{itemStatus.label}</StatusBadge>
                       </div>
                       <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
                         <p>Ordered: <span className="font-medium text-slate-800">{formatNumber(item.ordered_qty)} {item.unit || ""}</span></p>
+                        <p>Size: <span className="font-medium text-slate-800">{item.size || "-"}</span></p>
+                        <p>CTN: <span className="font-medium text-slate-800">{formatNumber(item.carton_qty || 0)}</span></p>
+                        <p>QTY/CTN: <span className="font-medium text-slate-800">{formatNumber(item.qty_per_carton || 0)}</span></p>
                         <p>Price: <span className="font-medium text-slate-800">{formatMoney(item.unit_price || 0, item.price_currency)}</span></p>
                         <p>Received: <span className="font-medium text-slate-800">{formatNumber(item.received_qty || 0)} {item.unit || ""}</span></p>
                         <p>Total: <span className="font-medium text-slate-800">{formatMoney(Number(item.ordered_qty || 0) * Number(item.unit_price || 0), item.price_currency)}</span></p>
@@ -1225,10 +1438,10 @@ export default function ImportTrackingPage() {
                           size="sm"
                           variant={canReceiveItem ? "primary" : "secondary"}
                           icon="check"
-                          disabled={!canReceiveItem || !canEditImport}
-                          onClick={() => openReceiveModal(viewingOrder, item)}
+                          disabled={!canReceiveItem || !canEditImport || isReceivingItem}
+                          onClick={() => quickReceiveItem(viewingOrder, item)}
                         >
-                          {isTest ? "Mark received" : item.raw_material_id ? "Receive stock" : "Link material first"}
+                          {isReceivingItem ? "Saving..." : isTest ? "Mark received" : "Record received"}
                         </Button>
                       </div>
                     </article>
@@ -1240,7 +1453,7 @@ export default function ImportTrackingPage() {
                 <table className="min-w-full divide-y divide-slate-200 text-sm">
                   <thead className="bg-slate-50">
                     <tr>
-                      {["Material", "Article", "Category", "Color", "Ordered", "Price", "Total", "Received", "Damaged", "Short", "Remaining", "Status", "Material Link", "Action"].map((heading) => (
+                      {["Material", "Article", "Category", "Color", "Size", "CTN", "QTY/CTN", "Qty", "Unit", "Rate", "Amount", "Creditor", "Note", "Received", "Damaged", "Short", "Remaining", "Status", "Material Link", "Action"].map((heading) => (
                         <th key={heading} className="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                           {heading}
                         </th>
@@ -1248,10 +1461,11 @@ export default function ImportTrackingPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
-                    {(viewingOrder.items || []).map((item) => {
+                    {paginatedViewingItems.map((item) => {
                       const itemStatus = getItemStockStatus(item);
                       const isTest = Number(viewingOrder.is_test ?? 1) === 1;
-                      const canReceiveItem = itemStatus.remaining > 0 && (isTest || item.raw_material_id);
+                      const canReceiveItem = itemStatus.remaining > 0;
+                      const isReceivingItem = receivingItemIds.includes(item.id);
 
                       return (
                         <tr key={item.id} className="hover:bg-slate-50">
@@ -1259,9 +1473,15 @@ export default function ImportTrackingPage() {
                           <td className="whitespace-nowrap px-3 py-3 text-slate-600">{item.article_code || "-"}</td>
                           <td className="whitespace-nowrap px-3 py-3 text-slate-600">{item.category || "-"}</td>
                           <td className="whitespace-nowrap px-3 py-3 text-slate-600">{item.color || "-"}</td>
-                          <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(item.ordered_qty)} {item.unit || ""}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-600">{item.size || "-"}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(item.carton_qty || 0)}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(item.qty_per_carton || 0)}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(item.ordered_qty)}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-600">{item.unit || ""}</td>
                           <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatMoney(item.unit_price || 0, item.price_currency)}</td>
                           <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatMoney(Number(item.ordered_qty || 0) * Number(item.unit_price || 0), item.price_currency)}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-600">{item.creditor || "-"}</td>
+                          <td className="min-w-[120px] px-3 py-3 text-slate-600">{item.notes || "-"}</td>
                           <td className="whitespace-nowrap px-3 py-3 font-semibold text-emerald-700">{formatNumber(item.received_qty || 0)} {item.unit || ""}</td>
                           <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(item.damaged_qty || 0)} {item.unit || ""}</td>
                           <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(item.short_qty || 0)} {item.unit || ""}</td>
@@ -1288,10 +1508,10 @@ export default function ImportTrackingPage() {
                               size="sm"
                               variant={canReceiveItem ? "primary" : "secondary"}
                               icon="check"
-                              disabled={!canReceiveItem || !canEditImport}
-                              onClick={() => openReceiveModal(viewingOrder, item)}
+                              disabled={!canReceiveItem || !canEditImport || isReceivingItem}
+                              onClick={() => quickReceiveItem(viewingOrder, item)}
                             >
-                              {isTest ? "Mark received" : item.raw_material_id ? "Receive stock" : "Link material first"}
+                              {isReceivingItem ? "Saving..." : isTest ? "Mark received" : "Record received"}
                             </Button>
                           </td>
                         </tr>
@@ -1300,82 +1520,55 @@ export default function ImportTrackingPage() {
                   </tbody>
                 </table>
               </div>
+
+              {viewingPageCount > 1 ? (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+                  <p className="text-sm text-slate-500">
+                    Page {formatNumber(viewingPage)} of {formatNumber(viewingPageCount)}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setViewingItemsPage((page) => Math.max(1, page - 1))}
+                      disabled={viewingPage <= 1}
+                    >
+                      Previous
+                    </Button>
+                    {viewingPageNumbers.map((page, index) => {
+                      const previousPage = viewingPageNumbers[index - 1];
+                      const showGap = previousPage && page - previousPage > 1;
+
+                      return (
+                        <div key={page} className="flex items-center gap-2">
+                          {showGap ? <span className="text-sm text-slate-400">...</span> : null}
+                          <button
+                            type="button"
+                            onClick={() => setViewingItemsPage(page)}
+                            className={`h-9 min-w-9 rounded-xl px-3 text-sm font-semibold transition ${
+                              page === viewingPage
+                                ? "bg-indigo-600 text-white"
+                                : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                            }`}
+                          >
+                            {page}
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setViewingItemsPage((page) => Math.min(viewingPageCount, page + 1))}
+                      disabled={viewingPage >= viewingPageCount}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
-        </div>
-      ) : null}
-
-      {receivingOrder ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
-          <form
-            onSubmit={submitReceiveStock}
-            className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl ring-1 ring-slate-200"
-          >
-            <div className="mb-4">
-              <p className="text-sm font-semibold text-slate-900">
-                {Number(receivingOrder.is_test ?? 1) === 1 ? "Mark test slip received" : "Receive into raw materials"}
-              </p>
-              <p className="mt-1 text-sm text-slate-500">
-                {receivingItem?.material_name} · {receivingOrder.order_number}
-              </p>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-3">
-              <Field label="Received qty">
-                <TextInput
-                  {...wholeNumberInputProps}
-                  value={receiveForm.qty_received}
-                  onChange={(event) => setReceiveForm((current) => ({ ...current, qty_received: wholeNumberValue(event.target.value) }))}
-                  required
-                />
-              </Field>
-              <Field label="Damaged qty">
-                <TextInput
-                  {...wholeNumberInputProps}
-                  value={receiveForm.damaged_qty}
-                  onChange={(event) => setReceiveForm((current) => ({ ...current, damaged_qty: wholeNumberValue(event.target.value) }))}
-                />
-              </Field>
-              <Field label="Short qty">
-                <TextInput
-                  {...wholeNumberInputProps}
-                  value={receiveForm.short_qty}
-                  onChange={(event) => setReceiveForm((current) => ({ ...current, short_qty: wholeNumberValue(event.target.value) }))}
-                />
-              </Field>
-              <div className="sm:col-span-3">
-                <Field
-                  label="Notes"
-                  hint={
-                    Number(receivingOrder.is_test ?? 1) === 1
-                      ? "Test mode updates only this import slip. Raw material stock is not changed."
-                      : "Real mode creates a stock batch and increases the linked raw material quantity."
-                  }
-                >
-                  <TextAreaInput
-                    value={receiveForm.notes}
-                    onChange={(event) => setReceiveForm((current) => ({ ...current, notes: event.target.value }))}
-                    placeholder="Container checked, shortage reason, damage note..."
-                  />
-                </Field>
-              </div>
-            </div>
-
-            <div className="mt-5 flex flex-wrap justify-end gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setReceivingOrder(null);
-                  setReceivingItem(null);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" icon="check">
-                {Number(receivingOrder.is_test ?? 1) === 1 ? "Mark received" : "Add stock"}
-              </Button>
-            </div>
-          </form>
         </div>
       ) : null}
     </div>

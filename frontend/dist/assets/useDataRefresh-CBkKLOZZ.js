@@ -1,0 +1,1 @@
+import{r as o}from"./index-391bzgZv.js";const n="store-management:data-refresh",c=e=>{window.dispatchEvent(new CustomEvent(n,{detail:{source:e}}))},E=(e,t)=>{o.useEffect(()=>{const a=s=>{var r;t&&((r=s.detail)==null?void 0:r.source)===t||e().catch(console.error)};return window.addEventListener(n,a),()=>window.removeEventListener(n,a)},[e,t])};export{c as a,E as u};
