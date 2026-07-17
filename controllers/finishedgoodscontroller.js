@@ -638,6 +638,66 @@ const setDisplayOrder = async (req, res, next) => {
   }
 };
 
+// ─── DASHBOARD FEATURED ─────────────────────────────────────────────────────
+const setDashboardFeatured = async (req, res, next) => {
+  try {
+    const supportsDashboardFeatured = await hasColumn('finished_goods', 'dashboard_featured');
+    const supportsDashboardFeaturedOrder = await hasColumn('finished_goods', 'dashboard_featured_order');
+
+    if (!supportsDashboardFeatured || !supportsDashboardFeaturedOrder) {
+      return res.status(400).json({
+        success: false,
+        message: 'Dashboard featured products are not enabled yet. Run sql/add-dashboard-featured-products.sql first.',
+      });
+    }
+
+    const orderedIds = Array.isArray(req.body.ordered_ids)
+      ? [...new Set(req.body.ordered_ids.map((id) => Number(id)).filter((id) => id > 0))].slice(0, 5)
+      : [];
+
+    await query(
+      `UPDATE finished_goods
+       SET dashboard_featured = 0,
+           dashboard_featured_order = NULL
+       WHERE is_deleted = 0`
+    );
+
+    if (orderedIds.length) {
+      const caseSql = orderedIds.map(() => 'WHEN ? THEN ?').join(' ');
+      const placeholders = orderedIds.map(() => '?').join(', ');
+      const caseParams = orderedIds.flatMap((id, index) => [id, index + 1]);
+
+      await query(
+        `UPDATE finished_goods
+         SET dashboard_featured = 1,
+             dashboard_featured_order = CASE id ${caseSql} ELSE dashboard_featured_order END
+         WHERE id IN (${placeholders}) AND is_deleted = 0`,
+        [...caseParams, ...orderedIds]
+      );
+    }
+
+    clearCache();
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'UPDATE',
+      module: 'product_display',
+      entity_type: 'finished_good',
+      entity_id: null,
+      entityName: 'Dashboard featured products',
+      description: `Updated dashboard featured carousel products`,
+      metadata: { ordered_ids: orderedIds },
+    });
+
+    return res.json({
+      success: true,
+      data: { ordered_ids: orderedIds },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getAll,
   getOne,
@@ -648,5 +708,6 @@ module.exports = {
   setDisplayQuantity,
   resetDisplayQuantities,
   setPrice,
-  setDisplayOrder
+  setDisplayOrder,
+  setDashboardFeatured
 };

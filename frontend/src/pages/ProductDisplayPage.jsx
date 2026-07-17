@@ -81,6 +81,9 @@ export default function ProductDisplayPage() {
   const [selectedUserProductSearch, setSelectedUserProductSearch] = useState("");
   const [selectedUserProductMode, setSelectedUserProductMode] = useState("shown");
   const [selectedUserProductPage, setSelectedUserProductPage] = useState(1);
+  const [featuredSelection, setFeaturedSelection] = useState([]);
+  const [featuredProductSearch, setFeaturedProductSearch] = useState("");
+  const [savingFeatured, setSavingFeatured] = useState(false);
   const [savingOrder, setSavingOrder] = useState(false);
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -127,6 +130,21 @@ export default function ProductDisplayPage() {
     });
   }, [items]);
 
+  useEffect(() => {
+    setFeaturedSelection((current) => {
+      if (current.length) {
+        const validIds = new Set(items.map((item) => Number(item.id)));
+        return current.filter((id) => validIds.has(Number(id))).slice(0, 5);
+      }
+
+      return items
+        .filter((item) => Number(item.dashboard_featured) === 1)
+        .sort((a, b) => Number(a.dashboard_featured_order || 999999) - Number(b.dashboard_featured_order || 999999))
+        .map((item) => Number(item.id))
+        .slice(0, 5);
+    });
+  }, [items]);
+
   useDataRefresh(loadItems, "finished-goods");
 
   const articleGroups = useMemo(() => buildArticleGroups(items), [items]);
@@ -145,6 +163,28 @@ export default function ProductDisplayPage() {
   }, [articleGroups, search]);
 
   const visibleCount = items.filter((item) => item.is_visible).length;
+  const itemById = useMemo(
+    () => new Map(items.map((item) => [Number(item.id), item])),
+    [items]
+  );
+  const selectedFeaturedProducts = featuredSelection
+    .map((id) => itemById.get(Number(id)))
+    .filter(Boolean);
+  const featuredSearchResults = useMemo(() => {
+    const q = featuredProductSearch.trim().toLowerCase();
+    const selectedIds = new Set(featuredSelection.map((id) => Number(id)));
+
+    return items
+      .filter((item) => {
+        if (selectedIds.has(Number(item.id))) return false;
+        if (!q) return true;
+
+        return [item.id, item.name, item.article_code, item.sole_code, item.color, item.size]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(q));
+      })
+      .slice(0, 8);
+  }, [featuredProductSearch, featuredSelection, items]);
   const visibleUsersByProduct = useMemo(() => {
     const denied = new Set(
       permissions
@@ -331,6 +371,72 @@ export default function ProductDisplayPage() {
       showToast({ tone: "error", title: "Position update failed", message: error.message });
     } finally {
       setSavingOrder(false);
+    }
+  };
+
+  const addFeaturedProduct = (productId) => {
+    const id = Number(productId);
+    if (!id || featuredSelection.includes(id) || featuredSelection.length >= 5) return;
+    setFeaturedSelection((current) => [...current, id].slice(0, 5));
+    setFeaturedProductSearch("");
+  };
+
+  const removeFeaturedProduct = (productId) => {
+    setFeaturedSelection((current) => current.filter((id) => Number(id) !== Number(productId)));
+  };
+
+  const moveFeaturedProduct = (productId, direction) => {
+    setFeaturedSelection((current) => {
+      const index = current.findIndex((id) => Number(id) === Number(productId));
+      if (index === -1) return current;
+
+      const nextIndex = direction === "up" ? Math.max(0, index - 1) : Math.min(current.length - 1, index + 1);
+      if (nextIndex === index) return current;
+
+      const next = [...current];
+      const [selected] = next.splice(index, 1);
+      next.splice(nextIndex, 0, selected);
+      return next;
+    });
+  };
+
+  const saveFeaturedProducts = async () => {
+    try {
+      setSavingFeatured(true);
+      await api.updateDashboardFeaturedProducts(featuredSelection, token);
+      setItems((current) =>
+        current.map((item) => {
+          const index = featuredSelection.findIndex((id) => Number(id) === Number(item.id));
+          return {
+            ...item,
+            dashboard_featured: index >= 0 ? 1 : 0,
+            dashboard_featured_order: index >= 0 ? index + 1 : null,
+          };
+        })
+      );
+      announceDataRefresh("finished-goods");
+      announceDataRefresh("finished-goods-user");
+      announceDataRefresh("dashboard");
+      showToast({
+        tone: "success",
+        title: "Dashboard carousel updated",
+        message: featuredSelection.length
+          ? "Selected products will appear in the user dashboard carousel."
+          : "Dashboard carousel will use the newest products.",
+      });
+    } catch (error) {
+      const notFoundMessage =
+        String(error.message || "").toLowerCase() === "not found"
+          ? "Backend route is not active yet. Restart the backend after applying sql/add-dashboard-featured-products.sql."
+          : error.data?.message || error.message;
+
+      showToast({
+        tone: "error",
+        title: "Carousel update failed",
+        message: notFoundMessage,
+      });
+    } finally {
+      setSavingFeatured(false);
     }
   };
 
@@ -621,6 +727,115 @@ export default function ProductDisplayPage() {
           <p className="mt-1 text-2xl font-semibold text-slate-900">{items.length}</p>
         </div>
       </div>
+
+      <SectionCard
+        title="Dashboard Featured Carousel"
+        subtitle="Choose up to 5 products for the USER dashboard carousel. If none are selected, newest products are shown automatically."
+        icon="dashboard"
+      >
+        <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="space-y-3">
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-500">
+                Search and add product
+              </label>
+              <div className="relative">
+                <Icon name="search" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={featuredProductSearch}
+                  onChange={(event) => setFeaturedProductSearch(event.target.value)}
+                  placeholder="Search article, FG.ID, color, size..."
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+                />
+              </div>
+            </div>
+            <div className="max-h-72 space-y-2 overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-2">
+              {featuredSearchResults.length ? featuredSearchResults.map((product) => (
+                <button
+                  key={product.id}
+                  type="button"
+                  onClick={() => addFeaturedProduct(product.id)}
+                  disabled={featuredSelection.length >= 5}
+                  className="flex w-full items-center gap-3 rounded-lg bg-white p-2 text-left shadow-sm transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {product.image_url ? (
+                    <img src={`${APP_BASE_URL}${product.image_url}`} alt={product.article_code || product.name} className="h-12 w-12 rounded-lg object-cover" />
+                  ) : (
+                    <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400">
+                      No image
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-slate-950">{product.article_code || product.name}</p>
+                    <p className="text-xs text-slate-500">FG.ID {product.id} · {[product.color, product.size].filter(Boolean).join(" / ") || "-"}</p>
+                  </div>
+                  <span className="text-xs font-bold text-indigo-600">Add</span>
+                </button>
+              )) : (
+                <div className="rounded-lg border border-dashed border-slate-200 bg-white p-5 text-center text-sm text-slate-500">
+                  No products found.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Selected carousel products</p>
+                <p className="text-sm text-slate-500">{selectedFeaturedProducts.length} / 5 selected</p>
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="secondary" onClick={() => setFeaturedSelection([])}>
+                  Use newest
+                </Button>
+                <Button type="button" icon="check" onClick={saveFeaturedProducts} disabled={savingFeatured}>
+                  {savingFeatured ? "Saving..." : "Save carousel"}
+                </Button>
+              </div>
+            </div>
+
+            {selectedFeaturedProducts.length ? (
+              <div className="space-y-2">
+                {selectedFeaturedProducts.map((product, index) => (
+                  <div key={product.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-sm font-bold text-indigo-700">
+                      {index + 1}
+                    </span>
+                    {product.image_url ? (
+                      <img src={`${APP_BASE_URL}${product.image_url}`} alt={product.article_code || product.name} className="h-14 w-14 rounded-lg object-cover" />
+                    ) : (
+                      <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400">
+                        No image
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-slate-950">{product.article_code || product.name}</p>
+                      <p className="text-xs text-slate-500">FG.ID {product.id} · {[product.color, product.size].filter(Boolean).join(" / ") || "-"}</p>
+                    </div>
+                    <div className="flex gap-1">
+                      <Button type="button" size="sm" variant="secondary" onClick={() => moveFeaturedProduct(product.id, "up")} disabled={index === 0}>
+                        Up
+                      </Button>
+                      <Button type="button" size="sm" variant="secondary" onClick={() => moveFeaturedProduct(product.id, "down")} disabled={index === selectedFeaturedProducts.length - 1}>
+                        Down
+                      </Button>
+                      <Button type="button" size="sm" variant="danger" icon="delete" onClick={() => removeFeaturedProduct(product.id)}>
+                        Remove
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                No products selected. The USER dashboard carousel will show the newest 5 products.
+              </div>
+            )}
+          </div>
+        </div>
+      </SectionCard>
 
       <div className="order-2">
         <SectionCard

@@ -193,6 +193,13 @@ export const api = {
       token
     ),
 
+  updateDashboardFeaturedProducts: (orderedIds, token) =>
+    apiRequest(
+      "/finished-goods/dashboard-featured",
+      { method: "PUT", body: JSON.stringify({ ordered_ids: orderedIds }) },
+      token
+    ),
+
   updateFinishedGoodDisplayQuantity: (id, displayQuantity, token) =>
     apiRequest(
       `/finished-goods/${id}/display-quantity`,

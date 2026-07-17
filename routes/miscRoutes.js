@@ -9,6 +9,7 @@ const { cacheResponse } = require('../middleware/cacheMiddleware');
 fgRouter.use(authenticate);
 fgRouter.get('/',       cacheResponse(15000), fgCtrl.getAll);
 fgRouter.put('/display-order', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDisplayOrder);
+fgRouter.put('/dashboard-featured', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDashboardFeatured);
 fgRouter.get('/:id',    cacheResponse(15000), fgCtrl.getOne);
 fgRouter.post('/',      authorize('ADMIN', 'CO_ADMIN'), uploadMiddleware('image'), fgCtrl.create);
 fgRouter.put('/:id/visibility', authorizeAdminOrPagePermission(PRODUCT_VISIBILITY_PAGE_KEY, 'can_edit'), fgCtrl.setVisibility);

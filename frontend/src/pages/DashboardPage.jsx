@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Package as PackageIcon, Eye, EyeOff, Megaphone } from "lucide-react";
+import { Link } from "react-router-dom";
+import { ArrowRight, ChevronLeft, ChevronRight, Package as PackageIcon, Eye, EyeOff, Megaphone, ShoppingBag, Sparkles } from "lucide-react";
 
 import PageHeader from "../components/PageHeader";
 import ProductImageGallery from "../components/ProductImageGallery";
@@ -555,6 +556,361 @@ function PublishedNotices({ notices = [] }) {
   );
 }
 
+function UserDashboardShowcase({ products = [], notices = [], user }) {
+  const [featuredIndex, setFeaturedIndex] = useState(0);
+
+  const productGroups = useMemo(() => {
+    const groups = {};
+    products
+      .filter((product) => Number(product.is_visible) === 1)
+      .forEach((item) => {
+        const key =
+          item.article_code ||
+          item.name?.split("_")?.slice(0, -1)?.join("_") ||
+          item.name ||
+          `product-${item.id}`;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(item);
+      });
+
+    return Object.values(groups)
+      .map((variants) => [...variants].sort(sortByDisplayOrder))
+      .sort((a, b) => getGroupDisplayOrder(a) - getGroupDisplayOrder(b));
+  }, [products]);
+
+  const newestProductGroups = useMemo(
+    () =>
+      [...productGroups]
+        .sort((a, b) => {
+          const newestA = Math.max(...a.map((item) => new Date(item.created_at || 0).getTime() || 0));
+          const newestB = Math.max(...b.map((item) => new Date(item.created_at || 0).getTime() || 0));
+          return newestB - newestA;
+        })
+        .slice(0, 5),
+    [productGroups]
+  );
+  const adminFeaturedGroups = useMemo(
+    () =>
+      productGroups
+        .filter((group) => group.some((item) => Number(item.dashboard_featured) === 1))
+        .sort((a, b) => {
+          const orderA = Math.min(...a.map((item) => Number(item.dashboard_featured_order || 999999)));
+          const orderB = Math.min(...b.map((item) => Number(item.dashboard_featured_order || 999999)));
+          return orderA - orderB;
+        })
+        .slice(0, 5),
+    [productGroups]
+  );
+  const carouselProductGroups = adminFeaturedGroups.length ? adminFeaturedGroups : newestProductGroups;
+
+  useEffect(() => {
+    setFeaturedIndex(0);
+  }, [carouselProductGroups.length]);
+
+  useEffect(() => {
+    if (carouselProductGroups.length < 2) return undefined;
+
+    const timer = window.setInterval(
+      () => setFeaturedIndex((index) => (index + 1) % carouselProductGroups.length),
+      5000
+    );
+
+    return () => window.clearInterval(timer);
+  }, [carouselProductGroups.length]);
+
+  const featuredGroup = carouselProductGroups[featuredIndex] || productGroups[0] || [];
+  const featured = featuredGroup.find((item) => item.image_url) || featuredGroup[0] || null;
+  const featuredSlides = carouselProductGroups.map((group) => group.find((item) => item.image_url) || group[0]);
+  const articleCards = productGroups
+    .filter((group) => group[0]?.id !== featuredGroup[0]?.id)
+    .slice(0, 3)
+    .map((group) => group.find((item) => item.image_url) || group[0]);
+  const mainNotice = notices[0];
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100 text-indigo-700">
+              <ShoppingBag size={18} />
+            </span>
+            <div>
+              <p className="text-xs font-bold uppercase text-indigo-600">Customer catalog</p>
+              <h2 className="text-lg font-bold text-slate-950">Products, articles & notices</h2>
+            </div>
+          </div>
+          <Link
+            to="/finished-goods"
+            className="inline-flex h-10 items-center gap-2 rounded-xl bg-indigo-600 px-4 text-sm font-bold text-white transition hover:bg-indigo-700"
+          >
+            Our products <ArrowRight size={16} />
+          </Link>
+        </div>
+      </div>
+
+      <div className="grid gap-5 p-5 sm:p-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.75fr)]">
+        <div className="flex min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div className="relative aspect-[16/11] overflow-hidden bg-slate-100 sm:aspect-[16/9]">
+            <div
+              className="flex h-full transition-transform duration-500 ease-out"
+              style={{ transform: `translateX(-${featuredIndex * 100}%)` }}
+            >
+              {(featuredSlides.length ? featuredSlides : [featured]).map((slide, index) => (
+                <div key={slide?.id || index} className="relative flex h-full w-full shrink-0 items-center justify-center bg-slate-100">
+                  {slide?.image_url ? (
+                    <img
+                      src={`${APP_BASE_URL}${slide.image_url}`}
+                      alt={slide.article_code || slide.name}
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <div className="flex h-full min-h-[260px] items-center justify-center text-slate-400">
+                      <PackageIcon size={52} />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <span className="absolute left-4 top-4 rounded-full bg-white/90 px-3 py-1 text-xs font-bold text-slate-700 shadow-sm">
+              {adminFeaturedGroups.length ? "Featured" : "Newest"}
+            </span>
+            {carouselProductGroups.length > 1 ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setFeaturedIndex((index) => (index - 1 + carouselProductGroups.length) % carouselProductGroups.length)}
+                  aria-label="Previous newest product"
+                  className="absolute left-4 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-slate-800 shadow-sm transition hover:bg-white"
+                >
+                  <ChevronLeft size={18} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFeaturedIndex((index) => (index + 1) % carouselProductGroups.length)}
+                  aria-label="Next newest product"
+                  className="absolute right-4 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-slate-800 shadow-sm transition hover:bg-white"
+                >
+                  <ChevronRight size={18} />
+                </button>
+                <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 gap-2 rounded-full bg-white/85 px-3 py-2 shadow-sm">
+                  {carouselProductGroups.map((group, index) => (
+                    <button
+                      key={group.map((item) => item.id).join("-")}
+                      type="button"
+                      onClick={() => setFeaturedIndex(index)}
+                      aria-label={`Show newest product ${index + 1}`}
+                      className={`h-2 rounded-full transition-all ${
+                        index === featuredIndex ? "w-6 bg-indigo-600" : "w-2 bg-slate-300 hover:bg-slate-400"
+                      }`}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </div>
+
+          <div className="space-y-5 border-t border-slate-100 p-5 sm:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-indigo-600">
+                  {adminFeaturedGroups.length ? "Featured product" : "Newest product"} {carouselProductGroups.length > 1 ? `${featuredIndex + 1} / ${carouselProductGroups.length}` : ""}
+                </p>
+                <h1 className="mt-2 break-words text-3xl font-black leading-tight text-slate-950 sm:text-4xl">
+                  {featured?.article_code || featured?.name || "Our Products"}
+                </h1>
+                <p className="mt-2 break-words text-sm font-semibold text-slate-600">
+                  {featured?.name || "Browse latest articles and available stock"}
+                </p>
+              </div>
+              <Link
+                to="/finished-goods"
+                className="inline-flex h-11 shrink-0 items-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-bold text-white transition hover:bg-indigo-600"
+              >
+                Start shopping <ArrowRight size={16} />
+              </Link>
+            </div>
+
+            <div className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
+                <p className="text-slate-500">Available</p>
+                <p className="mt-1 font-bold text-slate-950">{formatNumber(getAvailableQty(featured))} {featured?.unit || "pcs"}</p>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
+                <p className="text-slate-500">Price</p>
+                <p className="mt-1 font-bold text-emerald-700">{featured ? formatUserPrice(featured.price, user) : "-"}</p>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
+                <p className="text-slate-500">Color</p>
+                <p className="mt-1 font-bold text-slate-950">{featured?.color || "-"}</p>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
+                <p className="text-slate-500">Size</p>
+                <p className="mt-1 font-bold text-slate-950">{featured?.size || "-"}</p>
+              </div>
+            </div>
+
+            {featuredSlides.length > 1 ? (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                {featuredSlides.map((slide, index) => (
+                  <button
+                    key={slide?.id || index}
+                    type="button"
+                    onClick={() => setFeaturedIndex(index)}
+                    className={`overflow-hidden rounded-xl border bg-white text-left transition ${
+                      index === featuredIndex
+                        ? "border-indigo-500 ring-2 ring-indigo-100"
+                        : "border-slate-200 hover:border-indigo-200"
+                    }`}
+                  >
+                    <div className="aspect-[4/3] bg-slate-100">
+                      {slide?.image_url ? (
+                        <img
+                          src={`${APP_BASE_URL}${slide.image_url}`}
+                          alt={slide.article_code || slide.name}
+                          className="h-full w-full object-contain"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-slate-400">
+                          <PackageIcon size={18} />
+                        </div>
+                      )}
+                    </div>
+                    <p className="truncate px-2 py-1 text-[11px] font-bold text-slate-700">
+                      {slide?.article_code || slide?.name || "-"}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <aside className="space-y-4">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+            <div className="flex items-start gap-3">
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+                <Megaphone size={20} />
+              </span>
+              <div>
+                <p className="text-xs font-bold uppercase text-amber-700">Announcement</p>
+                <h3 className="mt-2 text-lg font-black text-slate-950">
+                  {mainNotice?.title || "Notice !!!"}
+                </h3>
+                <p className="mt-3 whitespace-pre-line text-sm leading-6 text-slate-600">
+                  {mainNotice?.message ||
+                    "We are pleased to announce that our products and articles are available in the catalog. Please check stock and price before placing your order."}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold uppercase text-slate-500">Articles</p>
+              <span className="text-xs font-semibold text-slate-500">{formatNumber(productGroups.length)} total</span>
+            </div>
+            {articleCards.length ? articleCards.map((item) => (
+              <Link
+                key={item.id}
+                to="/finished-goods"
+                className="group flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition hover:border-indigo-200 hover:shadow-md"
+              >
+                <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-slate-100">
+                  {item.image_url ? (
+                    <img src={`${APP_BASE_URL}${item.image_url}`} alt={item.article_code || item.name} className="h-full w-full object-cover transition group-hover:scale-105" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-slate-400">
+                      <PackageIcon size={22} />
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-black text-slate-950">{item.article_code || item.name}</p>
+                  <p className="mt-1 truncate text-xs text-slate-500">{item.color || "Color"} · {item.size || "Size"}</p>
+                  <p className="mt-1 text-xs font-bold text-emerald-700">{formatUserPrice(item.price, user)}</p>
+                </div>
+                <ArrowRight size={16} className="text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-indigo-600" />
+              </Link>
+            )) : (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-white/70 p-5 text-sm text-slate-500">
+                No product articles are available yet.
+              </div>
+            )}
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function AdminDashboardControls() {
+  const controls = [
+    {
+      title: "Products & articles",
+      description: "Control product visibility, article order, and country access.",
+      to: "/product-display",
+      icon: ShoppingBag,
+      tone: "bg-indigo-50 text-indigo-700 ring-indigo-100",
+    },
+    {
+      title: "Announcement & notice",
+      description: "Publish notices, banners, and dashboard advertisements.",
+      to: "/advertisements",
+      icon: Megaphone,
+      tone: "bg-amber-50 text-amber-700 ring-amber-100",
+    },
+    {
+      title: "Product content",
+      description: "Edit product photos, prices, article codes, size, and color.",
+      to: "/finished-goods",
+      icon: Sparkles,
+      tone: "bg-emerald-50 text-emerald-700 ring-emerald-100",
+    },
+  ];
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase text-indigo-600">Dashboard controls</p>
+          <h2 className="mt-1 text-lg font-bold text-slate-950">Control customer dashboard content</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Admin and Co-admin can control products, articles, announcements, notices, and advertisements from here.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+        {controls.map((item) => {
+          const ControlIcon = item.icon;
+
+          return (
+            <Link
+              key={item.to}
+              to={item.to}
+              className="group rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-indigo-200 hover:bg-white hover:shadow-md"
+            >
+              <div className="flex items-start gap-3">
+                <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 ${item.tone}`}>
+                  <ControlIcon size={18} />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-slate-950">{item.title}</h3>
+                  <p className="mt-1 text-sm leading-5 text-slate-500">{item.description}</p>
+                  <span className="mt-3 inline-flex items-center gap-1 text-sm font-bold text-indigo-600">
+                    Manage <ArrowRight size={15} className="transition group-hover:translate-x-0.5" />
+                  </span>
+                </div>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // DashboardPage — unchanged
 // ─────────────────────────────────────────────────────────────
@@ -609,7 +965,7 @@ export default function DashboardPage() {
       user.role !== "USER" ? api.getProductionHistory(token, { limit: 20, include_total: 0 }) : Promise.resolve({ data: [] }),
       user.role !== "MEMBER" ? api.getConsumptionLogs(token, { limit: 20, include_total: 0 }) : Promise.resolve({ data: [] }),
       user.role !== "MEMBER" ? api.getOrders(token, { limit: 100 }) : Promise.resolve({ data: [] }),
-      canManageVisibility || user.role === "MEMBER"
+      canManageVisibility || user.role === "MEMBER" || user.role === "USER"
         ? api.getAvailability(token, { includeHidden: canManageVisibility || user.role === "MEMBER" })
         : Promise.resolve({ data: [] }),
       canManageVisibility ? api.getPermissions(token) : Promise.resolve({ data: [] }),
@@ -1000,24 +1356,36 @@ export default function DashboardPage() {
         icon="dashboard"
       />
 
+      {user.role === "USER" && (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <StatCard label="Catalog Status" value="Active" tone="default" icon="finishedGoods" />
+          <StatCard label="Pending Orders" value={formatNumber(pendingOrders)} tone="alert" icon="orders" />
+          <StatCard label="Confirmed Orders" value={formatNumber(confirmedOrders)} tone="calm" icon="check" />
+          <StatCard label="Delivered Orders" value={formatNumber(deliveredOrders)} tone="default" icon="check" />
+        </div>
+      )}
+
+      {canManageVisibility && <AdminDashboardControls />}
+
       {user.role === "USER" && advertisementsAboveStatus.length > 0 && (
         <AdvertisementBanner advertisements={advertisementsAboveStatus} />
       )}
 
-      {user.role === "USER" && publishedNotices.length > 0 && (
+      {user.role === "USER" && (
+        <UserDashboardShowcase
+          products={state.availability}
+          notices={publishedNotices}
+          user={user}
+        />
+      )}
+
+      {user.role !== "USER" && publishedNotices.length > 0 && (
         <PublishedNotices notices={publishedNotices} />
       )}
 
       {/* STAT CARDS */}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        {user.role === "USER" ? (
-          <>
-            <StatCard label="Catalog Status"   value="Active"                        tone="default" icon="finishedGoods" />
-            <StatCard label="Pending Orders"   value={formatNumber(pendingOrders)}   tone="alert"   icon="orders" />
-            <StatCard label="Confirmed Orders" value={formatNumber(confirmedOrders)} tone="calm"    icon="check" />
-            <StatCard label="Delivered Orders" value={formatNumber(deliveredOrders)} tone="default" icon="check" />
-          </>
-        ) : (
+      {user.role !== "USER" && (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <>
             <StatCard label="Raw Material Stock"            value={formatNumber(rawTotal)}      tone="calm"    icon="materials" />
             <StatCard label="Finished Goods Stock In Pairs" value={formatNumber(finishedTotal)} tone="calm"    icon="finishedGoods" />
@@ -1035,8 +1403,8 @@ export default function DashboardPage() {
               />
             )}
           </>
-        )}
-      </div>
+        </div>
+      )}
 
       {user.role === "USER" && advertisementsBelowStatus.length > 0 && (
         <AdvertisementBanner advertisements={advertisementsBelowStatus} />
