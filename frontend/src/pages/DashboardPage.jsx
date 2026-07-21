@@ -32,6 +32,10 @@ const getSeriesName = (soleCode = "") =>
     .replace(/[-_\s]*sole$/i, "")
     .trim();
 
+const isActiveOffer = (product) =>
+  Number(product?.offer_enabled) === 1 &&
+  (!product?.offer_ends_at || new Date(product.offer_ends_at).getTime() >= Date.now());
+
 const advertisementPlacement = (advertisement) =>
   String(advertisement?.placement || "BELOW_STATUS").trim().toUpperCase();
 
@@ -562,7 +566,7 @@ function UserDashboardShowcase({ products = [], notices = [], user }) {
   const productGroups = useMemo(() => {
     const groups = {};
     products
-      .filter((product) => Number(product.is_visible) === 1)
+      .filter((product) => Number(product.is_visible) === 1 && !isActiveOffer(product))
       .forEach((item) => {
         const key =
           item.article_code ||

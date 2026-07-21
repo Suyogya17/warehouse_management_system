@@ -33,6 +33,7 @@ const navByRole = {
     { to: "/warehouses", label: "Warehouses", icon: "box" },
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/product-display", label: "Product Display", icon: "eye" },
+    { to: "/offers", label: "Offers", icon: "finishedGoods" },
     { to: "/advertisements", label: "Advertisements", icon: "image" },
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
@@ -56,6 +57,7 @@ const navByRole = {
     { to: "/warehouses", label: "Warehouses", icon: "box" },
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/product-display", label: "Product Display", icon: "eye" },
+    { to: "/offers", label: "Offers", icon: "finishedGoods" },
     { to: "/advertisements", label: "Advertisements", icon: "image" },
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
@@ -75,6 +77,7 @@ const navByRole = {
   USER: [
     { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/finished-goods", label: "Our Products", icon: "finishedGoods" },
+    { to: "/offers", label: "Offers", icon: "finishedGoods" },
     { to: "/order-customer", label: "Order", icon: "cart" },
   ],
 

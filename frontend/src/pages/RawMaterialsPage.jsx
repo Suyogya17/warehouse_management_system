@@ -57,6 +57,8 @@ export default function RawMaterialsPage() {
   const [nextStep, setNextStep] = useState(null);
   const selectedBlueprint = materialBlueprints.find((item) => item.name.toLowerCase() === form.name.toLowerCase());
   const [deleteId, setDeleteId] = useState(null);
+  const [availability, setAvailability] = useState(null);
+  const [loadingAvailability, setLoadingAvailability] = useState(false);
 
   const loadItems = useCallback(async () => {
     const result = await api.getRawMaterials(token);
@@ -182,6 +184,22 @@ const remove = (id) => {
     },
   });
 };
+
+  const viewAvailability = async (item) => {
+    setLoadingAvailability(true);
+    try {
+      const result = await api.getRawMaterialAvailability(item.id, token);
+      setAvailability(result.data || null);
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Availability failed",
+        message: error.message || "Could not load material availability.",
+      });
+    } finally {
+      setLoadingAvailability(false);
+    }
+  };
 
   const [preview, setPreview] = useState(null); 
 
@@ -420,6 +438,9 @@ const remove = (id) => {
                       <Button type="button" variant="secondary" size="sm" icon="edit" onClick={() => startEdit(row)}>
                         Edit
                       </Button>
+                      <Button type="button" variant="secondary" size="sm" onClick={() => viewAvailability(row)}>
+                        Details
+                      </Button>
                       {user.role === "ADMIN" ? (
                        <Button
   type="button"
@@ -494,6 +515,92 @@ const remove = (id) => {
     </div>
   </div>
 )}
+
+      {(availability || loadingAvailability) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 p-5">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">
+                  {availability?.material?.name || "Material availability"}
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Source-wise stock, article split, used quantity, and remaining quantity.
+                </p>
+              </div>
+              <Button type="button" variant="secondary" onClick={() => setAvailability(null)}>
+                Close
+              </Button>
+            </div>
+
+            <div className="max-h-[72vh] overflow-auto p-5">
+              {loadingAvailability ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                  Loading availability...
+                </div>
+              ) : (
+                <>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                      <p className="text-xs font-semibold uppercase text-emerald-700">Available</p>
+                      <p className="mt-1 text-2xl font-bold text-emerald-800">
+                        {formatNumber(availability?.summary?.remaining || 0)} {availability?.material?.unit || ""}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-xs font-semibold uppercase text-slate-500">Received</p>
+                      <p className="mt-1 text-2xl font-bold text-slate-900">
+                        {formatNumber(availability?.summary?.received || 0)} {availability?.material?.unit || ""}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
+                      <p className="text-xs font-semibold uppercase text-rose-700">Used</p>
+                      <p className="mt-1 text-2xl font-bold text-rose-800">
+                        {formatNumber(availability?.summary?.used || 0)} {availability?.material?.unit || ""}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 overflow-x-auto rounded-xl border border-slate-200">
+                    <table className="min-w-full divide-y divide-slate-200 text-sm">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          {["Source", "Country", "Product article", "Product", "Color", "Size", "Received", "Used", "Left", "Reference"].map((heading) => (
+                            <th key={heading} className="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase text-slate-500">
+                              {heading}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {(availability?.lots || []).map((lot) => (
+                          <tr key={`${lot.reference_type}-${lot.id}`}>
+                            <td className="whitespace-nowrap px-3 py-3 font-medium text-slate-900">{lot.source_type || "-"}</td>
+                            <td className="whitespace-nowrap px-3 py-3 text-slate-600">{lot.source_country || "-"}</td>
+                            <td className="whitespace-nowrap px-3 py-3 text-slate-600">{lot.product_article || lot.material_article_code || "-"}</td>
+                            <td className="whitespace-nowrap px-3 py-3 text-slate-600">{lot.product_name || lot.material_name || "-"}</td>
+                            <td className="whitespace-nowrap px-3 py-3 text-slate-600">{lot.color || "-"}</td>
+                            <td className="whitespace-nowrap px-3 py-3 text-slate-600">{lot.size || "-"}</td>
+                            <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(lot.qty_received || 0)}</td>
+                            <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatNumber(lot.qty_used || 0)}</td>
+                            <td className="whitespace-nowrap px-3 py-3 font-semibold text-emerald-700">{formatNumber(lot.qty_remaining || 0)}</td>
+                            <td className="whitespace-nowrap px-3 py-3 text-slate-600">{lot.order_number || lot.reference_type || "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {!(availability?.lots || []).length ? (
+                      <div className="p-6 text-center text-sm text-slate-500">
+                        No source lots recorded yet.
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

@@ -22,6 +22,8 @@ const TOTAL_STOCK_MOVEMENTS = new Set([
   "ORDER_OUT",
   "ADJUSTMENT_IN",
   "ADJUSTMENT_OUT",
+  "TRANSFER_IN",
+  "TRANSFER_OUT",
 ]);
 
 const getMovementLabel = (movement) => {
@@ -37,6 +39,8 @@ const getMovementLabel = (movement) => {
   if (type === "ADJUSTMENT_OUT" && referenceType === "consumption") {
     return "Consumed / removed";
   }
+  if (type === "TRANSFER_IN") return "Transferred in";
+  if (type === "TRANSFER_OUT") return "Transferred out";
   if (type === "ADJUSTMENT_IN") return "Stock added";
   if (type === "ADJUSTMENT_OUT") return "Stock removed";
   return type || "Movement";

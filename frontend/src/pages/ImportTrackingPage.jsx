@@ -245,6 +245,9 @@ export default function ImportTrackingPage() {
   const [receivedRowsPage, setReceivedRowsPage] = useState(1);
   const [receivingItemIds, setReceivingItemIds] = useState([]);
   const [customCategoryItems, setCustomCategoryItems] = useState({});
+  const [splitModal, setSplitModal] = useState(null);
+  const [splitRows, setSplitRows] = useState([]);
+  const [savingSplits, setSavingSplits] = useState(false);
 
   const materialById = useMemo(
     () => new Map(materials.map((material) => [String(material.id), material])),
@@ -299,7 +302,7 @@ export default function ImportTrackingPage() {
   const groupedOrders = useMemo(() => {
     const groups = new Map(boardColumns.map((column) => [column.key, []]));
 
-    orders.forEach((order) => {
+    (Array.isArray(orders) ? orders : []).forEach((order) => {
       const key = groups.has(order.status) ? order.status : "ORDERED";
       groups.get(key).push(order);
     });
@@ -386,10 +389,120 @@ export default function ImportTrackingPage() {
     }
     return Array.from(pages).sort((a, b) => a - b);
   }, [viewingPage, viewingPageCount]);
+  const splitTotalQty = splitRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+  const splitMaxQty = splitModal
+    ? Number(splitModal.item.received_qty || 0) > 0
+      ? Number(splitModal.item.received_qty || 0)
+      : Number(splitModal.item.ordered_qty || 0)
+    : 0;
+  const splitRemainingQty = Math.max(splitMaxQty - splitTotalQty, 0);
 
   const openViewingOrder = (order) => {
     setViewingItemsPage(1);
     setViewingOrder(order);
+  };
+
+  const setSlipMode = (isTestMode) => {
+    setFilters((current) => ({ ...current, is_test: isTestMode ? "1" : "0" }));
+    setViewingOrder(null);
+    setSplitModal(null);
+    setShowSlipForm(false);
+    setEditingId(null);
+    setViewingItemsPage(1);
+    setReceivedRowsPage(1);
+  };
+
+  const createSplitRow = (item = {}) => ({
+    client_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    product_article: item.product_article || "",
+    product_name: item.product_name || "",
+    color: item.color || "",
+    size: item.size || "",
+    quantity: item.quantity || "",
+    note: item.note || "",
+  });
+
+  const openSplitModal = (order, item) => {
+    const rows = item.splits?.length
+      ? item.splits.map((split) => createSplitRow(split))
+      : [createSplitRow({ color: item.color || "", size: item.size || "" })];
+
+    setSplitModal({ order, item });
+    setSplitRows(rows);
+  };
+
+  const updateSplitRow = (index, key, value) => {
+    setSplitRows((current) =>
+      current.map((row, rowIndex) => (rowIndex === index ? { ...row, [key]: value } : row))
+    );
+  };
+
+  const addSplitRow = () => {
+    setSplitRows((current) => [
+      ...current,
+      createSplitRow({
+        color: splitModal?.item?.color || "",
+        size: splitModal?.item?.size || "",
+      }),
+    ]);
+  };
+
+  const removeSplitRow = (index) => {
+    setSplitRows((current) => (current.length > 1 ? current.filter((_, rowIndex) => rowIndex !== index) : current));
+  };
+
+  const saveSplitRows = async () => {
+    if (!splitModal || !canEditImport) return;
+
+    const total = splitRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    const maxQty = Number(splitModal.item.received_qty || 0) > 0
+      ? Number(splitModal.item.received_qty || 0)
+      : Number(splitModal.item.ordered_qty || 0);
+
+    if (total > maxQty) {
+      showToast({
+        tone: "error",
+        title: "Split total is too high",
+        message: `Split quantity ${formatNumber(total)} is greater than ${formatNumber(maxQty)}.`,
+      });
+      return;
+    }
+
+    setSavingSplits(true);
+    try {
+      await api.updateImportItemSplits(
+        splitModal.order.id,
+        splitModal.item.id,
+        {
+          splits: splitRows
+            .map((row) => ({
+              product_article: row.product_article,
+              product_name: row.product_name,
+              color: row.color,
+              size: row.size,
+              quantity: Number(row.quantity || 0),
+              note: row.note,
+            }))
+            .filter((row) => row.quantity > 0),
+        },
+        token
+      );
+
+      const refreshedOrder = await api.getImportOrder(splitModal.order.id, token);
+      showToast({ tone: "success", title: "Split saved", message: "Article breakdown was saved for this material." });
+      setViewingOrder(refreshedOrder.data || null);
+      setSplitModal(null);
+      setSplitRows([]);
+      await load();
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Split save failed",
+        message: error.message || "Could not save this split.",
+      });
+    } finally {
+      setSavingSplits(false);
+    }
   };
 
   const updateSlip = (key, value) => {
@@ -895,7 +1008,7 @@ export default function ImportTrackingPage() {
             <div className="inline-flex w-full rounded-xl border border-slate-200 bg-slate-50 p-1 sm:w-auto">
               <button
                 type="button"
-                onClick={() => setFilters((current) => ({ ...current, is_test: "1" }))}
+                onClick={() => setSlipMode(true)}
                 className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition sm:flex-none ${
                   filters.is_test === "1" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-white"
                 }`}
@@ -904,9 +1017,9 @@ export default function ImportTrackingPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setFilters((current) => ({ ...current, is_test: "0" }))}
+                onClick={() => setSlipMode(false)}
                 className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition sm:flex-none ${
-                  filters.is_test === "0" ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-white"
+                  filters.is_test === "0" ? "bg-purple-600 text-white shadow-sm" : "text-slate-600 hover:bg-purple"
                 }`}
               >
                 Real slips
@@ -1443,6 +1556,14 @@ export default function ImportTrackingPage() {
                         >
                           {isReceivingItem ? "Saving..." : isTest ? "Mark received" : "Record received"}
                         </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={!canEditImport}
+                          onClick={() => openSplitModal(viewingOrder, item)}
+                        >
+                          Split by article
+                        </Button>
                       </div>
                     </article>
                   );
@@ -1504,15 +1625,25 @@ export default function ImportTrackingPage() {
                             )}
                           </td>
                           <td className="whitespace-nowrap px-3 py-3">
-                            <Button
-                              size="sm"
-                              variant={canReceiveItem ? "primary" : "secondary"}
-                              icon="check"
-                              disabled={!canReceiveItem || !canEditImport || isReceivingItem}
-                              onClick={() => quickReceiveItem(viewingOrder, item)}
-                            >
-                              {isReceivingItem ? "Saving..." : isTest ? "Mark received" : "Record received"}
-                            </Button>
+                            <div className="flex gap-2">
+                              <Button
+                                size="sm"
+                                variant={canReceiveItem ? "primary" : "secondary"}
+                                icon="check"
+                                disabled={!canReceiveItem || !canEditImport || isReceivingItem}
+                                onClick={() => quickReceiveItem(viewingOrder, item)}
+                              >
+                                {isReceivingItem ? "Saving..." : isTest ? "Mark received" : "Record received"}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                disabled={!canEditImport}
+                                onClick={() => openSplitModal(viewingOrder, item)}
+                              >
+                                Split
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1567,6 +1698,111 @@ export default function ImportTrackingPage() {
                   </div>
                 </div>
               ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {splitModal ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 p-5">
+              <div>
+                <p className="text-base font-semibold text-slate-900">Split {splitModal.item.material_name}</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Each row creates or links its own raw material. Total {formatNumber(splitTotalQty)} / {formatNumber(splitMaxQty)} {splitModal.item.unit || ""}.
+                </p>
+              </div>
+              <Button variant="secondary" onClick={() => setSplitModal(null)}>
+                Close
+              </Button>
+            </div>
+
+            <div className="max-h-[70vh] space-y-4 overflow-auto p-5">
+              <div className={`rounded-xl border p-3 text-sm ${
+                splitTotalQty > splitMaxQty ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"
+              }`}>
+                Remaining to assign: <span className="font-bold">{formatNumber(splitRemainingQty)} {splitModal.item.unit || ""}</span>
+              </div>
+
+              <div className="space-y-3">
+                {splitRows.map((row, index) => (
+                  <div key={row.client_id} className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-[1fr_1fr_0.8fr_0.8fr_0.8fr_auto]">
+                    <Field label="Product article">
+                      <TextInput
+                        value={row.product_article}
+                        onChange={(event) => updateSplitRow(index, "product_article", event.target.value)}
+                        placeholder="NK-201"
+                      />
+                    </Field>
+                    <Field label="Product name">
+                      <TextInput
+                        value={row.product_name}
+                        onChange={(event) => updateSplitRow(index, "product_name", event.target.value)}
+                        placeholder="NK-201_Black raw material name"
+                      />
+                    </Field>
+                    <Field label="Color">
+                      <TextInput
+                        value={row.color}
+                        onChange={(event) => updateSplitRow(index, "color", event.target.value)}
+                      />
+                    </Field>
+                    <Field label="Size">
+                      <TextInput
+                        value={row.size}
+                        onChange={(event) => updateSplitRow(index, "size", event.target.value)}
+                      />
+                    </Field>
+                    <Field label={`Qty (${splitModal.item.unit || "pcs"})`}>
+                      <TextInput
+                        type="number"
+                        min="0"
+                        value={row.quantity}
+                        onChange={(event) => updateSplitRow(index, "quantity", event.target.value)}
+                      />
+                    </Field>
+                    <div className="flex items-end">
+                      <Button
+                        type="button"
+                        variant="danger"
+                        size="sm"
+                        disabled={splitRows.length <= 1}
+                        onClick={() => removeSplitRow(index)}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                    <div className="md:col-span-6">
+                      <Field label="Note">
+                        <TextInput
+                          value={row.note}
+                          onChange={(event) => updateSplitRow(index, "note", event.target.value)}
+                          placeholder="Optional"
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 p-5">
+              <Button type="button" variant="secondary" onClick={addSplitRow}>
+                Add split row
+              </Button>
+              <div className="flex gap-2">
+                <Button type="button" variant="secondary" onClick={() => setSplitModal(null)}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  disabled={savingSplits || splitTotalQty > splitMaxQty}
+                  onClick={saveSplitRows}
+                >
+                  {savingSplits ? "Saving..." : "Save split"}
+                </Button>
+              </div>
             </div>
           </div>
         </div>

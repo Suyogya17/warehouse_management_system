@@ -33,6 +33,7 @@ const AdvertisementsPage = lazy(() => import("./pages/AdvertisementsPage"));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage"));
 const ActivityLogPage = lazy(() => import("./pages/ActivityLogPage"));
 const ImportTrackingPage = lazy(() => import("./pages/ImportTrackingPage"));
+const OffersPage = lazy(() => import("./pages/OffersPage"));
 
 const PageFallback = () => (
   <div className="flex min-h-[45vh] items-center justify-center text-sm font-medium text-slate-500">
@@ -230,6 +231,15 @@ export default function App() {
           element={
             <ProtectedRoute roles={["MEMBER"]}>
               {withSuspense(<MemberOrderPage />)}
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="offers"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "USER"]}>
+              {withSuspense(<OffersPage />)}
             </ProtectedRoute>
           }
         />

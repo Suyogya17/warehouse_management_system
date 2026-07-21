@@ -146,6 +146,9 @@ export const api = {
 
   getRawMaterials: (token) => apiRequest("/raw-materials", {}, token),
 
+  getRawMaterialAvailability: (id, token) =>
+    apiRequest(`/raw-materials/${id}/availability`, {}, token),
+
   createRawMaterial: (payload, token) =>
     apiRequest(
       "/raw-materials",
@@ -211,6 +214,13 @@ export const api = {
     apiRequest(
       `/finished-goods/${id}/price`,
       { method: "PUT", body: JSON.stringify({ price }) },
+      token
+    ),
+
+  updateFinishedGoodOffer: (id, payload, token) =>
+    apiRequest(
+      `/finished-goods/${id}/offer`,
+      { method: "PUT", body: JSON.stringify(payload) },
       token
     ),
 
@@ -455,6 +465,13 @@ deleteStockAdjustment: (id, token) =>
     apiRequest(
       `/import-tracking/${orderId}/items/${itemId}/receive-stock`,
       { method: "POST", body: JSON.stringify(payload) },
+      token
+    ),
+
+  updateImportItemSplits: (orderId, itemId, payload, token) =>
+    apiRequest(
+      `/import-tracking/${orderId}/items/${itemId}/splits`,
+      { method: "PUT", body: JSON.stringify(payload) },
       token
     ),
 

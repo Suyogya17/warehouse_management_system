@@ -37,6 +37,10 @@ const getSeriesName = (soleCode = "") =>
     .replace(/[-_\s]*sole$/i, "")
     .trim();
 
+const isActiveOffer = (item) =>
+  Number(item.offer_enabled) === 1 &&
+  (!item.offer_ends_at || new Date(item.offer_ends_at).getTime() >= Date.now());
+
 const getNextSort = (current) => {
   if (current === "display") return "newest";
   if (current === "newest") return "oldest";
@@ -500,10 +504,17 @@ export default function FinishedGoodsUserPage() {
 
   // ─── GROUP BY ARTICLE CODE ────────────────────────
 
+  // Products on an active offer live exclusively on the Offers page.
+  // They return here automatically when the offer expires or is removed.
+  const catalogItems = useMemo(
+    () => items.filter((item) => !isActiveOffer(item)),
+    [items]
+  );
+
   const groupedProducts = useMemo(() => {
     const groups = new Map();
 
-    items.forEach((item) => {
+    catalogItems.forEach((item) => {
       const baseCode = getArticleKey(item);
 
       if (!groups.has(baseCode)) groups.set(baseCode, []);
@@ -513,15 +524,15 @@ export default function FinishedGoodsUserPage() {
     return Array.from(groups.values())
       .map((variants) => [...variants].sort(sortProductsByDisplayOrder))
       .sort(sortProductGroupsByDisplayOrder);
-  }, [items]);
+  }, [catalogItems]);
 
-  const sizes = [...new Set(items.map((i) => i.size).filter(Boolean))];
+  const sizes = [...new Set(catalogItems.map((i) => i.size).filter(Boolean))];
   const seriesList = useMemo(
     () =>
-      [...new Set(items.map((item) => getSeriesName(item.sole_code)).filter(Boolean))].sort(
+      [...new Set(catalogItems.map((item) => getSeriesName(item.sole_code)).filter(Boolean))].sort(
         (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
       ),
-    [items]
+    [catalogItems]
   );
 
   // ─── FILTER & SORT ────────────────────────────────
