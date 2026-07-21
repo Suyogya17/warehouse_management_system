@@ -10,6 +10,7 @@ router.get('/report', ctrl.getReport);
 router.post('/:id/items/:itemId/create-raw-material', ctrl.createRawMaterialFromItem);
 router.post('/:id/items/:itemId/receive-stock', ctrl.receiveItemStock);
 router.put('/:id/items/:itemId/splits', ctrl.saveItemSplits);
+router.post('/:id/items/:itemId/splits/:splitId/add-to-raw-material', ctrl.addSplitToRawMaterial);
 router.get('/:id', ctrl.getOne);
 router.post('/', ctrl.create);
 router.put('/:id', ctrl.update);

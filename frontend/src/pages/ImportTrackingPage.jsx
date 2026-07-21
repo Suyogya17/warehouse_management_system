@@ -247,6 +247,7 @@ export default function ImportTrackingPage() {
   const [customCategoryItems, setCustomCategoryItems] = useState({});
   const [splitModal, setSplitModal] = useState(null);
   const [splitRows, setSplitRows] = useState([]);
+  const [addingSplitStockIds, setAddingSplitStockIds] = useState([]);
   const [savingSplits, setSavingSplits] = useState(false);
 
   const materialById = useMemo(
@@ -414,6 +415,9 @@ export default function ImportTrackingPage() {
 
   const createSplitRow = (item = {}) => ({
     client_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    id: item.id || null,
+    raw_material_id: item.raw_material_id || null,
+    stock_added_at: item.stock_added_at || null,
     product_article: item.product_article || "",
     product_name: item.product_name || "",
     color: item.color || "",
@@ -502,6 +506,30 @@ export default function ImportTrackingPage() {
       });
     } finally {
       setSavingSplits(false);
+    }
+  };
+
+  const addSplitStockToRawMaterial = async (row) => {
+    if (!splitModal || !row.id || row.stock_added_at || addingSplitStockIds.includes(row.id)) return;
+    setAddingSplitStockIds((current) => [...current, row.id]);
+    try {
+      const result = await api.addImportSplitToRawMaterial(
+        splitModal.order.id,
+        splitModal.item.id,
+        row.id,
+        token
+      );
+      const refreshedOrder = await api.getImportOrder(splitModal.order.id, token);
+      const refreshed = refreshedOrder.data;
+      const refreshedItem = refreshed?.items?.find((item) => Number(item.id) === Number(splitModal.item.id));
+      setSplitModal(refreshedItem ? { order: refreshed, item: refreshedItem } : null);
+      setSplitRows((refreshedItem?.splits || []).map((split) => createSplitRow(split)));
+      showToast({ tone: "success", title: "Added to raw material", message: result.message || `${formatNumber(row.quantity)} added to raw material stock.` });
+      await load();
+    } catch (error) {
+      showToast({ tone: "error", title: "Stock was not added", message: error.message || "Could not add this split to raw material stock." });
+    } finally {
+      setAddingSplitStockIds((current) => current.filter((id) => Number(id) !== Number(row.id)));
     }
   };
 
@@ -1762,7 +1790,22 @@ export default function ImportTrackingPage() {
                         onChange={(event) => updateSplitRow(index, "quantity", event.target.value)}
                       />
                     </Field>
-                    <div className="flex items-end">
+                    <div className="flex flex-col items-stretch justify-end gap-2">
+                      {row.id ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={row.stock_added_at ? "secondary" : "primary"}
+                          disabled={Boolean(row.stock_added_at) || addingSplitStockIds.includes(row.id)}
+                          onClick={() => addSplitStockToRawMaterial(row)}
+                        >
+                          {row.stock_added_at
+                            ? "Added to raw material"
+                            : addingSplitStockIds.includes(row.id)
+                              ? "Adding..."
+                              : `Add ${formatNumber(row.quantity)} to raw material`}
+                        </Button>
+                      ) : null}
                       <Button
                         type="button"
                         variant="danger"

@@ -1176,6 +1176,20 @@ const saveItemSplits = async (req, res, next) => {
     }
 
     const item = itemResult.rows[0];
+    const supportsStockPosting = await hasColumn('import_order_item_splits', 'stock_added_at');
+    if (supportsStockPosting) {
+      const postedRows = await client.query(
+        'SELECT id FROM import_order_item_splits WHERE import_order_item_id = ? AND stock_added_at IS NOT NULL LIMIT 1',
+        [item.id]
+      );
+      if (postedRows.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: 'This split cannot be changed because one or more rows were already added to raw material stock.',
+        });
+      }
+    }
     const maxQuantity = Number(item.received_qty || 0) > 0
       ? Number(item.received_qty || 0)
       : Number(item.ordered_qty || 0);
@@ -1295,6 +1309,88 @@ const saveItemSplits = async (req, res, next) => {
   }
 };
 
+const addSplitToRawMaterial = async (req, res, next) => {
+  const client = await getClient();
+  try {
+    const supportsStockPosting = await hasColumn('import_order_item_splits', 'stock_added_at');
+    const supportsStockAddedBy = await hasColumn('import_order_item_splits', 'stock_added_by');
+    if (!supportsStockPosting) {
+      return res.status(400).json({
+        success: false,
+        message: 'Split stock posting is not enabled. Run sql/add-import-split-stock-posting.sql first.',
+      });
+    }
+
+    await client.query('START TRANSACTION');
+    const splitResult = await client.query(
+      `SELECT iois.*, ioi.import_order_id, ioi.unit, io.order_number
+       FROM import_order_item_splits iois
+       JOIN import_order_items ioi ON ioi.id = iois.import_order_item_id
+       JOIN import_orders io ON io.id = ioi.import_order_id
+       WHERE io.id = ? AND ioi.id = ? AND iois.id = ?
+       FOR UPDATE`,
+      [req.params.id, req.params.itemId, req.params.splitId]
+    );
+    const split = splitResult.rows[0];
+    if (!split) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Split row not found.' });
+    }
+    if (split.stock_added_at) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'This split quantity was already added to raw material stock.' });
+    }
+    if (!split.raw_material_id || Number(split.quantity || 0) <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'This split has no linked raw material or valid quantity.' });
+    }
+
+    const materialResult = await client.query(
+      'SELECT id, name, quantity FROM raw_materials WHERE id = ? FOR UPDATE',
+      [split.raw_material_id]
+    );
+    const material = materialResult.rows[0];
+    if (!material) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Linked raw material not found.' });
+    }
+
+    await client.query(
+      'UPDATE raw_materials SET quantity = quantity + ? WHERE id = ?',
+      [split.quantity, split.raw_material_id]
+    );
+    await client.query(
+      `UPDATE import_order_item_splits
+       SET stock_added_at = NOW()${supportsStockAddedBy ? ', stock_added_by = ?' : ''}
+       WHERE id = ?`,
+      supportsStockAddedBy ? [req.user.id, split.id] : [split.id]
+    );
+    await client.query('COMMIT');
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'CREATE',
+      module: 'raw_materials',
+      entity_type: 'raw_material',
+      entity_id: Number(split.raw_material_id),
+      entityName: material.name,
+      description: `Added ${split.quantity} ${split.unit || 'pcs'} to ${material.name} from import split ${split.order_number}`,
+      metadata: { import_order_id: split.import_order_id, import_order_item_id: split.import_order_item_id, split_id: split.id, quantity: Number(split.quantity), quantity_before: Number(material.quantity || 0), quantity_after: Number(material.quantity || 0) + Number(split.quantity) },
+    });
+
+    return res.json({
+      success: true,
+      message: `${split.quantity} ${split.unit || 'pcs'} added to ${material.name}.`,
+      data: { split_id: split.id, raw_material_id: split.raw_material_id, quantity_added: Number(split.quantity) },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   getAll,
   getOne,
@@ -1305,4 +1401,5 @@ module.exports = {
   createRawMaterialFromItem,
   receiveItemStock,
   saveItemSplits,
+  addSplitToRawMaterial,
 };

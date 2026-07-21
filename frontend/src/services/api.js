@@ -325,6 +325,20 @@ export const api = {
       token
     ),
 
+  correctOrderItems: (id, payload, token) =>
+    apiRequest(
+      `/orders/${id}/items`,
+      { method: "PUT", body: JSON.stringify(payload) },
+      token
+    ),
+
+  reopenOrderPacking: (id, reason, token) =>
+    apiRequest(
+      `/orders/${id}/reopen-packing`,
+      { method: "PUT", body: JSON.stringify({ reason }) },
+      token
+    ),
+
   logOrderPrint: (id, token, payload = { print_type: "delivery_note" }) =>
     apiRequest(
       `/orders/${id}/print`,
@@ -472,6 +486,13 @@ deleteStockAdjustment: (id, token) =>
     apiRequest(
       `/import-tracking/${orderId}/items/${itemId}/splits`,
       { method: "PUT", body: JSON.stringify(payload) },
+      token
+    ),
+
+  addImportSplitToRawMaterial: (orderId, itemId, splitId, token) =>
+    apiRequest(
+      `/import-tracking/${orderId}/items/${itemId}/splits/${splitId}/add-to-raw-material`,
+      { method: "POST" },
       token
     ),
 

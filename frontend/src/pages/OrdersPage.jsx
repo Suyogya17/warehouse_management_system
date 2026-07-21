@@ -34,6 +34,18 @@ const statusTone = {
 };
 
 const PRINTABLE_DELIVERY_STATUSES = ["CONFIRMED", "PACKED", "DELIVERED"];
+const ORDER_CORRECTION_CO_ADMINS = new Set([
+  "suyogya shrestha",
+  "suyogya shresth",
+  "suvarna shrestha",
+  "hirdaya shrestha",
+]);
+
+const canUseOrderCorrection = (user = {}) =>
+  String(user.role || "").toUpperCase() === "CO_ADMIN" &&
+  ORDER_CORRECTION_CO_ADMINS.has(
+    String(user.name || "").trim().replace(/\s+/g, " ").toLowerCase()
+  );
 
 export default function OrdersPage() {
   const [orderSearch, setOrderSearch] = useState("");
@@ -41,23 +53,28 @@ export default function OrdersPage() {
   const { token, user } = useAuth();
   const { showToast } = useToast();
   const canManageOrders = hasRole(user?.role, ["ADMIN", "CO_ADMIN"]);
+  const canCorrectOrders = canUseOrderCorrection(user);
   const [orders, setOrders] = useState([]);
   const [availability, setAvailability] = useState([]);
   const [warehouseStock, setWarehouseStock] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [correctionOrder, setCorrectionOrder] = useState(null);
+  const [correctionItems, setCorrectionItems] = useState([]);
+  const [correctionReason, setCorrectionReason] = useState("");
+  const [savingCorrection, setSavingCorrection] = useState(false);
 
   // ── single load function — fetches orders, availability, and warehouse stock ──
   const load = useCallback(async () => {
     const [ordersResult, availabilityResult, warehouseStockResult] = await Promise.all([
       api.getOrders(token, { limit: 200 }),
-      api.getAvailability(token),
+      api.getAvailability(token, { includeHidden: canManageOrders }),
       api.getWarehouseStock(token),
     ]);
     setOrders(ordersResult.data || []);
     setAvailability(availabilityResult.data || []);
     setWarehouseStock(warehouseStockResult.data || []);
-  }, [token]);
+  }, [canManageOrders, token]);
 
   useEffect(() => {
     load().catch(console.error);
@@ -143,6 +160,71 @@ export default function OrdersPage() {
       showToast({ tone: "success", title: "Order updated", message: `Order marked ${status.toLowerCase()}.` });
     } catch (error) {
       showToast({ tone: "error", title: "Order update failed", message: error.message });
+    }
+  };
+
+  const reopenPacking = async (order) => {
+    const reason = window.prompt(
+      `Why are you reopening packing for Order #${order.id}?\n\nThe existing delivery note number will remain unchanged.`
+    );
+    if (reason === null) return;
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      showToast({
+        tone: "error",
+        title: "Reason required",
+        message: "Enter why this packed order needs to be corrected.",
+      });
+      return;
+    }
+
+    try {
+      const result = await api.reopenOrderPacking(order.id, trimmedReason, token);
+      await load();
+      announceDataRefresh("orders");
+      showToast({
+        tone: "success",
+        title: "Packing reopened",
+        message: result.message || `${order.delivery_note_number || "Delivery note"} was preserved. You can now correct CTN.`,
+      });
+    } catch (error) {
+      showToast({ tone: "error", title: "Could not reopen packing", message: error.message });
+    }
+  };
+
+  const openCorrection = (order) => {
+    setCorrectionOrder(order);
+    setCorrectionReason("");
+    setCorrectionItems((order.items || []).map((item) => ({
+      finished_good_id: String(item.finished_good_id),
+      carton_qty: Number(item.inner_boxes_per_outer_box) > 0
+        ? Number(item.qty_ordered || 0) / Number(item.inner_boxes_per_outer_box)
+        : "",
+    })));
+  };
+
+  const saveCorrection = async (event) => {
+    event.preventDefault();
+    if (!correctionOrder) return;
+    setSavingCorrection(true);
+    try {
+      await api.correctOrderItems(correctionOrder.id, {
+        reason: correctionReason.trim(),
+        items: correctionItems.map((item) => ({
+          finished_good_id: Number(item.finished_good_id),
+          carton_qty: Number(item.carton_qty),
+        })),
+      }, token);
+      setCorrectionOrder(null);
+      setCorrectionItems([]);
+      setCorrectionReason("");
+      await load();
+      announceDataRefresh("orders");
+      showToast({ tone: "success", title: "Order corrected", message: "Reserved stock was recalculated automatically." });
+    } catch (error) {
+      showToast({ tone: "error", title: "Correction failed", message: error.message });
+    } finally {
+      setSavingCorrection(false);
     }
   };
 
@@ -454,6 +536,7 @@ export default function OrdersPage() {
                 <strong>Delivery Note No:</strong> ${deliveryNoteNumber}<br/>
                 <strong>Created By:</strong> ${escapeHtml(order.created_by_name || "-")}<br/>
                 <strong>Customer Name:</strong> ${escapeHtml(order.customer_name)}<br/>
+                <strong>Phone Number:</strong> ${escapeHtml(order.customer_phone || "-")}<br/>
                 <strong>Address:</strong> ${escapeHtml(order.customer_address || "-")}<br/>
                 <strong>PAN Number:</strong> ${escapeHtml(order.pan_number || "-")}
               </td>
@@ -889,10 +972,82 @@ export default function OrdersPage() {
                 );
               },
             },
+            canManageOrders
+              ? {
+                  key: "order_edits",
+                  label: "Order Edits",
+                  render: (row) => {
+                    if (!canCorrectOrders) return <span className="text-slate-400">-</span>;
+                    if (row.status === "PACKED") {
+                      return (
+                        <Button size="sm" variant="secondary" onClick={() => reopenPacking(row)}>
+                          Reopen packing
+                        </Button>
+                      );
+                    }
+                    if (["PENDING", "CONFIRMED"].includes(row.status)) {
+                      return (
+                        <Button size="sm" variant="secondary" onClick={() => openCorrection(row)}>
+                          Correct CTN
+                        </Button>
+                      );
+                    }
+                    return <span className="text-slate-400">Locked</span>;
+                  },
+                }
+              : { key: "order_edits_empty", label: "" },
           ]}
           rows={filteredOrders}
         />
       </SectionCard>
+
+      {correctionOrder ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" onMouseDown={() => !savingCorrection && setCorrectionOrder(null)}>
+          <form onSubmit={saveCorrection} onMouseDown={(event) => event.stopPropagation()} className="max-h-[90vh] w-full max-w-3xl space-y-5 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+            <div>
+              <h2 className="text-lg font-bold text-slate-950">Correct Order #{correctionOrder.id}</h2>
+              <p className="text-sm text-slate-500">Only whole cartons are allowed. Reserved pairs update automatically when you save.</p>
+            </div>
+
+            <div className="space-y-3">
+              {correctionItems.map((item, index) => {
+                const selected = availabilityById.get(String(item.finished_good_id));
+                const pairsPerCarton = Number(selected?.inner_boxes_per_outer_box || 0);
+                const pairs = Number(item.carton_qty || 0) * pairsPerCarton;
+                return (
+                  <div key={`${item.finished_good_id}-${index}`} className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-[2fr_0.7fr_1fr_auto]">
+                    <Select
+                      options={availability.filter((product) => Number(product.inner_boxes_per_outer_box) > 0).map((product) => ({ value: String(product.id), label: `${product.article_code || product.name} · ${product.color || "No color"}` }))}
+                      value={selected ? { value: String(selected.id), label: `${selected.article_code || selected.name} · ${selected.color || "No color"}` } : null}
+                      onChange={(option) => setCorrectionItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, finished_good_id: option?.value || "" } : row))}
+                      placeholder="Select product"
+                      menuPortalTarget={document.body}
+                      menuPosition="fixed"
+                      styles={{ menuPortal: (base) => ({ ...base, zIndex: 9999 }), control: (base) => ({ ...base, minHeight: "42px", borderRadius: "12px" }) }}
+                    />
+                    <Field label="CTN">
+                      <TextInput type="number" min="1" step="1" required value={item.carton_qty} onChange={(event) => setCorrectionItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, carton_qty: event.target.value } : row))} />
+                    </Field>
+                    <div className="flex flex-col justify-end rounded-xl bg-white px-3 py-2 text-sm"><span className="text-xs text-slate-400">Reserved pairs</span><strong>{pairsPerCarton > 0 ? formatNumber(pairs) : "Set CTN config"}</strong></div>
+                    <div className="flex items-end"><Button type="button" variant="danger" size="sm" disabled={correctionItems.length === 1} onClick={() => setCorrectionItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>Remove</Button></div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <Button type="button" variant="secondary" icon="plus" onClick={() => setCorrectionItems((current) => [...current, { finished_good_id: "", carton_qty: 1 }])}>Add product</Button>
+
+            <Field label="Correction reason">
+              <TextInput required value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} placeholder="Explain why this order is being changed" />
+            </Field>
+
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="secondary" disabled={savingCorrection} onClick={() => setCorrectionOrder(null)}>Cancel</Button>
+              <Button type="submit" disabled={savingCorrection || !correctionItems.length}>{savingCorrection ? "Saving..." : "Save correction"}</Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

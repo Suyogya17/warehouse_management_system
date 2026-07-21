@@ -2,11 +2,24 @@ const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields, getNepaliFiscalMeta } = require('../utils/nepaliFiscalYear');
+const { clearCache } = require('../middleware/cacheMiddleware');
 
 const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'PACKED'];
 const ALL_STATUSES = [...ACTIVE_RESERVATION_STATUSES, 'DELIVERED', 'CANCELLED'];
 const DEFAULT_DISPLAY_QUANTITY = 450;
 const FISCAL_DELIVERY_NOTE_START_YEAR = 2083;
+const ORDER_CORRECTION_CO_ADMINS = new Set([
+  'suyogya shrestha',
+  'suyogya shresth',
+  'suvarna shrestha',
+  'hirdaya shrestha',
+]);
+
+const canCorrectOrders = (user = {}) =>
+  String(user.role || '').toUpperCase() === 'CO_ADMIN' &&
+  ORDER_CORRECTION_CO_ADMINS.has(
+    String(user.name || '').trim().replace(/\s+/g, ' ').toLowerCase()
+  );
 
 const getProductDisplayQuantity = (product) => {
   const value = Number(product?.display_quantity);
@@ -576,6 +589,104 @@ const create = async (req, res, next) => {
   }
 };
 
+// ─── CORRECT PENDING / CONFIRMED ORDER ─────────────────────────────────────
+const correctItems = async (req, res, next) => {
+  const client = await getClient();
+  try {
+    if (!canCorrectOrders(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to correct order cartons.',
+      });
+    }
+
+    await client.query('START TRANSACTION');
+    const reason = String(req.body.reason || '').trim();
+    const requestedRows = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!reason || !requestedRows.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: !reason ? 'Correction reason is required.' : 'An order must contain at least one product.' });
+    }
+
+    const orderResult = await client.query('SELECT * FROM orders WHERE id = ? FOR UPDATE', [req.params.id]);
+    const order = orderResult.rows[0];
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+    if (!['PENDING', 'CONFIRMED'].includes(String(order.status).toUpperCase())) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Only pending or confirmed orders can be corrected.' });
+    }
+
+    const oldItemsResult = await client.query(
+      `SELECT oi.*, fg.name AS product_name, fg.article_code, fg.color, fg.inner_boxes_per_outer_box
+       FROM order_items oi JOIN finished_goods fg ON fg.id = oi.finished_good_id
+       WHERE oi.order_id = ? FOR UPDATE`,
+      [order.id]
+    );
+    const productIds = [...new Set(requestedRows.map((row) => Number(row.finished_good_id)).filter((id) => id > 0))];
+    if (!productIds.length || productIds.length !== requestedRows.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Each corrected row must contain a different valid product.' });
+    }
+
+    const { clause, params } = buildInClause(productIds);
+    const productsResult = await client.query(
+      `SELECT id, name, article_code, color, quantity, inner_boxes_per_outer_box
+       FROM finished_goods WHERE id IN ${clause} FOR UPDATE`,
+      params
+    );
+    if (productsResult.rows.length !== productIds.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'One or more products were not found.' });
+    }
+
+    const productsById = new Map(productsResult.rows.map((product) => [Number(product.id), product]));
+    const correctedItems = [];
+    for (const row of requestedRows) {
+      const product = productsById.get(Number(row.finished_good_id));
+      const cartons = Number(row.carton_qty);
+      const pairsPerCarton = Number(product.inner_boxes_per_outer_box || 0);
+      if (!Number.isInteger(cartons) || cartons < 1 || pairsPerCarton <= 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: !Number.isInteger(cartons) || cartons < 1 ? `${product.name} carton quantity must be a whole number greater than zero.` : `${product.name} does not have pairs per carton configured.` });
+      }
+      correctedItems.push({ finished_good_id: Number(product.id), carton_qty: cartons, qty_ordered: cartons * pairsPerCarton, product });
+    }
+
+    const reserved = await getReservedByProduct((sql, values) => client.query(sql, values), productIds);
+    const oldQtyByProduct = new Map(oldItemsResult.rows.map((item) => [Number(item.finished_good_id), Number(item.qty_ordered || 0)]));
+    const shortages = correctedItems.filter((item) => {
+      const reservedByOthers = Math.max(0, (reserved.get(item.finished_good_id) || 0) - (oldQtyByProduct.get(item.finished_good_id) || 0));
+      return item.qty_ordered > Math.max(0, Number(item.product.quantity || 0) - reservedByOthers);
+    });
+    if (shortages.length) {
+      await client.query('ROLLBACK');
+      return res.status(422).json({ success: false, message: 'Insufficient stock for this correction.', shortages: shortages.map((item) => ({ product_name: item.product.name, requested: item.qty_ordered })) });
+    }
+
+    await client.query('DELETE FROM order_items WHERE order_id = ?', [order.id]);
+    for (const item of correctedItems) {
+      const insert = await appendFiscalInsertFields('order_items', ['order_id', 'finished_good_id', 'qty_ordered'], [order.id, item.finished_good_id, item.qty_ordered]);
+      await client.query(`INSERT INTO order_items (${insert.columns.join(', ')}) VALUES (${insert.columns.map(() => '?').join(', ')})`, insert.values);
+    }
+    await client.query('UPDATE orders SET updated_at = NOW() WHERE id = ?', [order.id]);
+    await client.query('COMMIT');
+    clearCache();
+
+    const before = oldItemsResult.rows.map((item) => ({ finished_good_id: Number(item.finished_good_id), product_name: item.product_name, qty_ordered: Number(item.qty_ordered), carton_qty: Number(item.inner_boxes_per_outer_box) > 0 ? Number(item.qty_ordered) / Number(item.inner_boxes_per_outer_box) : null }));
+    const after = correctedItems.map((item) => ({ finished_good_id: item.finished_good_id, product_name: item.product.name, qty_ordered: item.qty_ordered, carton_qty: item.carton_qty }));
+    await auditLog({ ...getActor(req), actionType: 'UPDATE', module: 'orders', entity_type: 'order', entity_id: order.id, entityName: getOrderEntityName(order), description: `Corrected items for ${getOrderEntityName(order)}: ${reason}`, metadata: { reason, status: order.status, before, after } });
+    return res.json({ success: true, message: 'Order corrected and reserved stock updated.', data: { id: order.id, before, after } });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 // ─── UPDATE STATUS ────────────────────────────────
 const updateStatus = async (req, res, next) => {
   const client = await getClient();
@@ -740,6 +851,96 @@ const updateStatus = async (req, res, next) => {
   }
 };
 
+// ─── REOPEN PACKED ORDER ───────────────────────────────────────────────────
+const reopenPacking = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    if (!canCorrectOrders(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to reopen packed orders.',
+      });
+    }
+
+    await client.query('START TRANSACTION');
+
+    const reason = String(req.body.reason || '').trim();
+    if (!reason) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Reopen reason is required.',
+      });
+    }
+
+    const orderResult = await client.query(
+      'SELECT * FROM orders WHERE id = ? FOR UPDATE',
+      [req.params.id]
+    );
+    const order = orderResult.rows[0];
+
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+
+    if (String(order.status).toUpperCase() !== 'PACKED') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Only packed orders can be reopened.',
+      });
+    }
+
+    await client.query(
+      `UPDATE orders
+       SET status = 'CONFIRMED',
+           packed_by = NULL,
+           packed_at = NULL,
+           updated_at = NOW()
+       WHERE id = ?`,
+      [order.id]
+    );
+
+    await client.query('COMMIT');
+    clearCache();
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'UPDATE',
+      module: 'orders',
+      entity_type: 'order',
+      entity_id: order.id,
+      entityName: getOrderEntityName(order),
+      description: `Reopened packing for ${getOrderEntityName(order)}: ${reason}`,
+      metadata: {
+        reason,
+        previous_status: 'PACKED',
+        status: 'CONFIRMED',
+        delivery_note_number: order.delivery_note_number,
+        previous_packed_by: order.packed_by,
+        previous_packed_at: order.packed_at,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: `Order reopened for correction. ${order.delivery_note_number || 'Delivery note'} was preserved.`,
+      data: {
+        id: order.id,
+        status: 'CONFIRMED',
+        delivery_note_number: order.delivery_note_number,
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 const logPrint = async (req, res, next) => {
   try {
     const orderRows = await query(
@@ -778,4 +979,4 @@ const logPrint = async (req, res, next) => {
   }
 };
 
-module.exports = { getAll, getAvailability, create, updateStatus, logPrint };
+module.exports = { getAll, getAvailability, create, correctItems, updateStatus, reopenPacking, logPrint };
