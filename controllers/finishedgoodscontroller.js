@@ -1,6 +1,6 @@
 const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
-const { hasColumn } = require('../utils/schemaSupport');
+const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 const { clearCache } = require('../middleware/cacheMiddleware');
 
@@ -23,6 +23,9 @@ const getProductName = (product = {}) =>
 
 const normalizeCommissionFlag = (value) =>
   value === true || value === 1 || value === '1' || value === 'true' ? 1 : 0;
+
+const normalizeBoolean = (value) =>
+  value === true || value === 1 || value === '1' || value === 'true';
 
 const getFinishedGoodsOrderClause = async (alias = '') => {
   const prefix = alias ? `${alias}.` : '';
@@ -84,7 +87,33 @@ const getAll = async (req, res, next) => {
       return res.json({ success: true, count: 0, data: [] });
     }
 
-    const rows = await query(sql, params);
+    let rows = await query(sql, params);
+
+    const supportsOfferAudience = await hasColumn('finished_goods', 'offer_all_users');
+    const supportsOfferUsers = await hasTable('finished_good_offer_users');
+    if (supportsOfferAudience && supportsOfferUsers && rows.length) {
+      const productIds = rows.map((row) => Number(row.id));
+      const placeholders = productIds.map(() => '?').join(',');
+      const audienceRows = await query(
+        `SELECT finished_good_id, user_id FROM finished_good_offer_users WHERE finished_good_id IN (${placeholders})`,
+        productIds
+      );
+      const audienceByProduct = new Map();
+      audienceRows.forEach((row) => {
+        const id = Number(row.finished_good_id);
+        if (!audienceByProduct.has(id)) audienceByProduct.set(id, []);
+        audienceByProduct.get(id).push(Number(row.user_id));
+      });
+
+      rows = rows.map((row) => {
+        const targetUserIds = audienceByProduct.get(Number(row.id)) || [];
+        if (userRole === 'ADMIN' || userRole === 'CO_ADMIN') {
+          return { ...row, offer_target_user_ids: targetUserIds };
+        }
+        const canSeeOffer = Number(row.offer_all_users) === 1 || targetUserIds.includes(Number(userId));
+        return canSeeOffer ? row : { ...row, offer_enabled: 0, offer_price: null, offer_label: null, offer_ends_at: null };
+      });
+    }
 
     return res.json({
       success: true,
@@ -698,6 +727,96 @@ const setDashboardFeatured = async (req, res, next) => {
   }
 };
 
+// ─── PRODUCT OFFER ──────────────────────────────────────────────────────────
+const setOffer = async (req, res, next) => {
+  try {
+    const offerColumns = ['offer_enabled', 'offer_price', 'offer_label', 'offer_ends_at'];
+    const supported = await Promise.all(offerColumns.map((column) => hasColumn('finished_goods', column)));
+
+    if (supported.some((value) => !value)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Product offers are not enabled yet. Run sql/add-finished-good-offers.sql first.',
+      });
+    }
+
+    const existingRows = await query(
+      'SELECT id, name, article_code, color FROM finished_goods WHERE id = ?',
+      [req.params.id]
+    );
+    const product = existingRows.rows[0];
+
+    if (!product) {
+      return res.status(404).json({ success: false, message: 'Product not found.' });
+    }
+
+    const enabled = normalizeBoolean(req.body.offer_enabled);
+    const supportsOfferAllUsers = await hasColumn('finished_goods', 'offer_all_users');
+    const supportsOfferUsers = await hasTable('finished_good_offer_users');
+    const offerPrice = null;
+
+    const offerLabel = enabled ? String(req.body.offer_label || 'Special offer').trim().slice(0, 120) : null;
+    const offerEndsAt = enabled && req.body.offer_ends_at ? req.body.offer_ends_at : null;
+    const offerAllUsers = !enabled || req.body.offer_all_users !== false;
+    const targetUserIds = enabled && !offerAllUsers && Array.isArray(req.body.offer_target_user_ids)
+      ? [...new Set(req.body.offer_target_user_ids.map(Number).filter((id) => id > 0))]
+      : [];
+
+    if (enabled && !offerAllUsers && !targetUserIds.length) {
+      return res.status(400).json({ success: false, message: 'Select at least one user for a targeted offer.' });
+    }
+
+    if (enabled && !offerAllUsers && (!supportsOfferAllUsers || !supportsOfferUsers)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Selected-user offers require sql/add-finished-good-offer-audience.sql.',
+      });
+    }
+
+    const audienceUpdate = supportsOfferAllUsers ? ', offer_all_users = ?' : '';
+    const updateParams = [enabled ? 1 : 0, enabled && offerPrice !== null ? offerPrice : null, offerLabel, offerEndsAt];
+    if (supportsOfferAllUsers) updateParams.push(offerAllUsers ? 1 : 0);
+    updateParams.push(req.params.id);
+
+    await query(
+      `UPDATE finished_goods
+       SET offer_enabled = ?, offer_price = ?, offer_label = ?, offer_ends_at = ?${audienceUpdate}
+       WHERE id = ?`,
+      updateParams
+    );
+
+    if (supportsOfferUsers) {
+      await query('DELETE FROM finished_good_offer_users WHERE finished_good_id = ?', [req.params.id]);
+    }
+    if (supportsOfferUsers && targetUserIds.length) {
+      const valuesSql = targetUserIds.map(() => '(?, ?)').join(', ');
+      await query(
+        `INSERT INTO finished_good_offer_users (finished_good_id, user_id) VALUES ${valuesSql}`,
+        targetUserIds.flatMap((userId) => [req.params.id, userId])
+      );
+    }
+
+    clearCache();
+    await auditLog({
+      ...getActor(req),
+      actionType: 'UPDATE',
+      module: 'finished_goods',
+      entity_type: 'finished_good',
+      entity_id: Number(req.params.id),
+      entityName: getProductName(product),
+      description: `${enabled ? 'Enabled' : 'Removed'} offer for ${getProductName(product)}`,
+      metadata: { offer_enabled: enabled, offer_price: enabled ? offerPrice : null, offer_label: offerLabel, offer_ends_at: offerEndsAt, offer_all_users: offerAllUsers, offer_target_user_ids: targetUserIds },
+    });
+
+    return res.json({
+      success: true,
+      data: { offer_enabled: enabled ? 1 : 0, offer_price: enabled ? offerPrice : null, offer_label: offerLabel, offer_ends_at: offerEndsAt, offer_all_users: offerAllUsers ? 1 : 0, offer_target_user_ids: targetUserIds },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getAll,
   getOne,
@@ -709,5 +828,6 @@ module.exports = {
   resetDisplayQuantities,
   setPrice,
   setDisplayOrder,
-  setDashboardFeatured
+  setDashboardFeatured,
+  setOffer
 };

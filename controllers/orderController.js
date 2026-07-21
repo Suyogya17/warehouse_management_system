@@ -1,6 +1,6 @@
 const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
-const { hasColumn } = require('../utils/schemaSupport');
+const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields, getNepaliFiscalMeta } = require('../utils/nepaliFiscalYear');
 
 const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'PACKED'];
@@ -336,6 +336,18 @@ const getAvailability = async (req, res, next) => {
       : ' ORDER BY article_code, color, id';
 
     const products = await query(sql, params);
+    const supportsOfferAudience = await hasColumn('finished_goods', 'offer_all_users');
+    const supportsOfferUsers = await hasTable('finished_good_offer_users');
+    let offerUserProductIds = new Set();
+    if (req.user.role === 'USER' && supportsOfferAudience && supportsOfferUsers && products.rows.length) {
+      const ids = products.rows.map((product) => Number(product.id));
+      const audienceRows = await query(
+        `SELECT finished_good_id FROM finished_good_offer_users
+         WHERE user_id = ? AND finished_good_id IN (${ids.map(() => '?').join(',')})`,
+        [req.user.id, ...ids]
+      );
+      offerUserProductIds = new Set(audienceRows.map((row) => Number(row.finished_good_id)));
+    }
     const productIds = products.rows.map((p) => p.id);
 
     const reserved = await getReservedByProduct(
@@ -358,8 +370,10 @@ const getAvailability = async (req, res, next) => {
         // Step 2: cap what user sees at this product's display quantity
         const display_stock = Math.min(display_quantity, available_qty);
 
+        const canSeeOffer = req.user.role !== 'USER' || !supportsOfferAudience || !supportsOfferUsers || Number(p.offer_all_users) === 1 || offerUserProductIds.has(Number(p.id));
         return {
           ...p,
+          ...(canSeeOffer ? {} : { offer_enabled: 0, offer_price: null, offer_label: null, offer_ends_at: null }),
           physical_stock,  // 660 — actual warehouse stock
           reserved_qty,    // 300 — orders in progress
           available_qty,   // 360 — actual available (physical - reserved)

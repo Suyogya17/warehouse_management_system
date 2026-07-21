@@ -10,6 +10,9 @@ router.use(authenticate);
 // GET  /api/raw-materials          - list all (with filters ?category=&low_stock=true)
 router.get('/',        cacheResponse(15000), ctrl.getAll);
 
+// GET  /api/raw-materials/:id/availability - lots/sources for a material
+router.get('/:id/availability', cacheResponse(10000), ctrl.getAvailability);
+
 // GET  /api/raw-materials/:id      - single material
 router.get('/:id',     cacheResponse(15000), ctrl.getOne);
 

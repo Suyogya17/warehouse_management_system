@@ -1,7 +1,7 @@
 const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { buildStockSummarySelect } = require('../utils/queryBuilders');
-const { hasColumn } = require('../utils/schemaSupport');
+const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const getImagePath = (req) => (req.file ? `/uploads/${req.file.filename}` : null);
@@ -77,6 +77,101 @@ const getOne = async (req, res, next) => {
     return res.json({
       success: true,
       data: result.rows[0],
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getAvailability = async (req, res, next) => {
+  try {
+    const materialResult = await query(
+      `${buildStockSummarySelect(await hasColumn("raw_materials", "image_url"))} WHERE rm.id = ?`,
+      [req.params.id]
+    );
+
+    if (!materialResult.rows || materialResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Raw material not found'
+      });
+    }
+
+    const material = materialResult.rows[0];
+    const supportsLots = await hasTable('raw_material_lots');
+
+    const lotRows = supportsLots
+      ? await query(
+          `SELECT rml.*,
+                  ioi.material_name,
+                  ioi.article_code AS material_article_code,
+                  io.order_number,
+                  io.order_date
+           FROM raw_material_lots rml
+           LEFT JOIN import_order_items ioi ON ioi.id = rml.import_order_item_id
+           LEFT JOIN import_orders io ON io.id = ioi.import_order_id
+           WHERE rml.raw_material_id = ?
+           ORDER BY rml.created_at DESC, rml.id DESC`,
+          [req.params.id]
+        )
+      : { rows: [] };
+
+    const stockRows = await query(
+      `SELECT s.id,
+              s.raw_material_id,
+              'LOCAL_PURCHASE' AS source_type,
+              NULL AS source_country,
+              NULL AS supplier_name,
+              NULL AS product_article,
+              NULL AS product_name,
+              rm.color,
+              NULL AS size,
+              s.qty_added AS qty_received,
+              GREATEST(s.qty_added - s.qty_remaining, 0) AS qty_used,
+              s.qty_remaining,
+              rm.unit,
+              'STOCK_BATCH' AS reference_type,
+              s.id AS reference_id,
+              s.notes AS note,
+              s.purchased_at AS created_at
+       FROM stock s
+       JOIN raw_materials rm ON rm.id = s.raw_material_id
+       WHERE s.raw_material_id = ?
+       ORDER BY s.purchased_at DESC, s.id DESC`,
+      [req.params.id]
+    );
+
+    const lots = [
+      ...lotRows.rows,
+      ...stockRows.rows,
+    ].map((lot) => ({
+      ...lot,
+      qty_received: Number(lot.qty_received || 0),
+      qty_used: Number(lot.qty_used || 0),
+      qty_remaining: Number(lot.qty_remaining || 0),
+    }));
+
+    const summary = lots.reduce(
+      (acc, lot) => {
+        acc.received += Number(lot.qty_received || 0);
+        acc.used += Number(lot.qty_used || 0);
+        acc.remaining += Number(lot.qty_remaining || 0);
+        const source = lot.source_type || 'UNKNOWN';
+        acc.by_source[source] = (acc.by_source[source] || 0) + Number(lot.qty_remaining || 0);
+        const country = lot.source_country || (source === 'LOCAL_PURCHASE' ? 'Local' : 'Unspecified');
+        acc.by_country[country] = (acc.by_country[country] || 0) + Number(lot.qty_remaining || 0);
+        return acc;
+      },
+      { received: 0, used: 0, remaining: 0, by_source: {}, by_country: {} }
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        material,
+        summary,
+        lots,
+      },
     });
   } catch (err) {
     next(err);
@@ -330,6 +425,7 @@ const remove = async (req, res, next) => {
 module.exports = {
   getAll,
   getOne,
+  getAvailability,
   create,
   update,
   remove

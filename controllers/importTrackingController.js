@@ -1,7 +1,7 @@
 const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { getPagination, shouldIncludeTotal } = require('../utils/pagination');
-const { hasColumn } = require('../utils/schemaSupport');
+const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const ORDER_STATUSES = new Set([
@@ -149,14 +149,24 @@ const normalizeOrderPayload = async (body = {}) => {
   return { order, items: normalizedItems, containers };
 };
 
-const attachChildren = (orders, items, containers, containerItems) => {
+const attachChildren = (orders, items, containers, containerItems, splits = []) => {
   const itemsByOrder = new Map();
   const containersByOrder = new Map();
   const containerItemsByContainer = new Map();
+  const splitsByItem = new Map();
+
+  splits.forEach((split) => {
+    const rows = splitsByItem.get(split.import_order_item_id) || [];
+    rows.push(split);
+    splitsByItem.set(split.import_order_item_id, rows);
+  });
 
   items.forEach((item) => {
     const rows = itemsByOrder.get(item.import_order_id) || [];
-    rows.push(item);
+    rows.push({
+      ...item,
+      splits: splitsByItem.get(item.id) || [],
+    });
     itemsByOrder.set(item.import_order_id, rows);
   });
 
@@ -183,9 +193,10 @@ const attachChildren = (orders, items, containers, containerItems) => {
 };
 
 const fetchOrdersByIds = async (ids = []) => {
-  if (!ids.length) return { items: [], containers: [], containerItems: [] };
+  if (!ids.length) return { items: [], containers: [], containerItems: [], splits: [] };
   const placeholders = ids.map(() => '?').join(',');
-  const [items, containers, containerItems] = await Promise.all([
+  const supportsSplits = await hasTable('import_order_item_splits');
+  const [items, containers, containerItems, splits] = await Promise.all([
     query(
       `SELECT * FROM import_order_items
        WHERE import_order_id IN (${placeholders})
@@ -207,9 +218,24 @@ const fetchOrdersByIds = async (ids = []) => {
        ORDER BY ici.id`,
       ids
     ),
+    supportsSplits
+      ? query(
+          `SELECT iois.*
+           FROM import_order_item_splits iois
+           JOIN import_order_items ioi ON ioi.id = iois.import_order_item_id
+           WHERE ioi.import_order_id IN (${placeholders})
+           ORDER BY iois.id`,
+          ids
+        )
+      : Promise.resolve({ rows: [] }),
   ]);
 
-  return { items: items.rows, containers: containers.rows, containerItems: containerItems.rows };
+  return {
+    items: items.rows,
+    containers: containers.rows,
+    containerItems: containerItems.rows,
+    splits: splits.rows,
+  };
 };
 
 const getAll = async (req, res, next) => {
@@ -312,7 +338,7 @@ const getAll = async (req, res, next) => {
       count: orders.rows.length,
       limit,
       offset,
-      data: attachChildren(orders.rows, children.items, children.containers, children.containerItems),
+      data: attachChildren(orders.rows, children.items, children.containers, children.containerItems, children.splits),
     });
   } catch (err) {
     next(err);
@@ -342,7 +368,7 @@ const getOne = async (req, res, next) => {
 
     return res.json({
       success: true,
-      data: attachChildren(orders.rows, children.items, children.containers, children.containerItems)[0],
+      data: attachChildren(orders.rows, children.items, children.containers, children.containerItems, children.splits)[0],
     });
   } catch (err) {
     next(err);
@@ -1047,6 +1073,228 @@ const receiveItemStock = async (req, res, next) => {
   }
 };
 
+const normalizeSplitRows = (rows = [], fallback = {}) =>
+  (Array.isArray(rows) ? rows : [])
+    .map((row) => {
+      const quantity = normalizeNumber(row.quantity);
+
+      return {
+        raw_material_id: row.raw_material_id || null,
+        product_article: String(row.product_article || '').trim() || null,
+        product_name: String(row.product_name || '').trim() || null,
+        color: String(row.color || fallback.color || '').trim() || null,
+        size: String(row.size || fallback.size || '').trim() || null,
+        source_type: String(row.source_type || fallback.source_type || 'IMPORTED').trim().toUpperCase() || 'IMPORTED',
+        source_country: String(row.source_country || fallback.source_country || '').trim() || null,
+        quantity,
+        note: String(row.note || '').trim() || null,
+      };
+    })
+    .filter((row) => row.quantity > 0);
+
+const findOrCreateSplitRawMaterial = async (client, item, split) => {
+  const materialName = split.product_name || split.product_article;
+  const articleCode = split.product_article || null;
+  const color = split.color || null;
+  const category = String(item.category || '').trim() || 'Upper';
+  const unit = String(item.unit || '').trim() || 'pcs';
+
+  if (!materialName) {
+    const error = new Error('Every split row needs a product name or product article to create raw material');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (split.raw_material_id) {
+    const existingById = await client.query(
+      'SELECT id, name FROM raw_materials WHERE id = ? LIMIT 1',
+      [split.raw_material_id]
+    );
+    if (existingById.rows.length) return existingById.rows[0];
+  }
+
+  const existing = await client.query(
+    `SELECT id, name
+     FROM raw_materials
+     WHERE name = ? AND article_code <=> ? AND color <=> ?
+     LIMIT 1`,
+    [materialName, articleCode, color]
+  );
+
+  if (existing.rows.length) return existing.rows[0];
+
+  const rawMaterialInsert = await appendFiscalInsertFields(
+    'raw_materials',
+    ['name', 'article_code', 'category', 'color', 'unit', 'quantity', 'min_quantity'],
+    [materialName, articleCode, category, color, unit, 0, 10]
+  );
+
+  const inserted = await client.query(
+    `INSERT INTO raw_materials (${rawMaterialInsert.columns.join(', ')})
+     VALUES (${rawMaterialInsert.columns.map(() => '?').join(', ')})`,
+    rawMaterialInsert.values
+  );
+
+  return {
+    id: inserted.insertId,
+    name: materialName,
+  };
+};
+
+const saveItemSplits = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    const supportsSplits = await hasTable('import_order_item_splits');
+    const supportsLots = await hasTable('raw_material_lots');
+
+    if (!supportsSplits || !supportsLots) {
+      return res.status(400).json({
+        success: false,
+        message: 'Split tracking tables are missing. Run sql/add-import-item-splits-and-raw-material-lots.sql first.',
+      });
+    }
+
+    await client.query('START TRANSACTION');
+
+    const itemResult = await client.query(
+      `SELECT io.id AS import_order_id,
+              io.order_number,
+              io.supplier_name,
+              io.supplier_country,
+              ioi.*
+       FROM import_order_items ioi
+       JOIN import_orders io ON io.id = ioi.import_order_id
+       WHERE io.id = ? AND ioi.id = ?
+       LIMIT 1`,
+      [req.params.id, req.params.itemId]
+    );
+
+    if (!itemResult.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Import slip item not found' });
+    }
+
+    const item = itemResult.rows[0];
+    const maxQuantity = Number(item.received_qty || 0) > 0
+      ? Number(item.received_qty || 0)
+      : Number(item.ordered_qty || 0);
+    const splits = normalizeSplitRows(req.body?.splits, {
+      color: item.color,
+      size: item.size,
+      source_type: 'IMPORTED',
+      source_country: item.supplier_country,
+    });
+    const totalSplitQty = splits.reduce((sum, split) => sum + Number(split.quantity || 0), 0);
+
+    if (totalSplitQty > maxQuantity) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: `Split total ${totalSplitQty} is greater than available item quantity ${maxQuantity}.`,
+      });
+    }
+
+    await client.query('DELETE FROM raw_material_lots WHERE import_order_item_id = ?', [item.id]);
+    await client.query('DELETE FROM import_order_item_splits WHERE import_order_item_id = ?', [item.id]);
+
+    const savedSplits = [];
+    for (const split of splits) {
+      const rawMaterial = await findOrCreateSplitRawMaterial(client, item, split);
+      const rawMaterialId = rawMaterial.id;
+
+      const splitResult = await client.query(
+        `INSERT INTO import_order_item_splits
+           (import_order_item_id, raw_material_id, product_article, product_name, color, size,
+            source_type, source_country, quantity, used_qty, remaining_qty, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+        [
+          item.id,
+          rawMaterialId,
+          split.product_article,
+          split.product_name,
+          split.color,
+          split.size,
+          split.source_type,
+          split.source_country,
+          split.quantity,
+          split.quantity,
+          split.note,
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO raw_material_lots
+           (raw_material_id, import_order_item_id, import_order_item_split_id, source_type, source_country,
+            supplier_name, product_article, product_name, color, size, qty_received, qty_used, qty_remaining,
+            unit, reference_type, reference_id, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'IMPORT_SPLIT', ?, ?)`,
+        [
+          rawMaterialId,
+          item.id,
+          splitResult.insertId,
+          split.source_type,
+          split.source_country,
+          item.supplier_name,
+          split.product_article,
+          split.product_name,
+          split.color,
+          split.size,
+          split.quantity,
+          split.quantity,
+          item.unit,
+          splitResult.insertId,
+          split.note,
+        ]
+      );
+
+      savedSplits.push({
+        ...split,
+        id: splitResult.insertId,
+        raw_material_id: rawMaterialId,
+        raw_material_name: rawMaterial.name,
+        remaining_qty: split.quantity,
+        used_qty: 0,
+      });
+    }
+
+    await client.query('COMMIT');
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'UPDATE',
+      module: 'import_tracking',
+      entity_type: 'import_order_item',
+      entity_id: item.id,
+      entityName: item.material_name,
+      description: `Updated article split for ${item.material_name} in ${item.order_number}`,
+      metadata: {
+        import_order_id: item.import_order_id,
+        import_order_item_id: item.id,
+        total_split_qty: totalSplitQty,
+        max_quantity: maxQuantity,
+        splits: savedSplits,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: 'Item split saved',
+      data: {
+        import_order_item_id: item.id,
+        total_split_qty: totalSplitQty,
+        unassigned_qty: Math.max(maxQuantity - totalSplitQty, 0),
+        splits: savedSplits,
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   getAll,
   getOne,
@@ -1056,4 +1304,5 @@ module.exports = {
   getReport,
   createRawMaterialFromItem,
   receiveItemStock,
+  saveItemSplits,
 };

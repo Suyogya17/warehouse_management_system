@@ -15,6 +15,7 @@ fgRouter.post('/',      authorize('ADMIN', 'CO_ADMIN'), uploadMiddleware('image'
 fgRouter.put('/:id/visibility', authorizeAdminOrPagePermission(PRODUCT_VISIBILITY_PAGE_KEY, 'can_edit'), fgCtrl.setVisibility);
 fgRouter.put('/:id/display-quantity', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDisplayQuantity);
 fgRouter.put('/:id/price', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setPrice);
+fgRouter.put('/:id/offer', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setOffer);
 fgRouter.put('/:id',    authorize('ADMIN', 'CO_ADMIN'), uploadMiddleware('image'), fgCtrl.update);
 fgRouter.delete('/:id', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.remove);
 

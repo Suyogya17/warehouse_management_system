@@ -1,0 +1,5 @@
+ALTER TABLE finished_goods
+  ADD COLUMN offer_enabled TINYINT(1) NOT NULL DEFAULT 0,
+  ADD COLUMN offer_price DECIMAL(12, 2) NULL,
+  ADD COLUMN offer_label VARCHAR(120) NULL,
+  ADD COLUMN offer_ends_at DATETIME NULL;
