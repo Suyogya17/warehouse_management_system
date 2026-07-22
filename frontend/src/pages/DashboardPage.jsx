@@ -13,6 +13,7 @@ import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber, formatUserPrice } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
 import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
+import { getRoundedCartons } from "../utils/displayStock";
 
 const getAvailableQty = (product) =>
   Number(product?.available_qty ?? product?.display_quantity ?? product?.quantity ?? 0);
@@ -77,9 +78,7 @@ function ProductCard({
   const isNew =
     selectedVariant.created_at &&
     new Date(selectedVariant.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const cartons = selectedVariant.inner_boxes_per_outer_box
-    ? Math.floor(availableQty / Number(selectedVariant.inner_boxes_per_outer_box))
-    : 0;
+  const cartons = getRoundedCartons(availableQty, selectedVariant.inner_boxes_per_outer_box);
 
   return (
     <div className="group flex flex-col rounded-2xl border border-slate-200 bg-white overflow-hidden hover:shadow-xl transition-all duration-300">
@@ -237,9 +236,7 @@ function OnHoldCard({ variants = [], canManageVisibility = false, onShowForCount
   const isNew =
     selectedVariant.created_at &&
     new Date(selectedVariant.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const cartons = selectedVariant.inner_boxes_per_outer_box
-    ? Math.floor(availableQty / Number(selectedVariant.inner_boxes_per_outer_box))
-    : 0;
+  const cartons = getRoundedCartons(availableQty, selectedVariant.inner_boxes_per_outer_box);
 
   return (
     <div className="group flex flex-col rounded-2xl border border-amber-200 bg-white overflow-hidden hover:shadow-xl transition-all duration-300">

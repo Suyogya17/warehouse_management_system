@@ -8,13 +8,14 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
+import { getRoundedCartons } from "../utils/displayStock";
 import { formatNumber } from "../utils/format";
 
 const getCartons = (quantity, item) => {
   const pairs = Number(quantity || 0);
   const pairsPerCarton = Number(item.inner_boxes_per_outer_box || 0);
 
-  return pairsPerCarton > 0 ? Math.floor(pairs / pairsPerCarton) : 0;
+  return getRoundedCartons(pairs, pairsPerCarton);
 };
 
 const formatWarehouses = (warehouses = [], unit = "pairs") =>

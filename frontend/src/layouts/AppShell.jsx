@@ -83,6 +83,7 @@ const navByRole = {
 
   ELDER: [
     { to: "/elder-finished", label: "Our Products", icon: "finishedGoods" },
+    { to: "/offers", label: "Offers", icon: "finishedGoods" },
   ],
 };
 

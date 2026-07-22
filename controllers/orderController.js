@@ -3,6 +3,7 @@ const auditLog = require('../utils/auditLog');
 const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields, getNepaliFiscalMeta } = require('../utils/nepaliFiscalYear');
 const { clearCache } = require('../middleware/cacheMiddleware');
+const { resolveOfferAudienceUserId } = require('../utils/offerAccountLinks');
 
 const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'PACKED'];
 const ALL_STATUSES = [...ACTIVE_RESERVATION_STATUSES, 'DELIVERED', 'CANCELLED'];
@@ -323,6 +324,11 @@ const getAvailability = async (req, res, next) => {
     const includeHidden =
       req.query.include_hidden === '1' &&
       ['ADMIN', 'CO_ADMIN', 'MEMBER'].includes(req.user.role);
+    const isLinkedElderOfferView = req.user.role === 'ELDER' && req.query.offer_view === '1';
+    const availabilityUserId = isLinkedElderOfferView
+      ? await resolveOfferAudienceUserId(req.user, query)
+      : Number(req.user.id);
+    const usesCustomerOfferAudience = req.user.role === 'USER' || isLinkedElderOfferView;
 
     let sql = `SELECT * FROM finished_goods WHERE is_deleted = 0${
       includeHidden ? '' : ' AND is_visible = 1'
@@ -341,7 +347,7 @@ const getAvailability = async (req, res, next) => {
           AND upp.user_id = ?
           AND upp.can_view = 0
       )`;
-      params.push(req.user.id, req.user.id);
+      params.push(availabilityUserId, availabilityUserId);
     }
 
     sql += supportsDisplayOrder
@@ -351,15 +357,21 @@ const getAvailability = async (req, res, next) => {
     const products = await query(sql, params);
     const supportsOfferAudience = await hasColumn('finished_goods', 'offer_all_users');
     const supportsOfferUsers = await hasTable('finished_good_offer_users');
-    let offerUserProductIds = new Set();
-    if (req.user.role === 'USER' && supportsOfferAudience && supportsOfferUsers && products.rows.length) {
+    const supportsOfferUserQuantity = supportsOfferUsers
+      ? await hasColumn('finished_good_offer_users', 'display_quantity')
+      : false;
+    let offerUserTargets = new Map();
+    if (usesCustomerOfferAudience && supportsOfferAudience && supportsOfferUsers && products.rows.length) {
       const ids = products.rows.map((product) => Number(product.id));
       const audienceRows = await query(
-        `SELECT finished_good_id FROM finished_good_offer_users
+        `SELECT finished_good_id${supportsOfferUserQuantity ? ', display_quantity' : ''} FROM finished_good_offer_users
          WHERE user_id = ? AND finished_good_id IN (${ids.map(() => '?').join(',')})`,
-        [req.user.id, ...ids]
+        [availabilityUserId, ...ids]
       );
-      offerUserProductIds = new Set(audienceRows.map((row) => Number(row.finished_good_id)));
+      offerUserTargets = new Map(audienceRows.map((row) => [
+        Number(row.finished_good_id),
+        supportsOfferUserQuantity ? Number(row.display_quantity || DEFAULT_DISPLAY_QUANTITY) : DEFAULT_DISPLAY_QUANTITY,
+      ]));
     }
     const productIds = products.rows.map((p) => p.id);
 
@@ -381,12 +393,16 @@ const getAvailability = async (req, res, next) => {
         const available_qty = Math.max(0, physical_stock - reserved_qty);
 
         // Step 2: cap what user sees at this product's display quantity
-        const display_stock = Math.min(display_quantity, available_qty);
+        const userOfferQuantity = offerUserTargets.get(Number(p.id));
+        const offerIsActive = Number(p.offer_enabled) === 1 && (!p.offer_ends_at || new Date(p.offer_ends_at).getTime() >= Date.now());
+        const hasPersonalOffer = usesCustomerOfferAudience && offerIsActive && Number(p.offer_all_users) !== 1 && userOfferQuantity != null;
+        const display_stock = Math.min(hasPersonalOffer ? userOfferQuantity : display_quantity, available_qty);
 
-        const canSeeOffer = req.user.role !== 'USER' || !supportsOfferAudience || !supportsOfferUsers || Number(p.offer_all_users) === 1 || offerUserProductIds.has(Number(p.id));
+        const canSeeOffer = !usesCustomerOfferAudience || !supportsOfferAudience || !supportsOfferUsers || Number(p.offer_all_users) === 1 || offerUserTargets.has(Number(p.id));
         return {
           ...p,
           ...(canSeeOffer ? {} : { offer_enabled: 0, offer_price: null, offer_label: null, offer_ends_at: null }),
+          offer_display_quantity: hasPersonalOffer ? userOfferQuantity : null,
           physical_stock,  // 660 — actual warehouse stock
           reserved_qty,    // 300 — orders in progress
           available_qty,   // 360 — actual available (physical - reserved)
@@ -430,9 +446,14 @@ const create = async (req, res, next) => {
     const { clause, params } = buildInClause(productIds);
 
     const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
+    const supportsOfferAudience = await hasColumn('finished_goods', 'offer_all_users');
+    const supportsOfferUsers = await hasTable('finished_good_offer_users');
+    const supportsOfferUserQuantity = supportsOfferUsers
+      ? await hasColumn('finished_good_offer_users', 'display_quantity')
+      : false;
 
     let productSql = `
-      SELECT id, name, article_code, color, quantity${supportsDisplayQuantity ? ', display_quantity' : ''}
+      SELECT id, name, article_code, color, quantity${supportsDisplayQuantity ? ', display_quantity' : ''}${supportsOfferAudience ? ', offer_enabled, offer_ends_at, offer_all_users' : ''}
       FROM finished_goods
       WHERE is_deleted = 0
         AND is_visible = 1
@@ -467,6 +488,17 @@ const create = async (req, res, next) => {
 
     const productMap = new Map(products.rows.map((p) => [p.id, p]));
 
+    let userOfferTargets = new Map();
+    if (req.user.role === 'USER' && supportsOfferAudience && supportsOfferUsers && supportsOfferUserQuantity) {
+      const targetRows = await client.query(
+        `SELECT finished_good_id, display_quantity
+         FROM finished_good_offer_users
+         WHERE user_id = ? AND finished_good_id IN ${clause}`,
+        [req.user.id, ...params]
+      );
+      userOfferTargets = new Map(targetRows.rows.map((row) => [Number(row.finished_good_id), Number(row.display_quantity)]));
+    }
+
     const reserved = await getReservedByProduct(
       (sql, params) => client.query(sql, params),
       productIds
@@ -489,11 +521,16 @@ const create = async (req, res, next) => {
       const displayQuantity = supportsDisplayQuantity
         ? getProductDisplayQuantity(p)
         : DEFAULT_DISPLAY_QUANTITY;
+      const userOfferQuantity = userOfferTargets.get(Number(id));
+      const offerIsActive = Number(p.offer_enabled) === 1 && (!p.offer_ends_at || new Date(p.offer_ends_at).getTime() >= Date.now());
+      const effectiveDisplayQuantity = req.user.role === 'USER' && offerIsActive && Number(p.offer_all_users) !== 1 && userOfferQuantity != null
+        ? userOfferQuantity
+        : displayQuantity;
 
       // Step 1: actual available
       const available = Math.max(0, physicalStock - reservedQty);
       // Step 2: cap at this product's display quantity
-      const displayAvailable = Math.min(displayQuantity, available);
+      const displayAvailable = Math.min(effectiveDisplayQuantity, available);
 
       if (qty > displayAvailable) {
         shortages.push({

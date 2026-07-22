@@ -238,7 +238,7 @@ export default function App() {
         <Route
           path="offers"
           element={
-            <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "USER"]}>
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "USER", "ELDER"]}>
               {withSuspense(<OffersPage />)}
             </ProtectedRoute>
           }

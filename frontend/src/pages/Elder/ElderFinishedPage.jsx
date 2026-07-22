@@ -17,7 +17,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useDataRefresh } from "../../hooks/useDataRefresh";
 
 import { api, APP_BASE_URL } from "../../services/api";
-import { getCustomerVisibleStock } from "../../utils/displayStock";
+import { getCustomerVisibleStock, getRoundedCartons } from "../../utils/displayStock";
 import { formatNumber, formatUserPrice } from "../../utils/format";
 import { getCommissionLabel, isCommissionProduct, matchesCommissionFilter } from "../../utils/commission";
 import {
@@ -74,9 +74,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds, user }) {
     selectedVariant.created_at &&
     new Date(selectedVariant.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-  const cartons = selectedVariant.inner_boxes_per_outer_box
-    ? Math.floor(availableQty / Number(selectedVariant.inner_boxes_per_outer_box))
-    : 0;
+  const cartons = getRoundedCartons(availableQty, selectedVariant.inner_boxes_per_outer_box);
 
   return (
     <div className="group flex flex-col rounded-2xl border border-slate-200 bg-white overflow-hidden hover:shadow-xl transition-all duration-300">

@@ -91,27 +91,42 @@ const getAll = async (req, res, next) => {
 
     const supportsOfferAudience = await hasColumn('finished_goods', 'offer_all_users');
     const supportsOfferUsers = await hasTable('finished_good_offer_users');
+    const supportsOfferUserQuantity = supportsOfferUsers
+      ? await hasColumn('finished_good_offer_users', 'display_quantity')
+      : false;
+    const supportsOfferUserPercentage = supportsOfferUsers
+      ? await hasColumn('finished_good_offer_users', 'display_percentage')
+      : false;
     if (supportsOfferAudience && supportsOfferUsers && rows.length) {
       const productIds = rows.map((row) => Number(row.id));
       const placeholders = productIds.map(() => '?').join(',');
       const audienceRows = await query(
-        `SELECT finished_good_id, user_id FROM finished_good_offer_users WHERE finished_good_id IN (${placeholders})`,
+        `SELECT finished_good_id, user_id${supportsOfferUserQuantity ? ', display_quantity' : ''}${supportsOfferUserPercentage ? ', display_percentage' : ''}
+         FROM finished_good_offer_users WHERE finished_good_id IN (${placeholders})`,
         productIds
       );
       const audienceByProduct = new Map();
       audienceRows.forEach((row) => {
         const id = Number(row.finished_good_id);
         if (!audienceByProduct.has(id)) audienceByProduct.set(id, []);
-        audienceByProduct.get(id).push(Number(row.user_id));
+        audienceByProduct.get(id).push({
+          user_id: Number(row.user_id),
+          display_quantity: supportsOfferUserQuantity ? Number(row.display_quantity || DEFAULT_DISPLAY_QUANTITY) : DEFAULT_DISPLAY_QUANTITY,
+          display_percentage: supportsOfferUserPercentage && row.display_percentage !== null ? Number(row.display_percentage) : null,
+        });
       });
 
       rows = rows.map((row) => {
-        const targetUserIds = audienceByProduct.get(Number(row.id)) || [];
+        const offerTargets = audienceByProduct.get(Number(row.id)) || [];
+        const targetUserIds = offerTargets.map((target) => target.user_id);
         if (userRole === 'ADMIN' || userRole === 'CO_ADMIN') {
-          return { ...row, offer_target_user_ids: targetUserIds };
+          return { ...row, offer_target_user_ids: targetUserIds, offer_targets: offerTargets };
         }
-        const canSeeOffer = Number(row.offer_all_users) === 1 || targetUserIds.includes(Number(userId));
-        return canSeeOffer ? row : { ...row, offer_enabled: 0, offer_price: null, offer_label: null, offer_ends_at: null };
+        const userTarget = offerTargets.find((target) => target.user_id === Number(userId));
+        const canSeeOffer = Number(row.offer_all_users) === 1 || Boolean(userTarget);
+        return canSeeOffer
+          ? { ...row, offer_display_quantity: userTarget?.display_quantity ?? null }
+          : { ...row, offer_enabled: 0, offer_price: null, offer_label: null, offer_ends_at: null, offer_display_quantity: null };
       });
     }
 
@@ -753,23 +768,70 @@ const setOffer = async (req, res, next) => {
     const enabled = normalizeBoolean(req.body.offer_enabled);
     const supportsOfferAllUsers = await hasColumn('finished_goods', 'offer_all_users');
     const supportsOfferUsers = await hasTable('finished_good_offer_users');
+    const supportsOfferUserQuantity = supportsOfferUsers
+      ? await hasColumn('finished_good_offer_users', 'display_quantity')
+      : false;
+    const supportsOfferUserPercentage = supportsOfferUsers
+      ? await hasColumn('finished_good_offer_users', 'display_percentage')
+      : false;
     const offerPrice = null;
 
     const offerLabel = enabled ? String(req.body.offer_label || 'Special offer').trim().slice(0, 120) : null;
     const offerEndsAt = enabled && req.body.offer_ends_at ? req.body.offer_ends_at : null;
     const offerAllUsers = !enabled || req.body.offer_all_users !== false;
-    const targetUserIds = enabled && !offerAllUsers && Array.isArray(req.body.offer_target_user_ids)
-      ? [...new Set(req.body.offer_target_user_ids.map(Number).filter((id) => id > 0))]
-      : [];
+    const rawTargets = Array.isArray(req.body.offer_targets)
+      ? req.body.offer_targets
+      : Array.isArray(req.body.offer_target_user_ids)
+        ? req.body.offer_target_user_ids.map((userId) => ({ user_id: userId, display_quantity: DEFAULT_DISPLAY_QUANTITY }))
+        : [];
+    const targetMap = new Map();
+    if (enabled && !offerAllUsers) {
+      rawTargets.forEach((target) => {
+        const userId = Number(target.user_id);
+        const displayQuantity = Number(target.display_quantity);
+        const displayPercentage = target.display_percentage === null || target.display_percentage === undefined || target.display_percentage === ''
+          ? null
+          : Number(target.display_percentage);
+        if (userId > 0) targetMap.set(userId, { display_quantity: displayQuantity, display_percentage: displayPercentage });
+      });
+    }
+    const offerTargets = [...targetMap.entries()].map(([user_id, target]) => ({ user_id, ...target }));
+    const targetUserIds = offerTargets.map((target) => target.user_id);
 
     if (enabled && !offerAllUsers && !targetUserIds.length) {
       return res.status(400).json({ success: false, message: 'Select at least one user for a targeted offer.' });
+    }
+
+    if (enabled && !offerAllUsers && offerTargets.some((target) => !Number.isInteger(target.display_quantity) || target.display_quantity < 1)) {
+      return res.status(400).json({ success: false, message: 'Each selected user needs a whole-number offer quantity greater than zero.' });
+    }
+
+    const percentageTargets = offerTargets.filter((target) => target.display_percentage !== null);
+    if (percentageTargets.some((target) => !Number.isFinite(target.display_percentage) || target.display_percentage <= 0 || target.display_percentage > 100)) {
+      return res.status(400).json({ success: false, message: 'Each offer percentage must be greater than zero and no more than 100%.' });
+    }
+    if (percentageTargets.reduce((sum, target) => sum + target.display_percentage, 0) > 100.00001) {
+      return res.status(400).json({ success: false, message: 'Selected user percentages cannot total more than 100%.' });
     }
 
     if (enabled && !offerAllUsers && (!supportsOfferAllUsers || !supportsOfferUsers)) {
       return res.status(400).json({
         success: false,
         message: 'Selected-user offers require sql/add-finished-good-offer-audience.sql.',
+      });
+    }
+
+    if (enabled && !offerAllUsers && !supportsOfferUserQuantity) {
+      return res.status(400).json({
+        success: false,
+        message: 'Personalized offer quantities require sql/add-offer-user-display-quantity.sql.',
+      });
+    }
+
+    if (enabled && !offerAllUsers && percentageTargets.length && !supportsOfferUserPercentage) {
+      return res.status(400).json({
+        success: false,
+        message: 'Editable offer percentages require sql/add-offer-user-display-percentage.sql.',
       });
     }
 
@@ -788,11 +850,14 @@ const setOffer = async (req, res, next) => {
     if (supportsOfferUsers) {
       await query('DELETE FROM finished_good_offer_users WHERE finished_good_id = ?', [req.params.id]);
     }
-    if (supportsOfferUsers && targetUserIds.length) {
-      const valuesSql = targetUserIds.map(() => '(?, ?)').join(', ');
+    if (supportsOfferUsers && offerTargets.length) {
+      const percentageColumn = supportsOfferUserPercentage ? ', display_percentage' : '';
+      const valuesSql = offerTargets.map(() => supportsOfferUserPercentage ? '(?, ?, ?, ?)' : '(?, ?, ?)').join(', ');
       await query(
-        `INSERT INTO finished_good_offer_users (finished_good_id, user_id) VALUES ${valuesSql}`,
-        targetUserIds.flatMap((userId) => [req.params.id, userId])
+        `INSERT INTO finished_good_offer_users (finished_good_id, user_id, display_quantity${percentageColumn}) VALUES ${valuesSql}`,
+        offerTargets.flatMap((target) => supportsOfferUserPercentage
+          ? [req.params.id, target.user_id, target.display_quantity, target.display_percentage]
+          : [req.params.id, target.user_id, target.display_quantity])
       );
     }
 
@@ -805,12 +870,12 @@ const setOffer = async (req, res, next) => {
       entity_id: Number(req.params.id),
       entityName: getProductName(product),
       description: `${enabled ? 'Enabled' : 'Removed'} offer for ${getProductName(product)}`,
-      metadata: { offer_enabled: enabled, offer_price: enabled ? offerPrice : null, offer_label: offerLabel, offer_ends_at: offerEndsAt, offer_all_users: offerAllUsers, offer_target_user_ids: targetUserIds },
+      metadata: { offer_enabled: enabled, offer_price: enabled ? offerPrice : null, offer_label: offerLabel, offer_ends_at: offerEndsAt, offer_all_users: offerAllUsers, offer_targets: offerTargets },
     });
 
     return res.json({
       success: true,
-      data: { offer_enabled: enabled ? 1 : 0, offer_price: enabled ? offerPrice : null, offer_label: offerLabel, offer_ends_at: offerEndsAt, offer_all_users: offerAllUsers ? 1 : 0, offer_target_user_ids: targetUserIds },
+      data: { offer_enabled: enabled ? 1 : 0, offer_price: enabled ? offerPrice : null, offer_label: offerLabel, offer_ends_at: offerEndsAt, offer_all_users: offerAllUsers ? 1 : 0, offer_target_user_ids: targetUserIds, offer_targets: offerTargets },
     });
   } catch (err) {
     next(err);

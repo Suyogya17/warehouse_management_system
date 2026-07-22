@@ -304,12 +304,10 @@ export const api = {
     return apiRequest(`/orders${query ? `?${query}` : ""}`, {}, token);
   },
 
-  getAvailability: (token, options = {}) =>
-    apiRequest(
-      `/orders/availability${options.includeHidden ? "?include_hidden=1" : ""}`,
-      {},
-      token
-    ),
+  getAvailability: (token, options = {}) => {
+    const query = buildQueryString(options);
+    return apiRequest(`/orders/availability${query ? `?${query}` : ""}`, {}, token);
+  },
 
   createOrder: (payload, token) =>
     apiRequest(

@@ -8,7 +8,7 @@ const toStockNumber = (value) => {
 export const getCustomerVisibleStock = (product) => {
   const displayStock = toStockNumber(product?.display_stock);
   if (displayStock !== null) {
-    return Math.min(displayStock, DEFAULT_CUSTOMER_DISPLAY_QUANTITY);
+    return displayStock;
   }
 
   const availableStock = toStockNumber(product?.available_qty ?? product?.quantity) ?? 0;
@@ -16,4 +16,15 @@ export const getCustomerVisibleStock = (product) => {
     toStockNumber(product?.display_quantity) ?? DEFAULT_CUSTOMER_DISPLAY_QUANTITY;
 
   return Math.min(availableStock, displayQuantity, DEFAULT_CUSTOMER_DISPLAY_QUANTITY);
+};
+
+export const getRoundedCartons = (quantity, pairsPerCarton) => {
+  const pairs = Number(quantity || 0);
+  const cartonSize = Number(pairsPerCarton || 0);
+
+  if (!Number.isFinite(pairs) || pairs <= 0 || !Number.isFinite(cartonSize) || cartonSize <= 0) {
+    return 0;
+  }
+
+  return Math.ceil(pairs / cartonSize);
 };

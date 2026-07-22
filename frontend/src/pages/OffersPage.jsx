@@ -9,7 +9,7 @@ import SectionCard from "../components/SectionCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { api, APP_BASE_URL } from "../services/api";
-import { getCustomerVisibleStock } from "../utils/displayStock";
+import { getCustomerVisibleStock, getRoundedCartons } from "../utils/displayStock";
 import { formatNumber } from "../utils/format";
 
 const isActiveOffer = (item) =>
@@ -24,7 +24,58 @@ const getSeriesName = (soleCode = "") =>
     .replace(/[-_\s]*sole$/i, "")
     .trim();
 
-function OfferProductCard({ variants, canManage, onEdit, onRemove, onAddToCart, cartProductIds }) {
+const OFFER_PERCENTAGES_BY_EMAIL = {
+  "pramod.kathmandu@nepcha.com": 40,
+  "ishwor.birtamod@nepcha.com": 30,
+  "kamal.butwal@nepcha.com": 20,
+  "ramesh.pokhara@nepcha.com": 5,
+  "deepak@nepcha.com": 5,
+};
+
+const getPercentageAllocations = (product, targets = []) => {
+  const pairsPerCarton = Number(product?.inner_boxes_per_outer_box || 0);
+  const totalCartons = getRoundedCartons(product?.quantity, pairsPerCarton);
+  if (pairsPerCarton <= 0 || totalCartons <= 0) return new Map();
+
+  const allocations = targets.filter((target) => Number(target.percentage) > 0).map((target, index) => {
+    const percentage = Number(target.percentage);
+    const exactCartons = totalCartons * percentage / 100;
+    const cartons = Math.floor(exactCartons);
+    return { user_id: Number(target.user_id), percentage, cartons, remainder: exactCartons - cartons, index };
+  });
+  const totalPercentage = allocations.reduce((sum, allocation) => sum + allocation.percentage, 0);
+  const targetCartons = Math.min(totalCartons, Math.round(totalCartons * totalPercentage / 100));
+  let cartonsLeft = targetCartons - allocations.reduce((sum, allocation) => sum + allocation.cartons, 0);
+  [...allocations]
+    .sort((left, right) => right.remainder - left.remainder || left.index - right.index)
+    .forEach((allocation) => {
+      if (cartonsLeft <= 0) return;
+      allocation.cartons += 1;
+      cartonsLeft -= 1;
+    });
+
+  // With small stock, a valid percentage can round down to zero. When there
+  // are enough cartons for every selected user, move cartons from the largest
+  // allocations so no selected audience member is saved with zero quantity.
+  if (targetCartons >= allocations.length) {
+    allocations.filter((allocation) => allocation.cartons === 0).forEach((emptyAllocation) => {
+      const donor = allocations
+        .filter((allocation) => allocation.cartons > 1)
+        .sort((left, right) => right.cartons - left.cartons || right.percentage - left.percentage || left.index - right.index)[0];
+      if (donor) {
+        donor.cartons -= 1;
+        emptyAllocation.cartons = 1;
+      }
+    });
+  }
+
+  return new Map(allocations.map((allocation) => [allocation.user_id, {
+    ...allocation,
+    pairs: allocation.cartons * pairsPerCarton,
+  }]));
+};
+
+function OfferProductCard({ variants, canManage, canOrder, onEdit, onRemove, onAddToCart, cartProductIds }) {
   const [selected, setSelected] = useState(variants.find(isActiveOffer) || variants[0]);
 
   useEffect(() => {
@@ -36,9 +87,13 @@ function OfferProductCard({ variants, canManage, onEdit, onRemove, onAddToCart, 
   const availableQty = canManage
     ? Number(selected.quantity || 0)
     : getCustomerVisibleStock(selected);
-  const cartons = Number(selected.inner_boxes_per_outer_box) > 0
-    ? Math.floor(availableQty / Number(selected.inner_boxes_per_outer_box))
-    : 0;
+  const cartons = getRoundedCartons(availableQty, selected.inner_boxes_per_outer_box);
+  const targetQuantities = (selected.offer_targets || [])
+    .map((target) => Number(target.display_quantity || 0))
+    .filter((quantity) => quantity > 0);
+  const audienceSummary = Number(selected.offer_all_users) === 1
+    ? "All users"
+    : `${targetQuantities.length} selected user(s)${targetQuantities.length ? ` · ${targetQuantities.map(formatNumber).join(", ")} pairs` : ""}`;
   return (
     <article className={`group flex flex-col overflow-hidden rounded-2xl border bg-white transition-all duration-300 hover:shadow-xl ${active ? "border-amber-300" : "border-slate-200"}`}>
       <div className="relative aspect-[5/3] overflow-hidden bg-slate-100">
@@ -67,7 +122,7 @@ function OfferProductCard({ variants, canManage, onEdit, onRemove, onAddToCart, 
           <div className="rounded-xl bg-amber-50 p-2">
             <p className="text-xs font-semibold uppercase text-amber-700">{selected.offer_label || "Special offer"}</p>
             {selected.offer_ends_at && <p className="mt-1 text-xs text-slate-500">Ends {new Date(selected.offer_ends_at).toLocaleString()}</p>}
-            {canManage && <p className="mt-1 text-xs font-medium text-slate-600">Audience: {Number(selected.offer_all_users) === 1 ? "All users" : `${selected.offer_target_user_ids?.length || 0} selected user(s)`}</p>}
+            {canManage && <p className="mt-1 text-xs font-medium text-slate-600">Audience: {audienceSummary}</p>}
           </div>
         ) : null}
         <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-50 p-2">
@@ -75,7 +130,7 @@ function OfferProductCard({ variants, canManage, onEdit, onRemove, onAddToCart, 
           <div><p className="text-[10px] font-semibold uppercase text-slate-400">CTN stock</p><p className="text-sm font-bold text-amber-600">{formatNumber(cartons)} CTN</p></div>
         </div>
         {canManage && <div className="mt-auto flex gap-2"><Button type="button" onClick={() => onEdit(selected)}>{active ? "Edit offer" : "Add offer"}</Button>{active && <Button type="button" variant="secondary" onClick={() => onRemove(selected)}>Remove</Button>}</div>}
-        {!canManage && (() => {
+        {!canManage && canOrder && (() => {
           const inCart = cartProductIds.has(Number(selected.id));
           return <button type="button" disabled={availableQty <= 0} onClick={() => onAddToCart(selected)} className={`mt-auto inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition ${availableQty <= 0 ? "cursor-not-allowed bg-slate-200 text-slate-500" : inCart ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-indigo-500 text-white hover:bg-indigo-600"}`}>{availableQty <= 0 ? "Out of stock" : inCart ? <><Check size={16} />In cart</> : <><ShoppingCart size={16} />Add to cart</>}</button>;
         })()}
@@ -89,6 +144,7 @@ export default function OffersPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const canManage = user?.role === "ADMIN" || user?.role === "CO_ADMIN";
+  const canOrder = user?.role === "USER";
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [cart, setCart] = useState([]);
@@ -96,17 +152,26 @@ export default function OffersPage() {
   const [search, setSearch] = useState("");
   const [seriesFilter, setSeriesFilter] = useState("");
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ offer_label: "Special offer", offer_ends_at: "", offer_all_users: true, offer_target_user_ids: [] });
+  const [form, setForm] = useState({ offer_label: "Special offer", offer_ends_at: "", offer_all_users: true, offer_target_user_ids: [], offer_target_quantities: {}, offer_target_percentages: {} });
   const [saving, setSaving] = useState(false);
+  const percentageTargets = useMemo(() => form.offer_target_user_ids.map((userId) => ({
+    user_id: Number(userId),
+    percentage: form.offer_target_percentages[userId],
+  })), [form.offer_target_percentages, form.offer_target_user_ids]);
+  const percentageAllocations = useMemo(() => getPercentageAllocations(editing, percentageTargets), [editing, percentageTargets]);
+  const selectedPercentageTotal = percentageTargets.reduce((sum, target) => sum + Number(target.percentage || 0), 0);
+  const hasZeroPercentageAllocation = [...percentageAllocations.values()].some((allocation) => allocation.pairs <= 0);
+  const editingTotalPairs = Number(editing?.quantity || 0);
+  const editingTotalCartons = getRoundedCartons(editingTotalPairs, editing?.inner_boxes_per_outer_box);
 
   const load = useCallback(async () => {
     const [result, usersResult] = await Promise.all([
-      canManage ? api.getFinishedGoods(token) : api.getAvailability(token),
+      canManage ? api.getFinishedGoods(token) : api.getAvailability(token, user?.role === "ELDER" ? { offer_view: 1 } : {}),
       canManage ? api.getUsers(token) : Promise.resolve({ data: [] }),
     ]);
     setProducts(result.data || []);
     setCustomers((usersResult.data || []).filter((account) => account.role === "USER"));
-  }, [canManage, token]);
+  }, [canManage, token, user?.role]);
 
   useEffect(() => { load().catch(console.error); }, [load]);
 
@@ -188,12 +253,19 @@ export default function OffersPage() {
   }, [shownProducts]);
 
   const beginEdit = (product) => {
+    const savedTargets = product.offer_targets || [];
     setEditing(product);
     setForm({
       offer_label: product.offer_label || "Special offer",
       offer_ends_at: product.offer_ends_at ? String(product.offer_ends_at).slice(0, 16) : "",
       offer_all_users: Number(product.offer_all_users ?? 1) === 1,
-      offer_target_user_ids: product.offer_target_user_ids || [],
+      offer_target_user_ids: savedTargets.length ? savedTargets.map((target) => Number(target.user_id)) : product.offer_target_user_ids || [],
+      offer_target_quantities: Object.fromEntries(savedTargets.map((target) => [Number(target.user_id), Number(target.display_quantity || 450)])),
+      offer_target_percentages: Object.fromEntries(savedTargets.map((target) => {
+        const customer = customers.find((account) => Number(account.id) === Number(target.user_id));
+        const defaultPercentage = OFFER_PERCENTAGES_BY_EMAIL[String(customer?.email || "").trim().toLowerCase()];
+        return [Number(target.user_id), target.display_percentage ?? defaultPercentage ?? ""];
+      })),
     });
   };
 
@@ -201,7 +273,16 @@ export default function OffersPage() {
     event.preventDefault();
     setSaving(true);
     try {
-      await api.updateFinishedGoodOffer(editing.id, { offer_enabled: true, ...form }, token);
+      const offerTargets = form.offer_target_user_ids.map((userId) => {
+        const allocation = percentageAllocations.get(Number(userId));
+        const percentage = form.offer_target_percentages[userId];
+        return {
+          user_id: Number(userId),
+          display_quantity: Number(allocation ? allocation.pairs : form.offer_target_quantities[userId] || 0),
+          display_percentage: percentage === "" || percentage === undefined ? null : Number(percentage),
+        };
+      });
+      await api.updateFinishedGoodOffer(editing.id, { offer_enabled: true, ...form, offer_targets: offerTargets }, token);
       showToast({ tone: "success", title: "Offer saved", message: `${editing.article_code || editing.name} is now on offer.` });
       setEditing(null);
       await load();
@@ -213,7 +294,7 @@ export default function OffersPage() {
   const removeOffer = async (product) => {
     try {
       await api.updateFinishedGoodOffer(product.id, { offer_enabled: false }, token);
-      showToast({ tone: "success", title: "Offer removed", message: `${product.article_code || product.name} returned to its regular price.` });
+      showToast({ tone: "success", title: "Offer removed", message: `${product.article_code || product.name} is no longer shown as an offer.` });
       await load();
     } catch (error) {
       showToast({ tone: "error", title: "Could not remove offer", message: error.message });
@@ -223,7 +304,7 @@ export default function OffersPage() {
   return (
     <div className="space-y-6">
       <PageHeader title={canManage ? "Product Offers" : "Offers"} description={canManage ? "Choose products, set the audience, and publish offers for customers." : "Browse products currently available as special offers."} />
-      {!canManage && <div className="flex justify-start"><button type="button" onClick={() => navigate("/order-customer")} className="flex w-fit flex-row gap-3 rounded-xl bg-indigo-500 px-3 py-2 text-white transition hover:bg-indigo-600"><ShoppingCart size={18} /><span>Cart</span>{totalCartItems > 0 && <span className="relative -right-2 -top-2 flex h-6 min-w-6 items-center justify-center rounded-full bg-red-500 px-1 text-xs font-bold text-white">{totalCartItems}</span>}</button></div>}
+      {canOrder && <div className="flex justify-start"><button type="button" onClick={() => navigate("/order-customer")} className="flex w-fit flex-row gap-3 rounded-xl bg-indigo-500 px-3 py-2 text-white transition hover:bg-indigo-600"><ShoppingCart size={18} /><span>Cart</span>{totalCartItems > 0 && <span className="relative -right-2 -top-2 flex h-6 min-w-6 items-center justify-center rounded-full bg-red-500 px-1 text-xs font-bold text-white">{totalCartItems}</span>}</button></div>}
       <SectionCard title={canManage ? "Manage offers" : "Current offers"} subtitle={`${offers.length} active offer${offers.length === 1 ? "" : "s"}`} icon="finishedGoods">
         <div className="mb-4 flex max-w-xs flex-col gap-1">
           <label htmlFor="offer-series" className="text-xs font-medium text-slate-500">Series</label>
@@ -233,13 +314,65 @@ export default function OffersPage() {
           </select>
         </div>
         <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search product, article or color..." className="mb-5 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500" />
-        {!productGroups.length ? <EmptyState title="No offers found" description={canManage ? "Search for a product and add its offer price." : "There are no active product offers right now."} /> : (
+        {!productGroups.length ? <EmptyState title="No offers found" description={canManage ? "Search for a product and publish an offer." : "There are no active product offers right now."} /> : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {productGroups.map((variants) => <OfferProductCard key={getOfferGroupKey(variants[0])} variants={variants} canManage={canManage} onEdit={beginEdit} onRemove={removeOffer} onAddToCart={addToCart} cartProductIds={cartProductIds} />)}
+            {productGroups.map((variants) => <OfferProductCard key={getOfferGroupKey(variants[0])} variants={variants} canManage={canManage} canOrder={canOrder} onEdit={beginEdit} onRemove={removeOffer} onAddToCart={addToCart} cartProductIds={cartProductIds} />)}
           </div>
         )}
       </SectionCard>
-      {editing && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" onMouseDown={() => setEditing(null)}><form onSubmit={saveOffer} onMouseDown={(event) => event.stopPropagation()} className="max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"><div><h2 className="text-lg font-bold">Offer for {editing.article_code || editing.name}</h2><p className="text-sm text-slate-500">Mark this product as an offer and choose who can see it.</p></div><label className="block text-sm font-semibold">Offer label<input maxLength="120" value={form.offer_label} onChange={(event) => setForm({ ...form, offer_label: event.target.value })} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2" /></label><label className="block text-sm font-semibold">End date (optional)<input type="datetime-local" value={form.offer_ends_at} onChange={(event) => setForm({ ...form, offer_ends_at: event.target.value })} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2" /></label><fieldset className="rounded-xl border border-slate-200 p-3"><legend className="px-1 text-sm font-semibold">Who can see this offer?</legend><label className="flex items-center gap-2 text-sm"><input type="radio" checked={form.offer_all_users} onChange={() => setForm({ ...form, offer_all_users: true, offer_target_user_ids: [] })} />All users</label><label className="mt-2 flex items-center gap-2 text-sm"><input type="radio" checked={!form.offer_all_users} onChange={() => setForm({ ...form, offer_all_users: false })} />Selected users only</label>{!form.offer_all_users && <div className="mt-3 max-h-44 space-y-1 overflow-y-auto rounded-lg bg-slate-50 p-2">{customers.length ? customers.map((customer) => { const checked = form.offer_target_user_ids.includes(Number(customer.id)); return <label key={customer.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-white"><input type="checkbox" checked={checked} onChange={() => setForm({ ...form, offer_target_user_ids: checked ? form.offer_target_user_ids.filter((id) => Number(id) !== Number(customer.id)) : [...form.offer_target_user_ids, Number(customer.id)] })} /><span>{customer.name || customer.email}</span><span className="ml-auto text-xs text-slate-400">{customer.email}</span></label>; }) : <p className="text-sm text-slate-500">No user accounts found.</p>}</div>}</fieldset><div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? "Saving..." : "Publish offer"}</Button></div></form></div>}
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" onMouseDown={() => setEditing(null)}>
+          <form onSubmit={saveOffer} onMouseDown={(event) => event.stopPropagation()} className="max-h-[90vh] w-full max-w-xl space-y-4 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div><h2 className="text-lg font-bold">Offer for {editing.article_code || editing.name}</h2><p className="text-sm text-slate-500">Choose each user and the maximum quantity that user can see and order.</p></div>
+              <div className="grid shrink-0 grid-cols-2 gap-2 rounded-xl border border-indigo-100 bg-indigo-50 p-3 text-center">
+                <div><p className="text-[10px] font-bold uppercase tracking-wide text-indigo-500">Total CTN</p><p className="text-lg font-bold text-indigo-800">{formatNumber(editingTotalCartons)}</p></div>
+                <div className="border-l border-indigo-200 pl-2"><p className="text-[10px] font-bold uppercase tracking-wide text-indigo-500">Total pairs</p><p className="text-lg font-bold text-indigo-800">{formatNumber(editingTotalPairs)}</p></div>
+              </div>
+            </div>
+            <label className="block text-sm font-semibold">Offer label<input maxLength="120" value={form.offer_label} onChange={(event) => setForm({ ...form, offer_label: event.target.value })} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2" /></label>
+            <label className="block text-sm font-semibold">End date (optional)<input type="datetime-local" value={form.offer_ends_at} onChange={(event) => setForm({ ...form, offer_ends_at: event.target.value })} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2" /></label>
+            <fieldset className="rounded-xl border border-slate-200 p-3">
+              <legend className="px-1 text-sm font-semibold">Who can see this offer?</legend>
+              <label className="flex items-center gap-2 text-sm"><input type="radio" checked={form.offer_all_users} onChange={() => setForm({ ...form, offer_all_users: true, offer_target_user_ids: [], offer_target_quantities: {}, offer_target_percentages: {} })} />All users (normal display limit)</label>
+              <label className="mt-2 flex items-center gap-2 text-sm"><input type="radio" checked={!form.offer_all_users} onChange={() => setForm({ ...form, offer_all_users: false })} />Selected users with personalized quantities</label>
+              {!form.offer_all_users && (
+                <div className="mt-3 max-h-64 space-y-2 overflow-y-auto rounded-lg bg-slate-50 p-2">
+                  {customers.length ? customers.map((customer) => {
+                    const userId = Number(customer.id);
+                    const checked = form.offer_target_user_ids.includes(userId);
+                    const defaultPercentage = OFFER_PERCENTAGES_BY_EMAIL[String(customer.email || "").trim().toLowerCase()];
+                    const configuredPercentage = form.offer_target_percentages[userId] ?? defaultPercentage ?? "";
+                    const percentageAllocation = percentageAllocations.get(userId);
+                    const assignedPairs = percentageAllocation?.pairs ?? form.offer_target_quantities[userId] ?? "";
+                    return (
+                      <div key={customer.id} className="grid grid-cols-[auto_1fr_140px] items-center gap-2 rounded-lg bg-white px-2 py-2">
+                        <input type="checkbox" checked={checked} onChange={() => setForm((current) => ({
+                          ...current,
+                          offer_target_user_ids: checked ? current.offer_target_user_ids.filter((id) => Number(id) !== userId) : [...current.offer_target_user_ids, userId],
+                          offer_target_quantities: checked ? current.offer_target_quantities : { ...current.offer_target_quantities, [userId]: percentageAllocation?.pairs || current.offer_target_quantities[userId] || 450 },
+                          offer_target_percentages: checked ? current.offer_target_percentages : { ...current.offer_target_percentages, [userId]: configuredPercentage },
+                        }))} />
+                        <div className="min-w-0"><p className="truncate text-sm font-semibold">{customer.name || customer.email}</p><p className="truncate text-xs text-slate-400">{customer.email}</p>{percentageAllocation && <p className="mt-0.5 text-xs font-semibold text-indigo-600">{formatNumber(percentageAllocation.cartons)} CTN · {formatNumber(percentageAllocation.pairs)} pairs</p>}</div>
+                        <div>
+                          {defaultPercentage !== undefined || form.offer_target_percentages[userId] !== undefined ? (
+                            <label className="text-[11px] font-semibold text-slate-500">Percentage<input type="number" min="0.01" max="100" step="0.01" required={checked} disabled={!checked} value={checked ? configuredPercentage : ""} onChange={(event) => setForm((current) => ({ ...current, offer_target_percentages: { ...current.offer_target_percentages, [userId]: event.target.value } }))} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm disabled:bg-slate-100" /></label>
+                          ) : (
+                            <input type="number" min="1" step="1" required={checked} disabled={!checked} value={checked ? assignedPairs : ""} onChange={(event) => setForm((current) => ({ ...current, offer_target_quantities: { ...current.offer_target_quantities, [userId]: event.target.value } }))} placeholder="Pairs" className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm disabled:bg-slate-100" />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }) : <p className="text-sm text-slate-500">No user accounts found.</p>}
+                  {selectedPercentageTotal > 0 && <p className={`px-2 text-xs font-semibold ${selectedPercentageTotal > 100 ? "text-red-600" : "text-slate-500"}`}>Selected percentage total: {formatNumber(selectedPercentageTotal)}%{selectedPercentageTotal > 100 ? " (must not exceed 100%)" : ""}</p>}
+                  {hasZeroPercentageAllocation && <p className="px-2 text-xs font-semibold text-red-600">There are not enough cartons to give every selected user at least 1 CTN. Select fewer users or increase the stock.</p>}
+                </div>
+              )}
+            </fieldset>
+            <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancel</Button><Button type="submit" disabled={saving || selectedPercentageTotal > 100 || hasZeroPercentageAllocation}>{saving ? "Saving..." : "Publish offer"}</Button></div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

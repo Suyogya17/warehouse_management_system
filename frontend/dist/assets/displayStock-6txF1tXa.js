@@ -1,1 +1,0 @@
-const i=a=>{const n=Number(a);return Number.isFinite(n)?Math.max(0,Math.floor(n)):null},_=a=>{const n=i(a==null?void 0:a.display_stock);if(n!==null)return Math.min(n,450);const s=i((a==null?void 0:a.available_qty)??(a==null?void 0:a.quantity))??0,T=i(a==null?void 0:a.display_quantity)??450;return Math.min(s,T,450)};export{_ as g};

@@ -6,6 +6,7 @@ import SectionCard from "../components/SectionCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { api } from "../services/api";
+import { getRoundedCartons } from "../utils/displayStock";
 import { formatDate, formatNumber } from "../utils/format";
 import Select from "react-select";
 
@@ -68,7 +69,7 @@ const getCartons = (quantity, item) => {
   const pairs = Number(quantity || 0);
   const pairsPerCarton = Number(item.inner_boxes_per_outer_box || 0);
 
-  return pairsPerCarton > 0 ? Math.floor(pairs / pairsPerCarton) : 0;
+  return getRoundedCartons(pairs, pairsPerCarton);
 };
 
 export default function WareHousePage() {

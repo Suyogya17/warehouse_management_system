@@ -11,6 +11,7 @@ import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber, formatPrice } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
 import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
+import { getRoundedCartons } from "../utils/displayStock";
 
 const DEFAULT_DISPLAY_QUANTITY = 450;
 const managedUserRoles = new Set(["USER", "MEMBER", "ELDER"]);
@@ -32,7 +33,7 @@ const getCartons = (item) => {
   const pairs = getPairs(item);
   const pairsPerCarton = Number(item.inner_boxes_per_outer_box || 0);
 
-  return pairsPerCarton > 0 ? Math.floor(pairs / pairsPerCarton) : 0;
+  return getRoundedCartons(pairs, pairsPerCarton);
 };
 
 const getArticleKey = (item) =>

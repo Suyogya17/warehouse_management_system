@@ -570,6 +570,7 @@ const getProduction = async (req, res, next) => {
       topProducedProducts,
       rawMaterialConsumption,
       productionByUser,
+      latestProductProduction,
     ] = await Promise.all([
       run(
         `SELECT DATE_FORMAT(created_at, '%Y-%m') AS month,
@@ -610,6 +611,21 @@ const getProduction = async (req, res, next) => {
          GROUP BY user_name
          ORDER BY total_quantity DESC`
       ),
+      run(
+        `SELECT fg.id, fg.name, fg.article_code, fg.sole_code, fg.color, fg.size, fg.unit,
+                p.qty_produced AS latest_quantity,
+                p.created_at AS latest_production_at
+         FROM finished_goods fg
+         JOIN production p ON p.id = (
+           SELECT p2.id
+           FROM production p2
+           WHERE p2.finished_good_id = fg.id
+           ORDER BY p2.created_at DESC, p2.id DESC
+           LIMIT 1
+         )
+         WHERE fg.is_deleted = 0
+         ORDER BY p.created_at DESC, fg.article_code, fg.color`
+      ),
     ]);
 
     return res.json({
@@ -625,6 +641,7 @@ const getProduction = async (req, res, next) => {
         ]),
         raw_material_consumption: mapNumeric(rawMaterialConsumption, ["total_consumed"]),
         production_by_user: mapNumeric(productionByUser, ["production_runs", "total_quantity"]),
+        latest_product_production: mapNumeric(latestProductProduction, ["latest_quantity"]),
       },
     });
   } catch (err) {

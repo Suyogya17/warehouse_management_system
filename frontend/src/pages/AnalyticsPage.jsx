@@ -463,6 +463,25 @@ function InventoryTab({ data }) {
 }
 
 function ProductionTab({ data }) {
+  const [productionSearch, setProductionSearch] = useState("");
+  const [productionSeries, setProductionSeries] = useState("");
+  const latestProductionRows = data?.latest_product_production || [];
+  const productionSeriesOptions = useMemo(() => [...new Set(latestProductionRows
+    .map((row) => String(row.sole_code || "").replace(/[-_\s]*sole$/i, "").trim())
+    .filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" })), [latestProductionRows]);
+  const filteredLatestProduction = useMemo(() => {
+    const terms = productionSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return latestProductionRows.filter((row) => {
+      const series = String(row.sole_code || "").replace(/[-_\s]*sole$/i, "").trim();
+      if (productionSeries && series !== productionSeries) return false;
+      const searchable = [row.name, row.article_code, row.sole_code, row.color, row.size]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ");
+      return terms.every((term) => searchable.includes(term));
+    });
+  }, [latestProductionRows, productionSearch, productionSeries]);
+  const latestProductionMatch = filteredLatestProduction[0];
   const productionUserRows = useMemo(
     () =>
       (data?.production_by_user || [])
@@ -502,6 +521,37 @@ function ProductionTab({ data }) {
 
   return (
     <div className="space-y-4">
+      <SectionCard title="Latest Product Production" subtitle="Search a product and series to see its most recent production date." icon="production">
+        <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_240px]">
+          <label className="text-sm font-semibold text-slate-700">Product search
+            <input value={productionSearch} onChange={(event) => setProductionSearch(event.target.value)} placeholder="Product, article, color or size..." className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" />
+          </label>
+          <label className="text-sm font-semibold text-slate-700">Series
+            <select value={productionSeries} onChange={(event) => setProductionSeries(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100">
+              <option value="">All series</option>
+              {productionSeriesOptions.map((series) => <option key={series} value={series}>{series}</option>)}
+            </select>
+          </label>
+        </div>
+        {(productionSearch || productionSeries) && latestProductionMatch && (
+          <div className="mx-4 mb-4 grid gap-3 rounded-xl border border-indigo-100 bg-indigo-50 p-4 sm:grid-cols-3">
+            <div><p className="text-xs font-semibold uppercase text-indigo-500">Latest product</p><p className="mt-1 font-bold text-indigo-950">{productName(latestProductionMatch)}</p></div>
+            <div><p className="text-xs font-semibold uppercase text-indigo-500">Production date</p><p className="mt-1 font-bold text-indigo-950">{formatDate(latestProductionMatch.latest_production_at)}</p></div>
+            <div><p className="text-xs font-semibold uppercase text-indigo-500">Latest produced qty</p><p className="mt-1 font-bold text-indigo-950">{formatNumber(latestProductionMatch.latest_quantity)} {latestProductionMatch.unit || ""}</p></div>
+          </div>
+        )}
+        <DataTable
+          rows={filteredLatestProduction}
+          emptyTitle="No matching production found"
+          columns={[
+            { key: "product", label: "Product", render: productName },
+            { key: "sole_code", label: "Series", render: (row) => row.sole_code || "-" },
+            { key: "latest_production_at", label: "Latest Production", render: (row) => formatDate(row.latest_production_at) },
+            { key: "latest_quantity", label: "Latest Qty", render: (row) => `${formatNumber(row.latest_quantity)} ${row.unit || ""}` },
+          ]}
+        />
+      </SectionCard>
+
       <div className="grid gap-4 xl:grid-cols-2">
         <SectionCard title="Monthly Production Trend" icon="production">
           <ChartSummary
