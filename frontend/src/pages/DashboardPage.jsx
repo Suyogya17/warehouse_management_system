@@ -1457,7 +1457,7 @@ export default function DashboardPage() {
           </div>
           {paginatedProducts.length ? (
             <>
-              <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
+              <div className="grid grid-cols-1 gap-4 min-[430px]:grid-cols-2 xl:grid-cols-3 xl:gap-5 2xl:grid-cols-4">
                 {paginatedProducts.map((variants) => (
                   <ProductCard
                     key={variants.map((v) => v.id).join("-")}
@@ -1554,7 +1554,7 @@ export default function DashboardPage() {
                   </div>
                   {selectedCountryHoldGroup.products.length ? (
                     <>
-                      <div className="grid grid-cols-2 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                      <div className="grid grid-cols-1 gap-4 min-[430px]:grid-cols-2 xl:grid-cols-3 xl:gap-5 2xl:grid-cols-4">
                         {paginatedSelectedCountryHold.map((variants) => (
                           <OnHoldCard
                             key={`${selectedCountryHoldGroup.countryCode}-${variants.map((v) => v.id).join("-")}`}
@@ -1580,7 +1580,7 @@ export default function DashboardPage() {
             </div>
           ) : paginatedOnHold.length ? (
             <>
-              <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
+              <div className="grid grid-cols-1 gap-4 min-[430px]:grid-cols-2 xl:grid-cols-3 xl:gap-5 2xl:grid-cols-4">
                 {paginatedOnHold.map((variants) => (
                   <OnHoldCard
                     key={variants.map((v) => v.id).join("-")}

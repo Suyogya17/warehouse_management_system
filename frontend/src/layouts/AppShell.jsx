@@ -34,6 +34,7 @@ const navByRole = {
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/product-display", label: "Product Display", icon: "eye" },
     { to: "/offers", label: "Offers", icon: "finishedGoods" },
+    { to: "/gallery", label: "Gallery", icon: "image" },
     { to: "/advertisements", label: "Advertisements", icon: "image" },
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
@@ -58,6 +59,7 @@ const navByRole = {
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/product-display", label: "Product Display", icon: "eye" },
     { to: "/offers", label: "Offers", icon: "finishedGoods" },
+    { to: "/gallery", label: "Gallery", icon: "image" },
     { to: "/advertisements", label: "Advertisements", icon: "image" },
     { to: "/on-hold", label: "On Hold", icon: "hidden" },
     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
@@ -68,6 +70,7 @@ const navByRole = {
   MEMBER: [
     { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/finished-goods-member", label: "Our Products", icon: "finishedGoods" },
+    { to: "/gallery", label: "Gallery", icon: "image" },
     { to: "/stock-member", label: "Stock", icon: "stock" },
     { to: "/warehouses", label: "Warehouses", icon: "box" },
     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
@@ -78,12 +81,14 @@ const navByRole = {
     { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/finished-goods", label: "Our Products", icon: "finishedGoods" },
     { to: "/offers", label: "Offers", icon: "finishedGoods" },
+    { to: "/gallery", label: "Gallery", icon: "image" },
     { to: "/order-customer", label: "Order", icon: "cart" },
   ],
 
   ELDER: [
     { to: "/elder-finished", label: "Our Products", icon: "finishedGoods" },
     { to: "/offers", label: "Offers", icon: "finishedGoods" },
+    { to: "/gallery", label: "Gallery", icon: "image" },
   ],
 };
 
@@ -176,6 +181,23 @@ export default function AppShell() {
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return undefined;
+
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mobileNavOpen]);
 
   useEffect(() => {
     setNotificationsOpen(false);
@@ -389,7 +411,7 @@ export default function AppShell() {
       onWheelCapture={preventNumberWheelChange}
     >
       <NotificationWatcher user={user} token={token} onNotify={addNotification} />
-      <div className="mx-auto flex min-h-screen w-full max-w-[1800px] gap-4 px-3 py-3 sm:px-4 lg:h-screen lg:min-h-0 lg:items-stretch lg:gap-6 lg:px-6 lg:py-4">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1800px] gap-3 px-2 py-2 sm:gap-4 sm:px-4 sm:py-3 lg:h-screen lg:min-h-0 lg:items-stretch lg:gap-6 lg:px-6 lg:py-4">
 
         {/* MOBILE OVERLAY */}
         {mobileNavOpen && (
@@ -401,7 +423,8 @@ export default function AppShell() {
 
         {/* MOBILE SIDEBAR */}
         <aside
-          className={`fixed inset-y-0 left-0 z-50 w-[88vw] max-w-sm transform border-r border-slate-200 bg-white p-4 shadow-2xl transition-transform duration-300 ease-out lg:hidden ${
+          id="mobile-navigation"
+          className={`fixed inset-y-0 left-0 z-50 w-[92vw] max-w-sm transform border-r border-slate-200 bg-white p-3 shadow-2xl transition-transform duration-300 ease-out sm:p-4 lg:hidden ${
             mobileNavOpen ? "translate-x-0" : "-translate-x-full"
           }`}
           aria-hidden={!mobileNavOpen}
@@ -427,7 +450,7 @@ export default function AppShell() {
             <UserCard />
 
             {/* NAV */}
-            <nav className="mt-4 flex-1 space-y-2 overflow-y-auto">
+            <nav className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-1">
               <NavList />
             </nav>
 
@@ -467,10 +490,10 @@ export default function AppShell() {
         </aside>
 
         {/* MAIN */}
-        <main className="min-w-0 flex-1 space-y-4 py-1 lg:h-full lg:overflow-y-auto lg:pr-1">
+        <main className="min-w-0 flex-1 space-y-3 overflow-x-clip pb-4 py-1 sm:space-y-4 lg:h-full lg:overflow-y-auto lg:pr-1">
 
           {/* TOP BAR */}
-          <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 sm:px-4 sm:py-4">
+          <div className="sticky top-2 z-30 flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white/95 px-3 py-3 shadow-sm backdrop-blur sm:px-4 sm:py-4 lg:static lg:bg-white">
             <div className="min-w-0">
               <p className="text-xs text-slate-400">Workspace</p>
               <p className="truncate text-base font-semibold sm:text-lg">{pageTitle}</p>
@@ -480,6 +503,8 @@ export default function AppShell() {
               className="shrink-0 lg:hidden"
               icon="menu"
               onClick={() => setMobileNavOpen(true)}
+              aria-expanded={mobileNavOpen}
+              aria-controls="mobile-navigation"
             >
               Menu
             </Button>

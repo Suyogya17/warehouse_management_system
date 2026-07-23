@@ -931,7 +931,7 @@ function SalesTab({ data }) {
             <select
               value={selectedProductId}
               onChange={(event) => setSelectedProductId(event.target.value)}
-              className="h-9 min-w-[260px] rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 sm:min-w-[260px]"
             >
               {productOptions.map((product) => (
                 <option key={product.id} value={product.id}>

@@ -598,13 +598,13 @@ export default function UserOrderPage() {
 
       {/* SUBMIT */}
       {cart.length > 0 && (
-        <div className="flex justify-end gap-3">
-          <button onClick={() => navigate("/finished-goods")} className="px-6 py-3 border border-slate-300 text-slate-700 rounded-xl font-semibold hover:bg-slate-50 transition-all">
+        <div className="flex flex-col justify-end gap-3 sm:flex-row">
+          <button onClick={() => navigate("/finished-goods")} className="w-full rounded-xl border border-slate-300 px-6 py-3 font-semibold text-slate-700 transition-all hover:bg-slate-50 sm:w-auto">
             Add More Products
           </button>
           <button
             onClick={submitOrder} disabled={submitting}
-            className="px-8 py-3 bg-indigo-500 text-white rounded-xl font-semibold hover:bg-indigo-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[180px] justify-center"
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-500 px-8 py-3 font-semibold text-white transition-all hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:min-w-[180px]"
           >
             {submitting ? (
               <><div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" /> Submitting...</>

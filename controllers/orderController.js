@@ -3,7 +3,11 @@ const auditLog = require('../utils/auditLog');
 const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields, getNepaliFiscalMeta } = require('../utils/nepaliFiscalYear');
 const { clearCache } = require('../middleware/cacheMiddleware');
-const { resolveOfferAudienceUserId } = require('../utils/offerAccountLinks');
+const { loadAvailabilityForRequest } = require('../utils/catalogueAvailability');
+const {
+  hasOfferCampaignSchema,
+  getOfferCampaignUsage,
+} = require('../utils/offerCampaigns');
 
 const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'PACKED'];
 const ALL_STATUSES = [...ACTIVE_RESERVATION_STATUSES, 'DELIVERED', 'CANCELLED'];
@@ -321,106 +325,9 @@ const getAll = async (req, res, next) => {
 // ─── GET AVAILABILITY ─────────────────────────────
 const getAvailability = async (req, res, next) => {
   try {
-    const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
-    const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
-    const supportsOfferEnabled = await hasColumn('finished_goods', 'offer_enabled');
-    const includeHidden =
-      req.query.include_hidden === '1' &&
-      ['ADMIN', 'CO_ADMIN', 'MEMBER'].includes(req.user.role);
-    const isOfferView = req.query.offer_view === '1' && ['USER', 'ELDER'].includes(req.user.role);
-    const isLinkedElderOfferView = req.user.role === 'ELDER' && isOfferView;
-    const availabilityUserId = isLinkedElderOfferView
-      ? await resolveOfferAudienceUserId(req.user, query)
-      : Number(req.user.id);
-    const usesCustomerOfferAudience = req.user.role === 'USER' || isLinkedElderOfferView;
-
-    let sql = `SELECT * FROM finished_goods WHERE is_deleted = 0${
-      includeHidden ? '' : ' AND is_visible = 1'
-    }`;
-    const params = [];
-
-    // Customer and elder Offer pages only need active offers. Filtering here
-    // avoids sending the complete product catalogue over the network just for
-    // the browser to discard most of it.
-    if (isOfferView && supportsOfferEnabled) {
-      sql += ' AND offer_enabled = 1 AND (offer_ends_at IS NULL OR offer_ends_at >= NOW())';
-    }
-
-    if (['USER', 'MEMBER', 'ELDER'].includes(req.user.role) && !isOfferView) {
-      sql += ` AND EXISTS (
-        SELECT 1 FROM user_product_permissions upp
-        WHERE upp.finished_good_id = finished_goods.id
-          AND upp.user_id = ?
-          AND upp.can_view = 1
-      ) AND NOT EXISTS (
-        SELECT 1 FROM user_product_permissions upp
-        WHERE upp.finished_good_id = finished_goods.id
-          AND upp.user_id = ?
-          AND upp.can_view = 0
-      )`;
-      params.push(availabilityUserId, availabilityUserId);
-    }
-
-    sql += supportsDisplayOrder
-      ? ' ORDER BY (display_order IS NULL), display_order ASC, article_code, color, id'
-      : ' ORDER BY article_code, color, id';
-
-    const products = await query(sql, params);
-    const supportsOfferAudience = await hasColumn('finished_goods', 'offer_all_users');
-    const supportsOfferUsers = await hasTable('finished_good_offer_users');
-    const supportsOfferUserQuantity = supportsOfferUsers
-      ? await hasColumn('finished_good_offer_users', 'display_quantity')
-      : false;
-    let offerUserTargets = new Map();
-    if (usesCustomerOfferAudience && supportsOfferAudience && supportsOfferUsers && products.rows.length) {
-      const ids = products.rows.map((product) => Number(product.id));
-      const audienceRows = await query(
-        `SELECT finished_good_id${supportsOfferUserQuantity ? ', display_quantity' : ''} FROM finished_good_offer_users
-         WHERE user_id = ? AND finished_good_id IN (${ids.map(() => '?').join(',')})`,
-        [availabilityUserId, ...ids]
-      );
-      offerUserTargets = new Map(audienceRows.map((row) => [
-        Number(row.finished_good_id),
-        supportsOfferUserQuantity ? Number(row.display_quantity || DEFAULT_DISPLAY_QUANTITY) : DEFAULT_DISPLAY_QUANTITY,
-      ]));
-    }
-    const productIds = products.rows.map((p) => p.id);
-
-    const reserved = await getReservedByProduct(
-      (sql, params) => query(sql, params),
-      productIds
-    );
-
     return res.json({
       success: true,
-      data: products.rows.map((p) => {
-        const reserved_qty = reserved.get(p.id) || 0;
-        const physical_stock = Number(p.quantity || 0);
-        const display_quantity = supportsDisplayQuantity
-          ? getProductDisplayQuantity(p)
-          : DEFAULT_DISPLAY_QUANTITY;
-
-        // Step 1: actual available = physical minus reserved
-        const available_qty = Math.max(0, physical_stock - reserved_qty);
-
-        // Step 2: cap what user sees at this product's display quantity
-        const userOfferQuantity = offerUserTargets.get(Number(p.id));
-        const offerIsActive = Number(p.offer_enabled) === 1 && (!p.offer_ends_at || new Date(p.offer_ends_at).getTime() >= Date.now());
-        const hasPersonalOffer = usesCustomerOfferAudience && offerIsActive && Number(p.offer_all_users) !== 1 && userOfferQuantity != null;
-        const display_stock = Math.min(hasPersonalOffer ? userOfferQuantity : display_quantity, available_qty);
-
-        const canSeeOffer = !usesCustomerOfferAudience || !supportsOfferAudience || !supportsOfferUsers || Number(p.offer_all_users) === 1 || offerUserTargets.has(Number(p.id));
-        return {
-          ...p,
-          ...(canSeeOffer ? {} : { offer_enabled: 0, offer_price: null, offer_label: null, offer_ends_at: null }),
-          offer_display_quantity: hasPersonalOffer ? userOfferQuantity : null,
-          physical_stock,  // 660 — actual warehouse stock
-          reserved_qty,    // 300 — orders in progress
-          available_qty,   // 360 — actual available (physical - reserved)
-          display_stock,   // 360 — what user sees after the per-product cap
-          display_quantity,
-        };
-      }),
+      data: await loadAvailabilityForRequest(req),
     });
   } catch (err) {
     next(err);
@@ -432,11 +339,12 @@ const getOfferPurchases = async (req, res, next) => {
     if (!await hasColumn('order_items', 'ordered_from_offer')) {
       return res.status(400).json({ success: false, message: 'Offer purchase tracking requires sql/add-offer-order-snapshots.sql.' });
     }
+    const supportsOfferCampaigns = await hasOfferCampaignSchema();
 
     const rows = await query(
       `SELECT oi.id AS order_item_id, oi.order_id, oi.finished_good_id, oi.qty_ordered,
               oi.offer_label_snapshot, oi.offer_display_percentage, oi.offer_display_quantity,
-              oi.offer_price_snapshot, oi.offer_pairs_per_carton_snapshot,
+              oi.offer_price_snapshot, oi.offer_pairs_per_carton_snapshot${supportsOfferCampaigns ? ', oi.offer_campaign_id, campaign.created_at AS offer_campaign_started_at, campaign.ended_at AS offer_campaign_ended_at, campaign.status AS offer_campaign_status' : ''},
               o.customer_name, o.status, o.created_at, o.delivery_note_number,
               u.name AS account_name, u.email AS account_email,
               fg.name AS product_name, fg.article_code, fg.sole_code, fg.color, fg.size, fg.unit
@@ -444,6 +352,7 @@ const getOfferPurchases = async (req, res, next) => {
        JOIN orders o ON o.id = oi.order_id
        JOIN finished_goods fg ON fg.id = oi.finished_good_id
        LEFT JOIN users u ON u.id = o.created_by
+       ${supportsOfferCampaigns ? 'LEFT JOIN finished_good_offer_campaigns campaign ON campaign.id = oi.offer_campaign_id' : ''}
        WHERE oi.ordered_from_offer = 1
        ORDER BY o.created_at DESC, oi.id DESC`
     );
@@ -457,6 +366,7 @@ const getOfferPurchases = async (req, res, next) => {
         offer_display_quantity: row.offer_display_quantity === null ? null : Number(row.offer_display_quantity),
         offer_price_snapshot: row.offer_price_snapshot === null ? null : Number(row.offer_price_snapshot),
         offer_pairs_per_carton_snapshot: row.offer_pairs_per_carton_snapshot === null ? null : Number(row.offer_pairs_per_carton_snapshot),
+        offer_campaign_id: row.offer_campaign_id === null || row.offer_campaign_id === undefined ? null : Number(row.offer_campaign_id),
       })),
     });
   } catch (err) {
@@ -503,9 +413,10 @@ const create = async (req, res, next) => {
       ? await hasColumn('finished_good_offer_users', 'display_percentage')
       : false;
     const supportsOfferOrderSnapshots = await hasColumn('order_items', 'ordered_from_offer');
+    const supportsOfferCampaigns = await hasOfferCampaignSchema();
 
     let productSql = `
-      SELECT id, name, article_code, sole_code, color, quantity, price, inner_boxes_per_outer_box${supportsDisplayQuantity ? ', display_quantity' : ''}${supportsOfferAudience ? ', offer_enabled, offer_label, offer_ends_at, offer_all_users' : ''}
+      SELECT id, name, article_code, sole_code, color, quantity, price, inner_boxes_per_outer_box${supportsDisplayQuantity ? ', display_quantity' : ''}${supportsOfferAudience ? ', offer_enabled, offer_label, offer_ends_at, offer_all_users' : ''}${supportsOfferCampaigns ? ', offer_campaign_id' : ''}
       FROM finished_goods
       WHERE is_deleted = 0
         AND is_visible = 1
@@ -552,6 +463,7 @@ const create = async (req, res, next) => {
       productParams.push(req.user.id, req.user.id);
     }
 
+    productSql += ' FOR UPDATE';
     const products = await client.query(productSql, productParams);
 
     if (products.rows.length !== productIds.length) {
@@ -591,6 +503,41 @@ const create = async (req, res, next) => {
       );
     }
 
+    const activeOfferProducts =
+      req.user.role === 'USER'
+        ? products.rows.filter(isActiveOfferProduct)
+        : [];
+    if (activeOfferProducts.length && !supportsOfferCampaigns) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message:
+          'Cumulative offer limits require sql/add-offer-campaign-allowances.sql.',
+      });
+    }
+    if (
+      activeOfferProducts.some(
+        (product) => Number(product.offer_campaign_id || 0) <= 0
+      )
+    ) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message:
+          'This offer does not have an active offer period. Ask an admin to remove and publish the offer again.',
+      });
+    }
+
+    const campaignUsage =
+      req.user.role === 'USER' && supportsOfferCampaigns
+        ? await getOfferCampaignUsage((sql, values) => client.query(sql, values), {
+            campaignIds: activeOfferProducts.map(
+              (product) => product.offer_campaign_id
+            ),
+            userId: req.user.id,
+          })
+        : new Map();
+
     // Availability check — mirrors getAvailability exactly
     const shortages = [];
     for (const [id, qty] of requested.entries()) {
@@ -602,14 +549,26 @@ const create = async (req, res, next) => {
         : DEFAULT_DISPLAY_QUANTITY;
       const userOfferTarget = userOfferTargets.get(Number(id));
       const offerIsActive = isActiveOfferProduct(p);
-      const effectiveDisplayQuantity = req.user.role === 'USER' && offerIsActive && Number(p.offer_all_users) !== 1 && userOfferTarget != null
-        ? userOfferTarget.display_quantity
-        : displayQuantity;
+      const effectiveDisplayQuantity =
+        req.user.role === 'USER' &&
+        offerIsActive &&
+        Number(p.offer_all_users) !== 1 &&
+        userOfferTarget != null
+          ? userOfferTarget.display_quantity
+          : displayQuantity;
+      const usedOfferQuantity =
+        req.user.role === 'USER' && offerIsActive
+          ? Number(campaignUsage.get(Number(p.offer_campaign_id)) || 0)
+          : 0;
+      const remainingDisplayQuantity =
+        req.user.role === 'USER' && offerIsActive
+          ? Math.max(0, effectiveDisplayQuantity - usedOfferQuantity)
+          : effectiveDisplayQuantity;
 
       // Step 1: actual available
       const available = Math.max(0, physicalStock - reservedQty);
       // Step 2: cap at this product's display quantity
-      const displayAvailable = Math.min(effectiveDisplayQuantity, available);
+      const displayAvailable = Math.min(remainingDisplayQuantity, available);
 
       if (qty > displayAvailable) {
         shortages.push({
@@ -642,6 +601,7 @@ const create = async (req, res, next) => {
           offer_display_quantity: target?.display_quantity ?? getProductDisplayQuantity(product),
           offer_price_snapshot: Number(product.price || 0) > 0 ? Number(product.price) + 50 : null,
           offer_pairs_per_carton_snapshot: Number(product.inner_boxes_per_outer_box || 0) || null,
+          offer_campaign_id: Number(product.offer_campaign_id),
         });
       });
     }
@@ -687,6 +647,10 @@ const create = async (req, res, next) => {
         orderItemColumns.push('ordered_from_offer', 'offer_label_snapshot', 'offer_display_percentage', 'offer_display_quantity', 'offer_price_snapshot', 'offer_pairs_per_carton_snapshot');
         orderItemValues.push(offerSnapshot ? 1 : 0, offerSnapshot?.offer_label_snapshot ?? null, offerSnapshot?.offer_display_percentage ?? null, offerSnapshot?.offer_display_quantity ?? null, offerSnapshot?.offer_price_snapshot ?? null, offerSnapshot?.offer_pairs_per_carton_snapshot ?? null);
       }
+      if (supportsOfferCampaigns) {
+        orderItemColumns.push('offer_campaign_id');
+        orderItemValues.push(offerSnapshot?.offer_campaign_id ?? null);
+      }
       const orderItemInsert = await appendFiscalInsertFields(
         'order_items',
         orderItemColumns,
@@ -700,6 +664,7 @@ const create = async (req, res, next) => {
     }
 
     await client.query('COMMIT');
+    clearCache();
 
     await auditLog({
       ...getActor(req),
@@ -810,7 +775,80 @@ const correctItems = async (req, res, next) => {
     }
 
     const supportsOfferOrderSnapshots = await hasColumn('order_items', 'ordered_from_offer');
+    const supportsOfferCampaigns = await hasOfferCampaignSchema();
     const oldItemByProduct = new Map(oldItemsResult.rows.map((item) => [Number(item.finished_good_id), item]));
+    if (supportsOfferCampaigns) {
+      const campaignIds = correctedItems
+        .map((item) => oldItemByProduct.get(item.finished_good_id)?.offer_campaign_id)
+        .filter(Boolean);
+      const campaignUsage = await getOfferCampaignUsage(
+        (sql, values) => client.query(sql, values),
+        {
+          campaignIds,
+          userId: order.created_by,
+          excludeOrderId: order.id,
+        }
+      );
+      const uniqueCampaignIds = [
+        ...new Set(campaignIds.map(Number).filter((id) => id > 0)),
+      ];
+      let currentAssignmentByCampaign = new Map();
+      if (uniqueCampaignIds.length) {
+        const assignmentRows = await client.query(
+          `SELECT campaign_id, display_quantity
+           FROM finished_good_offer_campaign_users
+           WHERE user_id = ?
+             AND campaign_id IN (${uniqueCampaignIds.map(() => '?').join(',')})`,
+          [order.created_by, ...uniqueCampaignIds]
+        );
+        currentAssignmentByCampaign = new Map(
+          assignmentRows.rows.map((row) => [
+            Number(row.campaign_id),
+            Number(row.display_quantity || 0),
+          ])
+        );
+      }
+      const allowanceShortages = correctedItems
+        .map((item) => {
+          const oldItem = oldItemByProduct.get(item.finished_good_id);
+          if (
+            Number(oldItem?.ordered_from_offer || 0) !== 1 ||
+            Number(oldItem?.offer_campaign_id || 0) <= 0
+          ) {
+            return null;
+          }
+          const assignedQuantity = Number(
+            currentAssignmentByCampaign.get(Number(oldItem.offer_campaign_id)) ??
+              oldItem.offer_display_quantity ??
+              0
+          );
+          const usedByOtherOrders = Number(
+            campaignUsage.get(Number(oldItem.offer_campaign_id)) || 0
+          );
+          const remainingQuantity = Math.max(
+            0,
+            assignedQuantity - usedByOtherOrders
+          );
+          return item.qty_ordered > remainingQuantity
+            ? {
+                product_name: item.product.name,
+                requested: item.qty_ordered,
+                available: remainingQuantity,
+              }
+            : null;
+        })
+        .filter(Boolean);
+
+      if (allowanceShortages.length) {
+        await client.query('ROLLBACK');
+        return res.status(422).json({
+          success: false,
+          message:
+            'This correction exceeds the customer’s remaining offer allowance.',
+          shortages: allowanceShortages,
+        });
+      }
+    }
     await client.query('DELETE FROM order_items WHERE order_id = ?', [order.id]);
     for (const item of correctedItems) {
       const columns = ['order_id', 'finished_good_id', 'qty_ordered'];
@@ -826,6 +864,10 @@ const correctItems = async (req, res, next) => {
           oldItem?.offer_price_snapshot ?? null,
           oldItem?.offer_pairs_per_carton_snapshot ?? null
         );
+      }
+      if (supportsOfferCampaigns) {
+        columns.push('offer_campaign_id');
+        values.push(oldItem?.offer_campaign_id ?? null);
       }
       const insert = await appendFiscalInsertFields('order_items', columns, values);
       await client.query(`INSERT INTO order_items (${insert.columns.join(', ')}) VALUES (${insert.columns.map(() => '?').join(', ')})`, insert.values);
@@ -986,6 +1028,7 @@ const updateStatus = async (req, res, next) => {
     );
 
     await client.query('COMMIT');
+    clearCache();
 
     await auditLog({
       ...getActor(req),

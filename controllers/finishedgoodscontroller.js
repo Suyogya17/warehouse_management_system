@@ -3,6 +3,7 @@ const auditLog = require('../utils/auditLog');
 const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 const { clearCache } = require('../middleware/cacheMiddleware');
+const { hasOfferCampaignSchema } = require('../utils/offerCampaigns');
 
 const DEFAULT_DISPLAY_QUANTITY = 450;
 
@@ -128,6 +129,50 @@ const getAll = async (req, res, next) => {
           ? { ...row, offer_display_quantity: userTarget?.display_quantity ?? null }
           : { ...row, offer_enabled: 0, offer_price: null, offer_label: null, offer_ends_at: null, offer_display_quantity: null };
       });
+    }
+
+    if (
+      ['ADMIN', 'CO_ADMIN'].includes(userRole) &&
+      rows.length &&
+      (await hasOfferCampaignSchema())
+    ) {
+      const campaignIds = [
+        ...new Set(
+          rows
+            .map((row) => Number(row.offer_campaign_id || 0))
+            .filter((campaignId) => campaignId > 0)
+        ),
+      ];
+      if (campaignIds.length) {
+        const campaigns = await query(
+          `SELECT id, stock_quantity_snapshot, pairs_per_carton_snapshot,
+                  status, created_at, ended_at
+           FROM finished_good_offer_campaigns
+           WHERE id IN (${campaignIds.map(() => '?').join(',')})`,
+          campaignIds
+        );
+        const campaignById = new Map(
+          campaigns.rows.map((campaign) => [Number(campaign.id), campaign])
+        );
+        rows = rows.map((row) => {
+          const campaign = campaignById.get(Number(row.offer_campaign_id));
+          return campaign
+            ? {
+                ...row,
+                offer_stock_quantity_snapshot: Number(
+                  campaign.stock_quantity_snapshot || 0
+                ),
+                offer_pairs_per_carton_snapshot:
+                  campaign.pairs_per_carton_snapshot === null
+                    ? null
+                    : Number(campaign.pairs_per_carton_snapshot),
+                offer_campaign_status: campaign.status,
+                offer_campaign_started_at: campaign.created_at,
+                offer_campaign_ended_at: campaign.ended_at,
+              }
+            : row;
+        });
+      }
     }
 
     return res.json({
@@ -755,8 +800,11 @@ const setOffer = async (req, res, next) => {
       });
     }
 
+    const supportsOfferCampaigns = await hasOfferCampaignSchema();
     const existingRows = await query(
-      'SELECT id, name, article_code, color FROM finished_goods WHERE id = ?',
+      `SELECT id, name, article_code, color, quantity, inner_boxes_per_outer_box,
+              offer_enabled, offer_ends_at${supportsOfferCampaigns ? ', offer_campaign_id' : ''}
+       FROM finished_goods WHERE id = ?`,
       [req.params.id]
     );
     const product = existingRows.rows[0];
@@ -835,14 +883,131 @@ const setOffer = async (req, res, next) => {
       });
     }
 
+    if (enabled && !supportsOfferCampaigns) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Cumulative offer limits require sql/add-offer-campaign-allowances.sql.',
+      });
+    }
+
+    const currentOfferIsActive =
+      Number(product.offer_enabled) === 1 &&
+      (!product.offer_ends_at ||
+        new Date(product.offer_ends_at).getTime() >= Date.now()) &&
+      Number(product.offer_campaign_id || 0) > 0;
+    let offerCampaignId = currentOfferIsActive
+      ? Number(product.offer_campaign_id)
+      : null;
+
+    if (
+      enabled &&
+      !currentOfferIsActive &&
+      Number(product.offer_campaign_id || 0) > 0
+    ) {
+      await query(
+        `UPDATE finished_good_offer_campaigns
+         SET status = 'ENDED', ended_at = COALESCE(ended_at, NOW())
+         WHERE id = ? AND status = 'ACTIVE'`,
+        [Number(product.offer_campaign_id)]
+      );
+    }
+
+    if (enabled && offerCampaignId) {
+      const usageRows = await query(
+        `SELECT o.created_by AS user_id, COALESCE(SUM(oi.qty_ordered), 0) AS used_quantity
+         FROM order_items oi
+         JOIN orders o ON o.id = oi.order_id
+         WHERE oi.offer_campaign_id = ?
+           AND oi.ordered_from_offer = 1
+           AND o.status <> 'CANCELLED'
+         GROUP BY o.created_by`,
+        [offerCampaignId]
+      );
+      const usageByUser = new Map(
+        usageRows.rows.map((row) => [
+          Number(row.user_id),
+          Number(row.used_quantity || 0),
+        ])
+      );
+      const belowUsedTarget = offerTargets.find(
+        (target) =>
+          Number(target.display_quantity) <
+          Number(usageByUser.get(Number(target.user_id)) || 0)
+      );
+      if (belowUsedTarget) {
+        return res.status(409).json({
+          success: false,
+          message:
+            'A user has already ordered more than the new assigned quantity. Increase that user’s quantity or start a new offer period.',
+        });
+      }
+    }
+
+    if (enabled && !offerCampaignId) {
+      const campaignResult = await query(
+        `INSERT INTO finished_good_offer_campaigns (
+           finished_good_id, offer_label, offer_ends_at, offer_all_users,
+           stock_quantity_snapshot, pairs_per_carton_snapshot, status, created_by
+         ) VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?)`,
+        [
+          product.id,
+          offerLabel,
+          offerEndsAt,
+          offerAllUsers ? 1 : 0,
+          Math.max(0, Number(product.quantity || 0)),
+          Number(product.inner_boxes_per_outer_box || 0) || null,
+          req.user?.id || null,
+        ]
+      );
+      offerCampaignId = Number(campaignResult.insertId);
+    }
+
+    if (enabled && offerCampaignId) {
+      await query(
+        `UPDATE finished_good_offer_campaigns
+         SET offer_label = ?, offer_ends_at = ?, offer_all_users = ?, status = 'ACTIVE',
+             ended_at = NULL
+         WHERE id = ?`,
+        [offerLabel, offerEndsAt, offerAllUsers ? 1 : 0, offerCampaignId]
+      );
+      await query(
+        'DELETE FROM finished_good_offer_campaign_users WHERE campaign_id = ?',
+        [offerCampaignId]
+      );
+      if (offerTargets.length) {
+        const valuesSql = offerTargets.map(() => '(?, ?, ?, ?)').join(', ');
+        await query(
+          `INSERT INTO finished_good_offer_campaign_users (
+             campaign_id, user_id, display_quantity, display_percentage
+           ) VALUES ${valuesSql}`,
+          offerTargets.flatMap((target) => [
+            offerCampaignId,
+            target.user_id,
+            target.display_quantity,
+            target.display_percentage,
+          ])
+        );
+      }
+    } else if (!enabled && Number(product.offer_campaign_id || 0) > 0) {
+      await query(
+        `UPDATE finished_good_offer_campaigns
+         SET status = 'REMOVED', ended_at = NOW()
+         WHERE id = ? AND status = 'ACTIVE'`,
+        [Number(product.offer_campaign_id)]
+      );
+    }
+
     const audienceUpdate = supportsOfferAllUsers ? ', offer_all_users = ?' : '';
+    const campaignUpdate = supportsOfferCampaigns ? ', offer_campaign_id = ?' : '';
     const updateParams = [enabled ? 1 : 0, enabled && offerPrice !== null ? offerPrice : null, offerLabel, offerEndsAt];
     if (supportsOfferAllUsers) updateParams.push(offerAllUsers ? 1 : 0);
+    if (supportsOfferCampaigns) updateParams.push(enabled ? offerCampaignId : null);
     updateParams.push(req.params.id);
 
     await query(
       `UPDATE finished_goods
-       SET offer_enabled = ?, offer_price = ?, offer_label = ?, offer_ends_at = ?${audienceUpdate}
+       SET offer_enabled = ?, offer_price = ?, offer_label = ?, offer_ends_at = ?${audienceUpdate}${campaignUpdate}
        WHERE id = ?`,
       updateParams
     );
@@ -870,12 +1035,12 @@ const setOffer = async (req, res, next) => {
       entity_id: Number(req.params.id),
       entityName: getProductName(product),
       description: `${enabled ? 'Enabled' : 'Removed'} offer for ${getProductName(product)}`,
-      metadata: { offer_enabled: enabled, offer_price: enabled ? offerPrice : null, offer_label: offerLabel, offer_ends_at: offerEndsAt, offer_all_users: offerAllUsers, offer_targets: offerTargets },
+      metadata: { offer_enabled: enabled, offer_price: enabled ? offerPrice : null, offer_label: offerLabel, offer_ends_at: offerEndsAt, offer_all_users: offerAllUsers, offer_campaign_id: enabled ? offerCampaignId : null, offer_targets: offerTargets },
     });
 
     return res.json({
       success: true,
-      data: { offer_enabled: enabled ? 1 : 0, offer_price: enabled ? offerPrice : null, offer_label: offerLabel, offer_ends_at: offerEndsAt, offer_all_users: offerAllUsers ? 1 : 0, offer_target_user_ids: targetUserIds, offer_targets: offerTargets },
+      data: { offer_enabled: enabled ? 1 : 0, offer_price: enabled ? offerPrice : null, offer_label: offerLabel, offer_ends_at: offerEndsAt, offer_all_users: offerAllUsers ? 1 : 0, offer_campaign_id: enabled ? offerCampaignId : null, offer_target_user_ids: targetUserIds, offer_targets: offerTargets },
     });
   } catch (err) {
     next(err);

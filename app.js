@@ -20,6 +20,7 @@ const advertisementRoutes = require("./routes/advertisementRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const analyticsRoutes = require("./routes/analyticsRoutes");
 const importTrackingRoutes = require("./routes/importTrackingRoutes");
+const catalogueRoutes = require("./routes/catalogueRoutes");
 
 const app = express();
 
@@ -57,6 +58,7 @@ const corsOptions = {
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
+  exposedHeaders: ["Content-Disposition", "X-Catalogue-Cache"],
   optionsSuccessStatus: 200
 };
 
@@ -112,6 +114,7 @@ app.use("/api/advertisements", advertisementRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/import-tracking", importTrackingRoutes);
+app.use("/api/catalogues", catalogueRoutes);
 
 /* ─────────────────────────────
    ROOT ENDPOINT

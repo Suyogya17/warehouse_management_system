@@ -67,6 +67,43 @@ export const apiRequest = async (path, options = {}, token) => {
   }
 };
 
+const downloadApiFile = async (path, token) => {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 180000);
+
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      signal: controller.signal,
+      headers: buildHeaders(token, false),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        localStorage.removeItem("store-management-auth");
+        window.dispatchEvent(new Event("store-management:auth-expired"));
+      }
+      throw new Error(data.message || "Download failed");
+    }
+
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+
+    return {
+      blob: await response.blob(),
+      filename: filenameMatch?.[1] || "nepcha-product-gallery.pdf",
+      cacheStatus: response.headers.get("X-Catalogue-Cache") || "",
+    };
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("The catalogue is taking too long to prepare. Please try again.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+};
+
 export const api = {
   login: (payload) =>
     apiRequest("/auth/login", {
@@ -307,6 +344,11 @@ export const api = {
   getAvailability: (token, options = {}) => {
     const query = buildQueryString(options);
     return apiRequest(`/orders/availability${query ? `?${query}` : ""}`, {}, token);
+  },
+
+  downloadCatalogue: (options, token) => {
+    const query = buildQueryString(options);
+    return downloadApiFile(`/catalogues/download${query ? `?${query}` : ""}`, token);
   },
 
   getOfferPurchases: (token) => apiRequest("/orders/offer-purchases", {}, token),
