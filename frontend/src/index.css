@@ -1,6 +1,191 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+.nepcha-loader {
+  width: min(92vw, 360px);
+}
+
+.nepcha-loader__brand {
+  color: #312e81;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: clamp(1.75rem, 5vw, 2.2rem);
+  font-weight: 800;
+  letter-spacing: 0.035em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.nepcha-loader__production {
+  position: relative;
+  width: 224px;
+  height: 112px;
+  margin: 16px auto 0;
+  overflow: hidden;
+}
+
+.nepcha-loader__factory {
+  position: absolute;
+  z-index: 4;
+  left: 5px;
+  bottom: 25px;
+  width: 82px;
+  height: 74px;
+  color: #312e81;
+}
+
+.nepcha-loader__factory svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: #eef2ff;
+  stroke-width: 1.35;
+}
+
+.nepcha-loader__smoke {
+  position: absolute;
+  z-index: 1;
+  top: -2px;
+  left: 18px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #cbd5e1;
+  opacity: 0;
+  animation: nepcha-factory-smoke 1.8s ease-out infinite;
+}
+
+.nepcha-loader__smoke--two {
+  animation-delay: 0.65s;
+}
+
+.nepcha-loader__conveyor {
+  position: absolute;
+  z-index: 1;
+  right: 4px;
+  bottom: 23px;
+  left: 62px;
+  height: 24px;
+}
+
+.nepcha-loader__belt {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 7px;
+  overflow: hidden;
+  border: 1px solid #64748b;
+  border-radius: 999px;
+  background: #f8fafc;
+}
+
+.nepcha-loader__belt::after {
+  position: absolute;
+  inset: 1px 0;
+  content: "";
+  background: repeating-linear-gradient(
+    90deg,
+    transparent 0 10px,
+    #a5b4fc 10px 16px
+  );
+  animation: nepcha-conveyor-belt 0.55s linear infinite;
+}
+
+.nepcha-loader__roller {
+  position: absolute;
+  top: 8px;
+  width: 11px;
+  height: 11px;
+  border: 2px solid #64748b;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: inset 0 0 0 2px #e0e7ff;
+  animation: nepcha-conveyor-roller 0.55s linear infinite;
+}
+
+.nepcha-loader__roller--one {
+  left: 12px;
+}
+
+.nepcha-loader__roller--two {
+  left: calc(50% - 5px);
+}
+
+.nepcha-loader__roller--three {
+  right: 12px;
+}
+
+.nepcha-loader__finished-shoe {
+  position: absolute;
+  z-index: 3;
+  left: 47px;
+  bottom: 47px;
+  display: block;
+  width: 65px;
+  height: auto;
+  filter: drop-shadow(0 3px 3px rgba(15, 23, 42, 0.12));
+  animation: nepcha-shoe-production 2.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  will-change: opacity, transform;
+}
+
+@keyframes nepcha-shoe-production {
+  0% {
+    opacity: 0;
+    transform: translate3d(-20px, 2px, 0) scale(0.72);
+  }
+  18% {
+    opacity: 1;
+    transform: translate3d(-7px, 0, 0) scale(0.9);
+  }
+  72% {
+    opacity: 1;
+    transform: translate3d(95px, 0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(118px, 0, 0) scale(1);
+  }
+}
+
+@keyframes nepcha-conveyor-belt {
+  from {
+    transform: translateX(-16px);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes nepcha-conveyor-roller {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes nepcha-factory-smoke {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 5px, 0) scale(0.65);
+  }
+  30% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(8px, -19px, 0) scale(1.45);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nepcha-loader__finished-shoe,
+  .nepcha-loader__belt::after,
+  .nepcha-loader__roller,
+  .nepcha-loader__smoke {
+    animation-duration: 4s;
+  }
+}
+
 /*
 :root {
   color: #0f172a;

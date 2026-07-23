@@ -3,6 +3,11 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 
 import AppShell from "./layouts/AppShell";
+import {
+  ApiLoadingOverlay,
+  InitialLoadingOverlay,
+  NepchaLoader,
+} from "./components/NepchaLoader";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
@@ -36,11 +41,7 @@ const ImportTrackingPage = lazy(() => import("./pages/ImportTrackingPage"));
 const OffersPage = lazy(() => import("./pages/OffersPage"));
 const GalleryPage = lazy(() => import("./pages/GalleryPage"));
 
-const PageFallback = () => (
-  <div className="flex min-h-[45vh] items-center justify-center text-sm font-medium text-slate-500">
-    Loading...
-  </div>
-);
+const PageFallback = () => <NepchaLoader />;
 
 const withSuspense = (element) => (
   <Suspense fallback={<PageFallback />}>{element}</Suspense>
@@ -50,7 +51,10 @@ export default function App() {
   const { isAuthenticated, user } = useAuth();
 
   return (
-    <Routes>
+    <>
+      <InitialLoadingOverlay />
+      <ApiLoadingOverlay />
+      <Routes>
       {/* LOGIN */}
       <Route
         path="/login"
@@ -331,6 +335,7 @@ export default function App() {
           )
         }
       />
-    </Routes>
+      </Routes>
+    </>
   );
 }

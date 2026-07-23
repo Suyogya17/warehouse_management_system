@@ -3,6 +3,26 @@ const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 30000);
 
 export const APP_BASE_URL = API_BASE_URL.replace(/\/api$/, "");
 
+let activeLoadingRequests = 0;
+
+const announceApiLoading = () => {
+  window.dispatchEvent(
+    new CustomEvent("nepcha:api-loading", {
+      detail: { loading: activeLoadingRequests > 0 },
+    })
+  );
+};
+
+const beginApiLoading = () => {
+  activeLoadingRequests += 1;
+  announceApiLoading();
+};
+
+const endApiLoading = () => {
+  activeLoadingRequests = Math.max(0, activeLoadingRequests - 1);
+  announceApiLoading();
+};
+
 const buildQueryString = (params = {}) =>
   new URLSearchParams(
     Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== "")
@@ -43,9 +63,12 @@ export const apiRequest = async (path, options = {}, token) => {
   const isFormData = options.body instanceof FormData;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs || API_TIMEOUT_MS);
+  const shouldShowLoader = options.showLoader !== false;
+
+  if (shouldShowLoader) beginApiLoading();
 
   try {
-    const { timeoutMs, ...fetchOptions } = options;
+    const { timeoutMs, showLoader, ...fetchOptions } = options;
     const response = await fetch(`${API_BASE_URL}${path}`, {
       ...fetchOptions,
       signal: controller.signal,
@@ -64,6 +87,7 @@ export const apiRequest = async (path, options = {}, token) => {
     throw error;
   } finally {
     window.clearTimeout(timeout);
+    if (shouldShowLoader) endApiLoading();
   }
 };
 
@@ -131,7 +155,8 @@ export const api = {
 
   getAdvertisements: (token) => apiRequest("/advertisements", {}, token),
 
-  getNotifications: (token) => apiRequest("/notifications", {}, token),
+  getNotifications: (token) =>
+    apiRequest("/notifications", { showLoader: false }, token),
 
   createNotification: (payload, token) =>
     apiRequest("/notifications", {
