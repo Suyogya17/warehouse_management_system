@@ -26,7 +26,17 @@ export default function DataTable({
   exportFilename = "data-table",
   summaryColumns = [],
   showToolbar = true,
+  fitColumns = false,
+  wrapCells = false,
+  responsiveScroll = false,
 }) {
+  const alignmentClass = (column) => {
+    if (column.align === "center") return "text-center";
+    if (column.align === "right") return "text-right";
+    if (column.align === "justify") return "text-justify";
+    return "text-left";
+  };
+
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
   const [searchKey, setSearchKey] = useState("all");
@@ -35,7 +45,7 @@ export default function DataTable({
 
   useEffect(() => {
     const container = tableContainerRef.current;
-    if (!container) return undefined;
+    if (!container || fitColumns) return undefined;
 
     const handleWheel = (event) => {
       if (event.deltaY !== 0 && container.scrollWidth > container.clientWidth) {
@@ -46,7 +56,7 @@ export default function DataTable({
 
     container.addEventListener("wheel", handleWheel, { passive: false });
     return () => container.removeEventListener("wheel", handleWheel);
-  }, []);
+  }, [fitColumns]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -56,7 +66,9 @@ export default function DataTable({
     if (typeof column.exportValue === "function") {
       return toExportValue(column.exportValue(row, rowIndex));
     }
-    if (column.type === "date") return row[column.key] ? formatDate(row[column.key]) : "";
+    if (column.type === "date") {
+      return row[column.key] ? formatDate(row[column.key]) : "";
+    }
     if (row[column.key] !== undefined && row[column.key] !== null) {
       return toExportValue(row[column.key]);
     }
@@ -74,7 +86,6 @@ export default function DataTable({
           searchKey === "all"
             ? searchableColumns
             : searchableColumns.filter((column) => column.key === searchKey);
-
         return columnsToSearch.some((column) => {
           const value =
             typeof column.searchValue === "function"
@@ -93,7 +104,9 @@ export default function DataTable({
 
   const renderCell = (row, column, rowIndex) => {
     if (column.render) return column.render(row, rowIndex);
-    if (column.type === "date") return row[column.key] ? formatDate(row[column.key]) : "-";
+    if (column.type === "date") {
+      return row[column.key] ? formatDate(row[column.key]) : "-";
+    }
     return row[column.key] ?? "-";
   };
 
@@ -105,7 +118,6 @@ export default function DataTable({
         const number = Number(value || 0);
         return Number.isFinite(number) ? sum + number : sum;
       }, 0);
-
       return {
         label:
           summary.label ||
@@ -123,7 +135,6 @@ export default function DataTable({
     let start = Math.max(1, currentPage - 2);
     const end = Math.min(totalPages, start + maxVisible - 1);
     if (end - start < maxVisible - 1) start = Math.max(1, end - maxVisible + 1);
-
     if (start > 1) {
       pages.push(1);
       if (start > 2) pages.push("...");
@@ -140,7 +151,11 @@ export default function DataTable({
     const XLSX = await import("xlsx");
     const exportRows = filteredData.map((row, rowIndex) =>
       columns.reduce((result, column) => {
-        result[column.label || column.key] = getExportCellValue(row, column, rowIndex);
+        result[column.label || column.key] = getExportCellValue(
+          row,
+          column,
+          rowIndex
+        );
         return result;
       }, {})
     );
@@ -207,7 +222,9 @@ export default function DataTable({
                     </p>
                     <div
                       className={`min-w-0 break-words text-right text-sm leading-5 ${
-                        columnIndex === 0 ? "font-semibold text-slate-950" : "text-slate-700"
+                        columnIndex === 0
+                          ? "font-semibold text-slate-950"
+                          : "text-slate-700"
                       }`}
                     >
                       {renderCell(row, column, rowIndex)}
@@ -220,15 +237,34 @@ export default function DataTable({
 
           <div
             ref={tableContainerRef}
-            className="touch-scroll hidden overflow-x-auto md:block"
+            className={`touch-scroll hidden overflow-x-auto md:block ${
+              fitColumns && responsiveScroll ? "lg:overflow-x-visible" : ""
+            }`}
           >
-            <table className="w-full min-w-[760px] border-collapse text-left">
+            <table
+              className={`w-full border-collapse text-left ${
+                fitColumns
+                  ? responsiveScroll
+                    ? "min-w-[1100px] lg:min-w-0 lg:table-fixed"
+                    : "table-fixed"
+                  : "min-w-[760px]"
+              }`}
+            >
+              {fitColumns ? (
+                <colgroup>
+                  {columns.map((column) => (
+                    <col key={column.key} style={{ width: column.width || "auto" }} />
+                  ))}
+                </colgroup>
+              ) : null}
               <thead>
                 <tr className="border-b border-slate-200 bg-indigo-50">
                   {columns.map((column) => (
                     <th
                       key={column.key}
-                      className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-600"
+                      className={`px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-600 ${alignmentClass(
+                        column
+                      )} ${column.headerClassName || ""}`}
                     >
                       {column.label}
                     </th>
@@ -236,25 +272,27 @@ export default function DataTable({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {paginatedRows.map((row, rowIndex) => (
-                  <tr
-                    key={row.id || rowIndex}
-                    className="group transition-colors hover:bg-slate-50"
-                  >
-                    {columns.map((column, columnIndex) => (
-                      <td
-                        key={column.key}
-                        className={`px-4 py-4 align-top text-sm text-slate-600 ${
-                          columnIndex === 0
-                            ? "sticky left-0 z-10 bg-white font-semibold text-slate-900 group-hover:bg-slate-50"
-                            : ""
-                        }`}
-                      >
-                        {renderCell(row, column, rowIndex)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
+              {paginatedRows.map((row, rowIndex) => (
+                <tr
+                  key={row.id || rowIndex}
+                  className="group transition-colors hover:bg-slate-50"
+                >
+                  {columns.map((column, columnIndex) => (
+                    <td
+                      key={column.key}
+                      className={`px-4 py-4 align-top text-sm text-slate-600 ${
+                        wrapCells ? "break-words" : ""
+                      } ${
+                        columnIndex === 0
+                          ? "sticky left-0 z-10 bg-white font-semibold text-slate-900 group-hover:bg-slate-50"
+                          : ""
+                      } ${alignmentClass(column)} ${column.cellClassName || ""}`}
+                    >
+                      {renderCell(row, column, rowIndex)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
               </tbody>
             </table>
           </div>
@@ -262,34 +300,31 @@ export default function DataTable({
       ) : (
         <EmptyState
           title="No matching records"
-          description="Try a different search term or table column."
+          description="Try a different table search."
         />
       )}
 
-      <div className="flex flex-col gap-3 border-t border-slate-200 bg-white px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
-        <div className="text-center text-sm text-slate-500 sm:text-left">
+      <div className="flex flex-col items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3 sm:flex-row">
+        <div className="text-sm text-slate-500">
           Showing {filteredData.length === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1}–
           {Math.min(currentPage * rowsPerPage, filteredData.length)} of {filteredData.length}
         </div>
-        <div className="flex max-w-full items-center justify-center gap-1 overflow-x-auto pb-1 sm:justify-end sm:gap-2 sm:pb-0">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
             disabled={currentPage === 1}
-            className="shrink-0 rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50"
+            className="rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50"
           >
             Prev
           </button>
-          <span className="px-2 text-sm font-medium text-slate-600 sm:hidden">
-            {currentPage} / {Math.max(totalPages, 1)}
-          </span>
           {getPageNumbers().map((page, index) =>
             typeof page === "number" ? (
               <button
                 type="button"
                 key={page}
                 onClick={() => setCurrentPage(page)}
-                className={`hidden shrink-0 rounded-lg px-3 py-1.5 text-sm sm:inline-flex ${
+                className={`rounded-lg px-3 py-1.5 text-sm ${
                   currentPage === page
                     ? "bg-indigo-600 text-white"
                     : "border text-slate-700 hover:bg-indigo-50"
@@ -298,7 +333,7 @@ export default function DataTable({
                 {page}
               </button>
             ) : (
-              <span key={`${page}-${index}`} className="hidden px-1 text-slate-400 sm:inline">
+              <span key={`${page}-${index}`} className="px-1 text-slate-400">
                 {page}
               </span>
             )
@@ -307,7 +342,7 @@ export default function DataTable({
             type="button"
             onClick={() => setCurrentPage((page) => Math.min(page + 1, totalPages))}
             disabled={currentPage === totalPages || totalPages === 0}
-            className="shrink-0 rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50"
+            className="rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50"
           >
             Next
           </button>
@@ -315,7 +350,7 @@ export default function DataTable({
       </div>
 
       {summaryItems.length ? (
-        <div className="border-t border-slate-200 bg-slate-50 px-3 py-4 sm:px-4">
+        <div className="border-t border-slate-200 bg-slate-50 px-4 py-4">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {summaryItems.map((item) => (
               <div

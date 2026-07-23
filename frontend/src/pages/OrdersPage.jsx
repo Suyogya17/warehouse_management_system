@@ -628,7 +628,7 @@ export default function OrdersPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard label="Physical Stock" value={formatNumber(totals.physical)} icon="finishedGoods" />
         <StatCard label="Reserved Stock" value={formatNumber(totals.reserved)} tone="alert" icon="orders" />
@@ -810,8 +810,8 @@ export default function OrdersPage() {
         }
         icon="orders"
       >
-        <div className="flex justify-between px-2 py-3 mb-1">
-          <div className="relative">
+        <div className="mb-1 flex flex-col items-stretch justify-between gap-3 px-1 py-2 sm:flex-row sm:items-center">
+          <div className="relative w-full sm:w-auto">
             <Search
               size={16}
               className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
@@ -821,7 +821,7 @@ export default function OrdersPage() {
               placeholder="Search orders..."
               value={orderSearch}
               onChange={(e) => setOrderSearch(e.target.value)}
-              className="rounded-xl border border-black bg-white py-2.5 pl-10 pr-4 text-sm shadow-sm focus:border-slate-400 focus:outline-none"
+              className="w-full rounded-xl border border-black bg-white py-2.5 pl-10 pr-4 text-sm shadow-sm focus:border-slate-400 focus:outline-none sm:w-auto"
             />
           </div>
           <select
@@ -840,12 +840,13 @@ export default function OrdersPage() {
 
         <DataTable
           columns={[
-            { key: "id", label: "Order-ID" },
+            { key: "id", label: "Order-ID", width: "4%", align: "center" },
             {
               key: "customer_details",
               label: "Customer Details",
+              width: "14%",
               render: (row) => (
-                <div>
+                <div className="min-w-0">
                   <strong>{row.customer_name || "-"}</strong>
                   <br />
                   <small style={{ color: "#666" }}>Phone: {row.customer_phone || "-"}</small>
@@ -858,10 +859,12 @@ export default function OrdersPage() {
                 </div>
               ),
             },
-            { key: "items", label: "Items", render: renderOrderItems },
+            { key: "items", label: "Items", width: "20%", render: renderOrderItems },
             {
               key: "status",
               label: "Status",
+              width: "7%",
+              align: "center",
               render: (row) => (
                 <StatusBadge tone={statusTone[row.status]}>{row.status}</StatusBadge>
               ),
@@ -869,13 +872,21 @@ export default function OrdersPage() {
             {
               key: "cancellation_reason",
               label: "Cancel Reason",
+              width: "10%",
               render: (row) =>
                 row.status === "CANCELLED" ? row.cancellation_reason || "-" : "-",
             },
-            { key: "created_by_name", label: "Created By" },
+            {
+              key: "created_by_name",
+              label: "Created By",
+              width: "8%",
+              align: "center",
+            },
             {
               key: "created_at",
               label: "Created",
+              width: "9%",
+              align: "center",
               render: (row) => {
                 return (
                   <div className="flex flex-col">
@@ -890,6 +901,8 @@ export default function OrdersPage() {
               ? {
                   key: "actions",
                   label: "Actions",
+                  width: "9%",
+                  align: "center",
                   render: (row) => {
                     const canPrint = PRINTABLE_DELIVERY_STATUSES.includes(row.status);
                     const canChangeStatus = !["DELIVERED", "CANCELLED"].includes(row.status);
@@ -897,11 +910,12 @@ export default function OrdersPage() {
                     if (!canPrint && !canChangeStatus) return null;
 
                     return (
-                      <div className="flex flex-wrap gap-2">
+                      <div className="grid gap-1">
                         {canPrint ? (
                           <Button
                             size="sm"
                             variant="secondary"
+                            className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm"
                             onClick={() => printDeliveryNote(row)}
                           >
                             🖨️ DN
@@ -914,6 +928,7 @@ export default function OrdersPage() {
                               <Button
                                 size="sm"
                                 variant="secondary"
+                                className="h-auto min-h-9 whitespace-normal px-2 py-1.5 text-sm"
                                 onClick={() => changeStatus(row.id, "CONFIRMED")}
                               >
                                 Confirm
@@ -923,6 +938,7 @@ export default function OrdersPage() {
                               <Button
                                 size="sm"
                                 variant="secondary"
+                                className="h-auto min-h-9 whitespace-normal px-2 py-1.5 text-sm"
                                 onClick={() => changeStatus(row.id, "PACKED")}
                               >
                                 Pack
@@ -931,6 +947,7 @@ export default function OrdersPage() {
                             <Button
                               size="sm"
                               icon="check"
+                              className="h-auto min-h-9 whitespace-normal px-2 py-1.5 text-sm"
                               onClick={() => {
                                 const confirmed = window.confirm(
                                   `Are you sure you want to mark Order #${row.id} as delivered?\n\nCustomer: ${row.customer_name}\nThis action cannot be undone.`
@@ -944,6 +961,7 @@ export default function OrdersPage() {
                             <Button
                               size="sm"
                               variant="danger"
+                              className="h-auto min-h-9 whitespace-normal px-2 py-1.5 text-sm"
                               onClick={() => {
                                 const reason = window.prompt(
                                   "Why is this order being cancelled?"
@@ -969,10 +987,12 @@ export default function OrdersPage() {
                     );
                   },
                 }
-              : { key: "empty", label: "" },
+              : { key: "empty", label: "", width: "12%" },
             {
               key: "confirmed_by_name",
               label: "Confirmed By / DN",
+              width: "11%",
+              align: "center",
               render: (row) => {
                 const deliveryNoteNumber =
   row.delivery_note_number ||
@@ -984,7 +1004,7 @@ export default function OrdersPage() {
                     <br />
                     <small style={{ color: "#666" }}>{deliveryNoteNumber}</small>
                     {!row.delivery_note_number && ["CONFIRMED", "PACKED", "DELIVERED"].includes(row.status) ? (
-                      <Button size="sm" variant="secondary" onClick={() => assignDeliveryNote(row)}>
+                      <Button size="sm" variant="secondary" className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm" onClick={() => assignDeliveryNote(row)}>
                         Assign DN
                       </Button>
                     ) : null}
@@ -996,18 +1016,20 @@ export default function OrdersPage() {
               ? {
                   key: "order_edits",
                   label: "Order Edits",
+                  width: "8%",
+                  align: "center",
                   render: (row) => {
                     if (!canCorrectOrders) return <span className="text-slate-400">-</span>;
                     if (row.status === "PACKED") {
                       return (
-                        <Button size="sm" variant="secondary" onClick={() => reopenPacking(row)}>
+                        <Button size="sm" variant="secondary" className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm" onClick={() => reopenPacking(row)}>
                           Reopen packing
                         </Button>
                       );
                     }
                     if (["PENDING", "CONFIRMED"].includes(row.status)) {
                       return (
-                        <Button size="sm" variant="secondary" onClick={() => openCorrection(row)}>
+                        <Button size="sm" variant="secondary" className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm" onClick={() => openCorrection(row)}>
                           Correct CTN
                         </Button>
                       );
@@ -1015,9 +1037,12 @@ export default function OrdersPage() {
                     return <span className="text-slate-400">Locked</span>;
                   },
                 }
-              : { key: "order_edits_empty", label: "" },
+              : { key: "order_edits_empty", label: "", width: "8%" },
           ]}
           rows={filteredOrders}
+          fitColumns
+          wrapCells
+          responsiveScroll
         />
       </SectionCard>
 

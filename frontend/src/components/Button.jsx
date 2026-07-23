@@ -34,7 +34,7 @@ export default function Button({
   return (
     <button
       type={type}
-      className={`inline-flex min-w-0 items-center justify-center gap-2 rounded-xl font-medium leading-tight transition duration-200 ease-out focus-visible:outline-none focus-visible:ring-4 disabled:pointer-events-none disabled:opacity-60 ${variants[variant]} ${iconOnly ? iconOnlySizes[size] : sizes[size]} ${className}`}
+      className={`inline-flex items-center justify-center gap-2 rounded-xl font-medium transition duration-200 ease-out focus-visible:outline-none focus-visible:ring-4 disabled:pointer-events-none disabled:opacity-60 ${variants[variant]} ${iconOnly ? iconOnlySizes[size] : sizes[size]} ${className}`}
       {...props}
     >
       {icon ? <Icon name={icon} className="h-4 w-4" /> : null}

@@ -566,7 +566,7 @@ export default function ElderFinishedGoods() {
       {/* PRODUCTS GRID */}
       {paginatedProducts.length ? (
         <>
-          <div className="grid grid-cols-1 gap-4 min-[430px]:grid-cols-2 xl:grid-cols-3 xl:gap-5 2xl:grid-cols-4">
+          <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
             {paginatedProducts.map((variants) => (
               <ProductCard
                 key={variants.map((variant) => variant.id).join("-")}
