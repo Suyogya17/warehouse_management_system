@@ -1,4 +1,3 @@
-import * as XLSX from "xlsx";
 import { useState, useRef, useEffect } from "react";
 import { formatDate, formatNumber } from "../utils/format";
 import EmptyState from "./EmptyState";
@@ -121,7 +120,9 @@ export default function DataTable({
     return "";
   }
 
-  const handleExport = () => {
+  const handleExport = async () => {
+    // Excel support is sizeable; load it only when the user actually exports.
+    const XLSX = await import("xlsx");
     const exportRows = filteredData.map((row, rowIndex) =>
       columns.reduce((acc, col) => {
         acc[col.label || col.key] = getExportCellValue(row, col, rowIndex);

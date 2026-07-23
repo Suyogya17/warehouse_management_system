@@ -309,6 +309,8 @@ export const api = {
     return apiRequest(`/orders/availability${query ? `?${query}` : ""}`, {}, token);
   },
 
+  getOfferPurchases: (token) => apiRequest("/orders/offer-purchases", {}, token),
+
   createOrder: (payload, token) =>
     apiRequest(
       "/orders",
@@ -322,6 +324,9 @@ export const api = {
       { method: "PUT", body: JSON.stringify(payload) },
       token
     ),
+
+  assignOrderDeliveryNote: (id, token) =>
+    apiRequest(`/orders/${id}/delivery-note`, { method: "PUT" }, token),
 
   correctOrderItems: (id, payload, token) =>
     apiRequest(

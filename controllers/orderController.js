@@ -58,6 +58,10 @@ const normalizeItems = (items = []) =>
     }))
     .filter((item) => item.finished_good_id > 0 && item.qty_ordered > 0);
 
+const isActiveOfferProduct = (product = {}) =>
+  Number(product.offer_enabled) === 1 &&
+  (!product.offer_ends_at || new Date(product.offer_ends_at).getTime() >= Date.now());
+
 const shouldUseFiscalDeliveryNotes = (date = new Date()) => {
   const fiscalStartYear = Number(getNepaliFiscalMeta(date).bs_fiscal_year.split('/')[0]);
   return fiscalStartYear >= FISCAL_DELIVERY_NOTE_START_YEAR;
@@ -67,8 +71,7 @@ const getNextLegacyDeliveryNoteNumber = async (client) => {
   const lastDnRes = await client.query(
     `SELECT delivery_note_number
      FROM orders
-     WHERE status != 'CANCELLED'
-       AND delivery_note_number REGEXP '^DN-[0-9]+$'
+     WHERE delivery_note_number REGEXP '^DN-[0-9]+$'
      ORDER BY CAST(SUBSTRING(delivery_note_number, 4) AS UNSIGNED) DESC
      LIMIT 1
      FOR UPDATE`
@@ -91,8 +94,7 @@ const getNextFiscalDeliveryNoteNumber = async (client, date = new Date()) => {
   const lastDnRes = await client.query(
     `SELECT delivery_note_number
      FROM orders
-     WHERE status != 'CANCELLED'
-       AND bs_fiscal_year = ?
+     WHERE bs_fiscal_year = ?
        AND delivery_note_number REGEXP '^DN-[0-9]+$'
      ORDER BY CAST(SUBSTRING(delivery_note_number, 4) AS UNSIGNED) DESC
      LIMIT 1
@@ -321,10 +323,12 @@ const getAvailability = async (req, res, next) => {
   try {
     const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
     const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
+    const supportsOfferEnabled = await hasColumn('finished_goods', 'offer_enabled');
     const includeHidden =
       req.query.include_hidden === '1' &&
       ['ADMIN', 'CO_ADMIN', 'MEMBER'].includes(req.user.role);
-    const isLinkedElderOfferView = req.user.role === 'ELDER' && req.query.offer_view === '1';
+    const isOfferView = req.query.offer_view === '1' && ['USER', 'ELDER'].includes(req.user.role);
+    const isLinkedElderOfferView = req.user.role === 'ELDER' && isOfferView;
     const availabilityUserId = isLinkedElderOfferView
       ? await resolveOfferAudienceUserId(req.user, query)
       : Number(req.user.id);
@@ -335,7 +339,14 @@ const getAvailability = async (req, res, next) => {
     }`;
     const params = [];
 
-    if (['USER', 'MEMBER', 'ELDER'].includes(req.user.role)) {
+    // Customer and elder Offer pages only need active offers. Filtering here
+    // avoids sending the complete product catalogue over the network just for
+    // the browser to discard most of it.
+    if (isOfferView && supportsOfferEnabled) {
+      sql += ' AND offer_enabled = 1 AND (offer_ends_at IS NULL OR offer_ends_at >= NOW())';
+    }
+
+    if (['USER', 'MEMBER', 'ELDER'].includes(req.user.role) && !isOfferView) {
       sql += ` AND EXISTS (
         SELECT 1 FROM user_product_permissions upp
         WHERE upp.finished_good_id = finished_goods.id
@@ -416,6 +427,43 @@ const getAvailability = async (req, res, next) => {
   }
 };
 
+const getOfferPurchases = async (req, res, next) => {
+  try {
+    if (!await hasColumn('order_items', 'ordered_from_offer')) {
+      return res.status(400).json({ success: false, message: 'Offer purchase tracking requires sql/add-offer-order-snapshots.sql.' });
+    }
+
+    const rows = await query(
+      `SELECT oi.id AS order_item_id, oi.order_id, oi.finished_good_id, oi.qty_ordered,
+              oi.offer_label_snapshot, oi.offer_display_percentage, oi.offer_display_quantity,
+              oi.offer_price_snapshot, oi.offer_pairs_per_carton_snapshot,
+              o.customer_name, o.status, o.created_at, o.delivery_note_number,
+              u.name AS account_name, u.email AS account_email,
+              fg.name AS product_name, fg.article_code, fg.sole_code, fg.color, fg.size, fg.unit
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       JOIN finished_goods fg ON fg.id = oi.finished_good_id
+       LEFT JOIN users u ON u.id = o.created_by
+       WHERE oi.ordered_from_offer = 1
+       ORDER BY o.created_at DESC, oi.id DESC`
+    );
+
+    return res.json({
+      success: true,
+      data: rows.map((row) => ({
+        ...row,
+        qty_ordered: Number(row.qty_ordered || 0),
+        offer_display_percentage: row.offer_display_percentage === null ? null : Number(row.offer_display_percentage),
+        offer_display_quantity: row.offer_display_quantity === null ? null : Number(row.offer_display_quantity),
+        offer_price_snapshot: row.offer_price_snapshot === null ? null : Number(row.offer_price_snapshot),
+        offer_pairs_per_carton_snapshot: row.offer_pairs_per_carton_snapshot === null ? null : Number(row.offer_pairs_per_carton_snapshot),
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── CREATE ORDER ─────────────────────────────────
 const create = async (req, res, next) => {
   const client = await getClient();
@@ -451,9 +499,13 @@ const create = async (req, res, next) => {
     const supportsOfferUserQuantity = supportsOfferUsers
       ? await hasColumn('finished_good_offer_users', 'display_quantity')
       : false;
+    const supportsOfferUserPercentage = supportsOfferUsers
+      ? await hasColumn('finished_good_offer_users', 'display_percentage')
+      : false;
+    const supportsOfferOrderSnapshots = await hasColumn('order_items', 'ordered_from_offer');
 
     let productSql = `
-      SELECT id, name, article_code, color, quantity${supportsDisplayQuantity ? ', display_quantity' : ''}${supportsOfferAudience ? ', offer_enabled, offer_ends_at, offer_all_users' : ''}
+      SELECT id, name, article_code, sole_code, color, quantity, price, inner_boxes_per_outer_box${supportsDisplayQuantity ? ', display_quantity' : ''}${supportsOfferAudience ? ', offer_enabled, offer_label, offer_ends_at, offer_all_users' : ''}
       FROM finished_goods
       WHERE is_deleted = 0
         AND is_visible = 1
@@ -461,8 +513,8 @@ const create = async (req, res, next) => {
     `;
     const productParams = [...params];
 
-    if (['USER', 'MEMBER', 'ELDER'].includes(req.user.role)) {
-      productSql += ` AND EXISTS (
+    if (req.user.role === 'USER') {
+      const normalPermissionSql = `EXISTS (
         SELECT 1 FROM user_product_permissions upp
         WHERE upp.finished_good_id = finished_goods.id
           AND upp.user_id = ?
@@ -472,6 +524,30 @@ const create = async (req, res, next) => {
         WHERE upp.finished_good_id = finished_goods.id
           AND upp.user_id = ?
           AND upp.can_view = 0
+      )`;
+      if (supportsOfferAudience && supportsOfferUsers) {
+        productSql += ` AND ((${normalPermissionSql}) OR (
+          offer_enabled = 1
+          AND (offer_ends_at IS NULL OR offer_ends_at >= NOW())
+          AND (offer_all_users = 1 OR EXISTS (
+            SELECT 1 FROM finished_good_offer_users fgo
+            WHERE fgo.finished_good_id = finished_goods.id AND fgo.user_id = ?
+          ))
+        ))`;
+        productParams.push(req.user.id, req.user.id, req.user.id);
+      } else {
+        productSql += ` AND (${normalPermissionSql})`;
+        productParams.push(req.user.id, req.user.id);
+      }
+    } else if (['MEMBER', 'ELDER'].includes(req.user.role)) {
+      productSql += ` AND EXISTS (
+        SELECT 1 FROM user_product_permissions upp
+        WHERE upp.finished_good_id = finished_goods.id
+          AND upp.user_id = ? AND upp.can_view = 1
+      ) AND NOT EXISTS (
+        SELECT 1 FROM user_product_permissions upp
+        WHERE upp.finished_good_id = finished_goods.id
+          AND upp.user_id = ? AND upp.can_view = 0
       )`;
       productParams.push(req.user.id, req.user.id);
     }
@@ -491,12 +567,15 @@ const create = async (req, res, next) => {
     let userOfferTargets = new Map();
     if (req.user.role === 'USER' && supportsOfferAudience && supportsOfferUsers && supportsOfferUserQuantity) {
       const targetRows = await client.query(
-        `SELECT finished_good_id, display_quantity
+        `SELECT finished_good_id, display_quantity${supportsOfferUserPercentage ? ', display_percentage' : ''}
          FROM finished_good_offer_users
          WHERE user_id = ? AND finished_good_id IN ${clause}`,
         [req.user.id, ...params]
       );
-      userOfferTargets = new Map(targetRows.rows.map((row) => [Number(row.finished_good_id), Number(row.display_quantity)]));
+      userOfferTargets = new Map(targetRows.rows.map((row) => [Number(row.finished_good_id), {
+        display_quantity: Number(row.display_quantity),
+        display_percentage: supportsOfferUserPercentage && row.display_percentage !== null ? Number(row.display_percentage) : null,
+      }]));
     }
 
     const reserved = await getReservedByProduct(
@@ -521,10 +600,10 @@ const create = async (req, res, next) => {
       const displayQuantity = supportsDisplayQuantity
         ? getProductDisplayQuantity(p)
         : DEFAULT_DISPLAY_QUANTITY;
-      const userOfferQuantity = userOfferTargets.get(Number(id));
-      const offerIsActive = Number(p.offer_enabled) === 1 && (!p.offer_ends_at || new Date(p.offer_ends_at).getTime() >= Date.now());
-      const effectiveDisplayQuantity = req.user.role === 'USER' && offerIsActive && Number(p.offer_all_users) !== 1 && userOfferQuantity != null
-        ? userOfferQuantity
+      const userOfferTarget = userOfferTargets.get(Number(id));
+      const offerIsActive = isActiveOfferProduct(p);
+      const effectiveDisplayQuantity = req.user.role === 'USER' && offerIsActive && Number(p.offer_all_users) !== 1 && userOfferTarget != null
+        ? userOfferTarget.display_quantity
         : displayQuantity;
 
       // Step 1: actual available
@@ -549,6 +628,26 @@ const create = async (req, res, next) => {
         message: 'Insufficient stock',
         shortages,
       });
+    }
+
+    const offerSnapshotByProduct = new Map();
+    if (req.user.role === 'USER') {
+      products.rows.forEach((product) => {
+        const target = userOfferTargets.get(Number(product.id));
+        const eligible = isActiveOfferProduct(product) && (Number(product.offer_all_users) === 1 || Boolean(target));
+        if (!eligible) return;
+        offerSnapshotByProduct.set(Number(product.id), {
+          offer_label_snapshot: product.offer_label || 'Special offer',
+          offer_display_percentage: target?.display_percentage ?? null,
+          offer_display_quantity: target?.display_quantity ?? getProductDisplayQuantity(product),
+          offer_price_snapshot: Number(product.price || 0) > 0 ? Number(product.price) + 50 : null,
+          offer_pairs_per_carton_snapshot: Number(product.inner_boxes_per_outer_box || 0) || null,
+        });
+      });
+    }
+    if (offerSnapshotByProduct.size && !supportsOfferOrderSnapshots) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Offer purchase tracking requires sql/add-offer-order-snapshots.sql.' });
     }
 
     const orderInsert = await appendFiscalInsertFields(
@@ -581,10 +680,17 @@ const create = async (req, res, next) => {
     }
 
     for (const item of items) {
+      const offerSnapshot = offerSnapshotByProduct.get(Number(item.finished_good_id));
+      const orderItemColumns = ['order_id', 'finished_good_id', 'qty_ordered'];
+      const orderItemValues = [orderId, item.finished_good_id, item.qty_ordered];
+      if (supportsOfferOrderSnapshots) {
+        orderItemColumns.push('ordered_from_offer', 'offer_label_snapshot', 'offer_display_percentage', 'offer_display_quantity', 'offer_price_snapshot', 'offer_pairs_per_carton_snapshot');
+        orderItemValues.push(offerSnapshot ? 1 : 0, offerSnapshot?.offer_label_snapshot ?? null, offerSnapshot?.offer_display_percentage ?? null, offerSnapshot?.offer_display_quantity ?? null, offerSnapshot?.offer_price_snapshot ?? null, offerSnapshot?.offer_pairs_per_carton_snapshot ?? null);
+      }
       const orderItemInsert = await appendFiscalInsertFields(
         'order_items',
-        ['order_id', 'finished_good_id', 'qty_ordered'],
-        [orderId, item.finished_good_id, item.qty_ordered]
+        orderItemColumns,
+        orderItemValues
       );
       await client.query(
         `INSERT INTO order_items (${orderItemInsert.columns.join(', ')})
@@ -703,9 +809,25 @@ const correctItems = async (req, res, next) => {
       return res.status(422).json({ success: false, message: 'Insufficient stock for this correction.', shortages: shortages.map((item) => ({ product_name: item.product.name, requested: item.qty_ordered })) });
     }
 
+    const supportsOfferOrderSnapshots = await hasColumn('order_items', 'ordered_from_offer');
+    const oldItemByProduct = new Map(oldItemsResult.rows.map((item) => [Number(item.finished_good_id), item]));
     await client.query('DELETE FROM order_items WHERE order_id = ?', [order.id]);
     for (const item of correctedItems) {
-      const insert = await appendFiscalInsertFields('order_items', ['order_id', 'finished_good_id', 'qty_ordered'], [order.id, item.finished_good_id, item.qty_ordered]);
+      const columns = ['order_id', 'finished_good_id', 'qty_ordered'];
+      const values = [order.id, item.finished_good_id, item.qty_ordered];
+      const oldItem = oldItemByProduct.get(Number(item.finished_good_id));
+      if (supportsOfferOrderSnapshots) {
+        columns.push('ordered_from_offer', 'offer_label_snapshot', 'offer_display_percentage', 'offer_display_quantity', 'offer_price_snapshot', 'offer_pairs_per_carton_snapshot');
+        values.push(
+          Number(oldItem?.ordered_from_offer || 0),
+          oldItem?.offer_label_snapshot ?? null,
+          oldItem?.offer_display_percentage ?? null,
+          oldItem?.offer_display_quantity ?? null,
+          oldItem?.offer_price_snapshot ?? null,
+          oldItem?.offer_pairs_per_carton_snapshot ?? null
+        );
+      }
+      const insert = await appendFiscalInsertFields('order_items', columns, values);
       await client.query(`INSERT INTO order_items (${insert.columns.join(', ')}) VALUES (${insert.columns.map(() => '?').join(', ')})`, insert.values);
     }
     await client.query('UPDATE orders SET updated_at = NOW() WHERE id = ?', [order.id]);
@@ -750,7 +872,7 @@ const updateStatus = async (req, res, next) => {
 
     const { clause: idClause, params: idParams } = buildInClause([req.params.id]);
     const orderRes = await client.query(
-      `SELECT * FROM orders WHERE id IN ${idClause}`,
+      `SELECT * FROM orders WHERE id IN ${idClause} FOR UPDATE`,
       idParams
     );
 
@@ -773,12 +895,25 @@ const updateStatus = async (req, res, next) => {
     let updateFields = ['status = ?', 'updated_at = NOW()'];
     let updateParams = [status];
 
-    if (status === 'CONFIRMED' && !order.confirmed_by) {
-      const nextDN = order.delivery_note_number || await getNextDeliveryNoteNumber(client);
+    // Any order that has reached confirmation or beyond must have complete
+    // confirmation metadata. This also repairs older confirmed orders whose DN
+    // was missed by an earlier backend version.
+    if (['CONFIRMED', 'PACKED', 'DELIVERED'].includes(status)) {
+      if (!order.confirmed_by) {
+        updateFields.push('confirmed_by = ?');
+        updateParams.push(req.user.id);
+      }
+      if (!order.confirmed_at) {
+        updateFields.push('confirmed_at = NOW()');
+      }
+      if (!order.delivery_note_number) {
+        const nextDN = await getNextDeliveryNoteNumber(client, order.created_at ? new Date(order.created_at) : new Date());
+        updateFields.push('delivery_note_number = ?');
+        updateParams.push(nextDN);
+      }
+    }
 
-      updateFields.push('confirmed_by = ?', 'confirmed_at = NOW()', 'delivery_note_number = ?');
-      updateParams.push(req.user.id, nextDN);
-    } else if (status === 'PACKED' && !order.packed_by) {
+    if (status === 'PACKED' && !order.packed_by) {
       updateFields.push('packed_by = ?', 'packed_at = NOW()');
       updateParams.push(req.user.id);
     } else if (status === 'DELIVERED' && !order.delivered_by) {
@@ -882,6 +1017,79 @@ const updateStatus = async (req, res, next) => {
     return res.json({ success: true, message: 'Status updated' });
   } catch (err) {
     await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+// ─── REPAIR A MISSING DELIVERY NOTE ────────────────────────────────────────
+const assignDeliveryNote = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    await client.query('START TRANSACTION');
+    const orderResult = await client.query(
+      'SELECT * FROM orders WHERE id = ? FOR UPDATE',
+      [req.params.id]
+    );
+    const order = orderResult.rows[0];
+
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+
+    if (!['CONFIRMED', 'PACKED', 'DELIVERED'].includes(String(order.status || '').toUpperCase())) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'A delivery note can only be assigned after an order is confirmed.',
+      });
+    }
+
+    let deliveryNoteNumber = order.delivery_note_number;
+    if (!deliveryNoteNumber) {
+      deliveryNoteNumber = await getNextDeliveryNoteNumber(
+        client,
+        order.created_at ? new Date(order.created_at) : new Date()
+      );
+      await client.query(
+        `UPDATE orders
+         SET delivery_note_number = ?,
+             confirmed_by = COALESCE(confirmed_by, ?),
+             confirmed_at = COALESCE(confirmed_at, NOW()),
+             updated_at = NOW()
+         WHERE id = ?`,
+        [deliveryNoteNumber, req.user.id, order.id]
+      );
+    }
+
+    await client.query('COMMIT');
+    clearCache();
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'UPDATE',
+      module: 'orders',
+      entity_type: 'order',
+      entity_id: order.id,
+      entityName: getOrderEntityName(order),
+      description: `Assigned ${deliveryNoteNumber} to ${getOrderEntityName(order)}`,
+      metadata: {
+        order_number: order.id,
+        status: order.status,
+        delivery_note_number: deliveryNoteNumber,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: `${deliveryNoteNumber} assigned successfully.`,
+      data: { id: order.id, delivery_note_number: deliveryNoteNumber },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     next(err);
   } finally {
     client.release();
@@ -1016,4 +1224,4 @@ const logPrint = async (req, res, next) => {
   }
 };
 
-module.exports = { getAll, getAvailability, create, correctItems, updateStatus, reopenPacking, logPrint };
+module.exports = { getAll, getAvailability, getOfferPurchases, create, correctItems, updateStatus, assignDeliveryNote, reopenPacking, logPrint };

@@ -385,11 +385,11 @@ export default function AppShell() {
 
   return (
     <div
-      className="min-h-screen overflow-x-hidden bg-transparent text-slate-900"
+      className="min-h-screen overflow-x-hidden bg-transparent text-slate-900 lg:h-screen lg:overflow-hidden"
       onWheelCapture={preventNumberWheelChange}
     >
       <NotificationWatcher user={user} token={token} onNotify={addNotification} />
-      <div className="mx-auto flex min-h-screen w-full max-w-[1800px] gap-4 px-3 py-3 sm:px-4 lg:gap-6 lg:px-6 lg:py-4">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1800px] gap-4 px-3 py-3 sm:px-4 lg:h-screen lg:min-h-0 lg:items-stretch lg:gap-6 lg:px-6 lg:py-4">
 
         {/* MOBILE OVERLAY */}
         {mobileNavOpen && (
@@ -444,13 +444,13 @@ export default function AppShell() {
         </aside>
 
         {/* DESKTOP SIDEBAR */}
-        <aside className="hidden w-72 shrink-0 lg:block">
-          <div className="sticky top-4 flex max-h-[calc(100vh-2rem)] flex-col space-y-4 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+        <aside className="hidden w-72 shrink-0 lg:block lg:h-full lg:min-h-0">
+          <div className="flex h-full min-h-0 flex-col space-y-4 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
             {/* USER CARD */}
             <UserCard />
 
             {/* NAV */}
-            <nav className="space-y-2 overflow-y-auto pr-1">
+            <nav className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
               <NavList />
             </nav>
 
@@ -467,7 +467,7 @@ export default function AppShell() {
         </aside>
 
         {/* MAIN */}
-        <main className="min-w-0 flex-1 space-y-4 py-1">
+        <main className="min-w-0 flex-1 space-y-4 py-1 lg:h-full lg:overflow-y-auto lg:pr-1">
 
           {/* TOP BAR */}
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 sm:px-4 sm:py-4">

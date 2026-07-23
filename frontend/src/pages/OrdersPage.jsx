@@ -163,6 +163,21 @@ export default function OrdersPage() {
     }
   };
 
+  const assignDeliveryNote = async (order) => {
+    try {
+      const result = await api.assignOrderDeliveryNote(order.id, token);
+      await load();
+      announceDataRefresh("orders");
+      showToast({
+        tone: "success",
+        title: "Delivery note assigned",
+        message: result.message || `A delivery-note number was assigned to Order #${order.id}.`,
+      });
+    } catch (error) {
+      showToast({ tone: "error", title: "Could not assign DN", message: error.message });
+    }
+  };
+
   const reopenPacking = async (order) => {
     const reason = window.prompt(
       `Why are you reopening packing for Order #${order.id}?\n\nThe existing delivery note number will remain unchanged.`
@@ -964,11 +979,16 @@ export default function OrdersPage() {
   deliveryNoteNumbersByOrderId.get(Number(row.id)) ||
   "-";
                 return (
-                  <>
+                  <div className="space-y-1">
                     {row.confirmed_by_name || "-"}
                     <br />
                     <small style={{ color: "#666" }}>{deliveryNoteNumber}</small>
-                  </>
+                    {!row.delivery_note_number && ["CONFIRMED", "PACKED", "DELIVERED"].includes(row.status) ? (
+                      <Button size="sm" variant="secondary" onClick={() => assignDeliveryNote(row)}>
+                        Assign DN
+                      </Button>
+                    ) : null}
+                  </div>
                 );
               },
             },

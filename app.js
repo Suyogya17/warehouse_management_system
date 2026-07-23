@@ -1,4 +1,5 @@
 const cors = require("cors");
+const compression = require("compression");
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
@@ -21,6 +22,10 @@ const analyticsRoutes = require("./routes/analyticsRoutes");
 const importTrackingRoutes = require("./routes/importTrackingRoutes");
 
 const app = express();
+
+// Compress JSON and static responses. Product, order, and analytics payloads can
+// be large, so this substantially reduces transfer time on slower connections.
+app.use(compression());
 
 /* ─────────────────────────────
    BODY PARSER

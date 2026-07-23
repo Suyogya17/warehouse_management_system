@@ -241,11 +241,15 @@ export default function NotificationWatcher({ user, token, onNotify }) {
       }
     };
 
-    checkNotifications();
+    // Let the requested page finish its initial data load before background
+    // polling starts. On remote databases both requests otherwise compete for
+    // the small connection pool and make the visible page feel slower.
+    const initialCheckTimeout = window.setTimeout(checkNotifications, 8000);
     const interval = window.setInterval(checkNotifications, POLL_INTERVAL_MS);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(initialCheckTimeout);
       window.clearInterval(interval);
     };
   }, [onNotify, playSound, role, showToast, token, user?.id]);
