@@ -2,6 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
+.nepcha-api-progress {
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #4f46e5, #818cf8, #4f46e5);
+  animation: nepcha-api-progress 0.9s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes nepcha-api-progress {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(365%);
+  }
+}
+
 .nepcha-loader {
   width: min(92vw, 360px);
 }

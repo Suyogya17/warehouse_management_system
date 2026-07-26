@@ -5,6 +5,7 @@ import { useAuth } from "./context/AuthContext";
 import AppShell from "./layouts/AppShell";
 import {
   ApiLoadingOverlay,
+  ApiProgressBar,
   InitialLoadingOverlay,
   NepchaLoader,
 } from "./components/NepchaLoader";
@@ -54,6 +55,7 @@ export default function App() {
     <>
       <InitialLoadingOverlay />
       <ApiLoadingOverlay />
+      <ApiProgressBar />
       <Routes>
       {/* LOGIN */}
       <Route

@@ -7,6 +7,7 @@ import EmptyState from "../components/EmptyState";
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import { useAuth } from "../context/AuthContext";
+import { useProductInterestTracking } from "../hooks/useProductInterestTracking";
 import { api } from "../services/api";
 import { getCustomerVisibleStock } from "../utils/displayStock";
 import {
@@ -134,6 +135,12 @@ export default function GalleryPage() {
     (currentPage - 1) * ARTICLES_PER_PAGE,
     currentPage * ARTICLES_PER_PAGE
   );
+  const trackGalleryInterest = useProductInterestTracking({
+    token,
+    search,
+    resultCount: articleGroups.reduce((sum, variants) => sum + variants.length, 0),
+    surface: mode === "OFFERS" ? "OFFER_GALLERY" : "GALLERY",
+  });
 
   useEffect(() => {
     setCurrentPage(1);
@@ -364,6 +371,7 @@ export default function GalleryPage() {
                 variants={variants}
                 offer={mode === "OFFERS"}
                 onAddToCart={canOrder ? addToCart : undefined}
+                onProductInterest={trackGalleryInterest}
                 cartProductIds={cartProductIds}
               />
             ))}

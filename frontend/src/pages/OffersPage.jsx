@@ -8,6 +8,7 @@ import PageHeader from "../components/PageHeader";
 import ProductImageGallery from "../components/ProductImageGallery";
 import SectionCard from "../components/SectionCard";
 import { useAuth } from "../context/AuthContext";
+import { useProductInterestTracking } from "../hooks/useProductInterestTracking";
 import { useToast } from "../context/ToastContext";
 import { api, APP_BASE_URL } from "../services/api";
 import { getCustomerVisibleStock, getRoundedCartons } from "../utils/displayStock";
@@ -728,8 +729,12 @@ const getPercentageAllocations = (product, targets = []) => {
   }]));
 };
 
-function OfferProductCard({ variants, canManage, canOrder, viewer, onEdit, onRemove, onAddToCart, cartProductIds }) {
+function OfferProductCard({ variants, canManage, canOrder, viewer, onEdit, onRemove, onAddToCart, onProductInterest, cartProductIds }) {
   const [selected, setSelected] = useState(variants.find(isActiveOffer) || variants[0]);
+  const selectVariant = (variant) => {
+    setSelected(variant);
+    onProductInterest?.(variant);
+  };
 
   useEffect(() => {
     setSelected((current) => variants.find((item) => Number(item.id) === Number(current?.id)) || variants.find(isActiveOffer) || variants[0]);
@@ -760,7 +765,7 @@ function OfferProductCard({ variants, canManage, canOrder, viewer, onEdit, onRem
         <span className={`absolute right-3 top-3 rounded-full px-3 py-1 text-xs font-bold text-white ${availableQty > 0 ? "bg-emerald-600" : "bg-red-600"}`}>
           {availableQty > 0 ? "IN STOCK" : "OUT OF STOCK"}
         </span>
-        <ProductImageGallery variants={variants} selectedVariant={selected} onSelect={setSelected} />
+        <ProductImageGallery variants={variants} selectedVariant={selected} onSelect={selectVariant} />
       </div>
       <div className="flex flex-1 flex-col gap-2 p-3">
         <div>
@@ -770,7 +775,7 @@ function OfferProductCard({ variants, canManage, canOrder, viewer, onEdit, onRem
         </div>
         <div className="flex gap-1 overflow-x-auto pb-1">
           {variants.map((variant) => (
-            <button key={variant.id} type="button" onClick={() => setSelected(variant)} className={`whitespace-nowrap rounded-lg px-2 py-1 text-xs font-medium transition ${Number(selected.id) === Number(variant.id) ? "bg-indigo-500 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>
+            <button key={variant.id} type="button" onClick={() => selectVariant(variant)} className={`whitespace-nowrap rounded-lg px-2 py-1 text-xs font-medium transition ${Number(selected.id) === Number(variant.id) ? "bg-indigo-500 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>
               {variant.color || `Variant ${variant.id}`}
             </button>
           ))}
@@ -986,6 +991,7 @@ export default function OffersPage() {
     0
   );
   const addToCart = (product) => {
+    trackOfferInterest(product);
     const productId = Number(product.id);
     if (cartProductIds.has(productId)) {
       navigate("/order-customer");
@@ -1039,6 +1045,12 @@ export default function OffersPage() {
     const available = canManage ? Number(item.quantity || 0) : getCustomerVisibleStock(item);
     return stockFilter === "IN_STOCK" ? available > 0 : available <= 0;
   }), [canManage, stockFilter, stockFilterCandidates]);
+  const trackOfferInterest = useProductInterestTracking({
+    token,
+    search,
+    resultCount: shownProducts.length,
+    surface: "OFFERS",
+  });
 
   const productGroups = useMemo(() => {
     const groups = new Map();
@@ -1295,7 +1307,7 @@ export default function OffersPage() {
         {!productGroups.length ? <EmptyState title="No offers found" description={canManage ? "Search for a product and publish an offer." : "There are no active product offers right now."} /> : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {paginatedProductGroups.map((variants) => (
-              <OfferProductCard key={getOfferGroupKey(variants[0])} variants={variants} canManage={canManage} canOrder={canOrder} viewer={user} onEdit={beginEdit} onRemove={removeOffer} onAddToCart={addToCart} cartProductIds={cartProductIds} />
+              <OfferProductCard key={getOfferGroupKey(variants[0])} variants={variants} canManage={canManage} canOrder={canOrder} viewer={user} onEdit={beginEdit} onRemove={removeOffer} onAddToCart={addToCart} onProductInterest={trackOfferInterest} cartProductIds={cartProductIds} />
             ))}
           </div>
         )}

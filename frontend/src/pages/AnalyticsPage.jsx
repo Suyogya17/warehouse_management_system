@@ -7,6 +7,9 @@ import {
   Legend,
   Line,
   LineChart,
+  Cell,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -52,6 +55,41 @@ const shortLabel = (value = "", maxLength = 18) => {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
 };
 
+const getSeriesName = (soleCode = "") =>
+  String(soleCode || "Unassigned")
+    .replace(/[-_\s]*sole$/i, "")
+    .replace(/_+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim() || "Unassigned";
+
+const SERIES_COLORS = [
+  "#4f46e5",
+  "#0f766e",
+  "#dc2626",
+  "#d97706",
+  "#7c3aed",
+  "#0284c7",
+  "#65a30d",
+  "#db2777",
+  "#64748b",
+];
+
+const getSeriesColor = (index) =>
+  SERIES_COLORS[index] || `hsl(${Math.round((index * 137.508) % 360)} 68% 46%)`;
+
+const getProductLineColor = (color = "") => {
+  const value = String(color).toLowerCase();
+  if (value.includes("red") || value.includes("maroon")) return "#dc2626";
+  if (value.includes("blue")) return "#2563eb";
+  if (value.includes("green")) return "#059669";
+  if (value.includes("orange")) return "#ea580c";
+  if (value.includes("pink")) return "#db2777";
+  if (value.includes("yellow") || value.includes("gold")) return "#ca8a04";
+  if (value.includes("black")) return "#0f172a";
+  if (value.includes("grey") || value.includes("gray") || value.includes("white")) return "#64748b";
+  return "#4f46e5";
+};
+
 function ChartFrame({ children, height = 300 }) {
   return <div className="h-[300px] w-full px-2 py-4 md:px-6" style={{ height }}>{children}</div>;
 }
@@ -94,6 +132,26 @@ function WorkflowTooltip({ active, payload, label }) {
         ))}
       </div>
       {row.reason ? <p className="mt-2 max-w-xs text-xs text-slate-500">{row.reason}</p> : null}
+    </div>
+  );
+}
+
+function SeriesSalesTooltip({ active, payload, totalQuantity }) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload || {};
+  const percentage = totalQuantity > 0
+    ? (Number(row.total_quantity || 0) / totalQuantity) * 100
+    : 0;
+
+  return (
+    <div className="min-w-52 rounded-xl border border-slate-200 bg-white p-3 text-sm shadow-lg shadow-slate-900/10">
+      <p className="font-bold text-slate-950">{row.series}</p>
+      <div className="mt-2 space-y-1.5 text-slate-600">
+        <p className="flex justify-between gap-6"><span>Quantity</span><strong className="text-slate-950">{formatNumber(row.total_quantity)} pairs</strong></p>
+        <p className="flex justify-between gap-6"><span>Sales share</span><strong className="text-slate-950">{percentage.toFixed(1)}%</strong></p>
+        <p className="flex justify-between gap-6"><span>Orders</span><strong className="text-slate-950">{formatNumber(row.order_count)}</strong></p>
+        <p className="flex justify-between gap-6"><span>Products</span><strong className="text-slate-950">{formatNumber(row.product_count)}</strong></p>
+      </div>
     </div>
   );
 }
@@ -696,10 +754,21 @@ function ProductionTab({ data }) {
   );
 }
 
-function SalesTab({ data }) {
+function SalesTab({ data, token }) {
   const [trendMode, setTrendMode] = useState("month");
   const [expandedTrend, setExpandedTrend] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState("");
+  const [productSearch, setProductSearch] = useState("");
+  const [productPerformance, setProductPerformance] = useState(null);
+  const [productPerformanceLoading, setProductPerformanceLoading] = useState(false);
+  const [productPerformanceError, setProductPerformanceError] = useState("");
+  const [compareProductIds, setCompareProductIds] = useState([]);
+  const [compareInitialized, setCompareInitialized] = useState(false);
+  const [compareSearch, setCompareSearch] = useState("");
+  const [compareCandidateId, setCompareCandidateId] = useState("");
+  const [compareResults, setCompareResults] = useState([]);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareError, setCompareError] = useState("");
   const statusRows = useMemo(
     () =>
       (data?.order_status_summary || [])
@@ -730,12 +799,54 @@ function SalesTab({ data }) {
   );
   const productOptions = useMemo(
     () =>
-      (data?.top_selling_products || []).map((row) => ({
+      (data?.product_sales_options || data?.top_selling_products || []).map((row) => ({
         id: String(row.id),
         label: productName(row),
+        searchText: [
+          row.article_code,
+          row.name,
+          row.sole_code,
+          row.color,
+          row.size,
+        ].filter(Boolean).join(" ").toLowerCase(),
       })),
-    [data?.top_selling_products]
+    [data?.product_sales_options, data?.top_selling_products]
   );
+  const filteredProductOptions = useMemo(() => {
+    const terms = productSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return productOptions;
+    return productOptions.filter((product) =>
+      terms.every((term) => product.searchText.includes(term))
+    );
+  }, [productOptions, productSearch]);
+  const compareProductOptions = useMemo(() => {
+    const terms = compareSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return productOptions.filter(
+      (product) =>
+        !compareProductIds.includes(product.id) &&
+        terms.every((term) => product.searchText.includes(term))
+    );
+  }, [compareProductIds, compareSearch, productOptions]);
+  const seriesSalesRows = useMemo(() => {
+    const totals = new Map();
+    (data?.series_sales || []).forEach((row) => {
+      const series = getSeriesName(row.series);
+      const current = totals.get(series) || {
+        series,
+        total_quantity: 0,
+        order_count: 0,
+        product_count: 0,
+      };
+      current.total_quantity += Number(row.total_quantity || 0);
+      current.order_count += Number(row.order_count || 0);
+      current.product_count += Number(row.product_count || 0);
+      totals.set(series, current);
+    });
+    return Array.from(totals.values()).sort(
+      (a, b) => b.total_quantity - a.total_quantity
+    );
+  }, [data?.series_sales]);
+  const seriesSalesTotal = sumRows(seriesSalesRows, "total_quantity");
   const statusChartHeight = Math.max(260, statusRows.length * 46 + 72);
   const sellingProductChartHeight = Math.max(300, sellingProductRows.length * 44 + 96);
   const trendRows = trendMode === "day" ? data?.daily_order_trend || [] : data?.monthly_order_trend || [];
@@ -743,10 +854,31 @@ function SalesTab({ data }) {
   const trendTitle = trendMode === "day" ? "Daily Order Trend" : "Monthly Order Trend";
   const trendHeight = expandedTrend ? 520 : 340;
   const selectedProduct = productOptions.find((product) => product.id === selectedProductId);
-  const selectedProductTrendRows = (data?.product_daily_order_trend || []).filter(
-    (row) => String(row.finished_good_id) === selectedProductId
-  );
+  const selectableProductOptions =
+    selectedProduct && !filteredProductOptions.some((product) => product.id === selectedProduct.id)
+      ? [selectedProduct, ...filteredProductOptions]
+      : filteredProductOptions;
+  const selectedProductTrendRows = productPerformance?.daily_trend || [];
+  const selectedProductSummary = productPerformance?.summary;
   const topSellingProduct = sellingProductRows[0];
+  const compareChartRows = useMemo(() => {
+    const rowsByDay = new Map();
+    compareResults.forEach((result) => {
+      (result.data?.daily_trend || []).forEach((row) => {
+        if (!rowsByDay.has(row.day)) rowsByDay.set(row.day, { day: row.day });
+        rowsByDay.get(row.day)[`product_${result.id}`] = Number(row.total_quantity || 0);
+      });
+    });
+    return Array.from(rowsByDay.values())
+      .map((row) => {
+        compareResults.forEach((result) => {
+          const key = `product_${result.id}`;
+          if (row[key] === undefined) row[key] = 0;
+        });
+        return row;
+      })
+      .sort((a, b) => String(a.day).localeCompare(String(b.day)));
+  }, [compareResults]);
 
   useEffect(() => {
     if (!productOptions.length) {
@@ -758,6 +890,87 @@ function SalesTab({ data }) {
       setSelectedProductId(productOptions[0].id);
     }
   }, [productOptions, selectedProductId]);
+
+  useEffect(() => {
+    if (!selectedProductId) {
+      setProductPerformance(null);
+      setProductPerformanceError("");
+      return undefined;
+    }
+
+    let active = true;
+    setProductPerformanceLoading(true);
+    setProductPerformanceError("");
+
+    api.getProductSalesAnalytics(selectedProductId, token)
+      .then((result) => {
+        if (active) setProductPerformance(result.data || null);
+      })
+      .catch((error) => {
+        if (active) {
+          setProductPerformance(null);
+          setProductPerformanceError(error.message || "Could not load product performance.");
+        }
+      })
+      .finally(() => {
+        if (active) setProductPerformanceLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedProductId, token]);
+
+  useEffect(() => {
+    if (compareInitialized || !productOptions.length) return;
+    const initialIds = productOptions.slice(0, Math.min(2, productOptions.length)).map((product) => product.id);
+    setCompareProductIds(initialIds);
+    setCompareInitialized(true);
+  }, [compareInitialized, productOptions]);
+
+  useEffect(() => {
+    const firstOption = compareProductOptions[0]?.id || "";
+    if (!compareProductOptions.some((product) => product.id === compareCandidateId)) {
+      setCompareCandidateId(firstOption);
+    }
+  }, [compareCandidateId, compareProductOptions]);
+
+  useEffect(() => {
+    if (!compareProductIds.length) {
+      setCompareResults([]);
+      setCompareError("");
+      return undefined;
+    }
+
+    let active = true;
+    setCompareLoading(true);
+    setCompareError("");
+
+    Promise.all(
+      compareProductIds.map((id) =>
+        api.getProductSalesAnalytics(id, token).then((result) => ({
+          id,
+          data: result.data || {},
+        }))
+      )
+    )
+      .then((results) => {
+        if (active) setCompareResults(results);
+      })
+      .catch((error) => {
+        if (active) {
+          setCompareResults([]);
+          setCompareError(error.message || "Could not compare these products.");
+        }
+      })
+      .finally(() => {
+        if (active) setCompareLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [compareProductIds, token]);
 
   return (
     <div className="space-y-4">
@@ -836,6 +1049,80 @@ function SalesTab({ data }) {
           </>
         ) : (
           <div className="px-6 py-10 text-sm text-slate-500">No sales trend data to chart yet.</div>
+        )}
+      </SectionCard>
+
+      <SectionCard
+        title="Sales by Series"
+        subtitle="Share of ordered quantity by series. Cancelled orders are excluded."
+        icon="finishedGoods"
+      >
+        {seriesSalesRows.length ? (
+          <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.6fr)] lg:p-6">
+            <div className="h-[380px] min-w-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={seriesSalesRows}
+                    dataKey="total_quantity"
+                    nameKey="series"
+                    cx="50%"
+                    cy="47%"
+                    innerRadius="42%"
+                    outerRadius="72%"
+                    paddingAngle={2}
+                    labelLine={false}
+                    label={({ percent }) =>
+                      Number(percent || 0) >= 0.03
+                        ? `${(Number(percent) * 100).toFixed(0)}%`
+                        : ""
+                    }
+                  >
+                    {seriesSalesRows.map((row, index) => (
+                      <Cell
+                        key={row.series}
+                        fill={getSeriesColor(index)}
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<SeriesSalesTooltip totalQuantity={seriesSalesTotal} />} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="grid max-h-[380px] content-start gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-1">
+              {seriesSalesRows.map((row, index) => {
+                const percentage = seriesSalesTotal > 0
+                  ? (Number(row.total_quantity || 0) / seriesSalesTotal) * 100
+                  : 0;
+                return (
+                  <div
+                    key={`series-summary-${row.series}`}
+                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <span
+                          className="h-3 w-3 shrink-0 rounded-full"
+                          style={{ backgroundColor: getSeriesColor(index) }}
+                        />
+                        <p className="truncate text-sm font-semibold text-slate-900">{row.series}</p>
+                      </div>
+                      <p className="shrink-0 text-sm font-bold text-slate-950">
+                        {percentage.toFixed(1)}%
+                      </p>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                      <div><p className="text-slate-400">Quantity</p><p className="font-semibold text-slate-800">{formatNumber(row.total_quantity)} pairs</p></div>
+                      <div><p className="text-slate-400">Orders</p><p className="font-semibold text-slate-800">{formatNumber(row.order_count)}</p></div>
+                      <div><p className="text-slate-400">Products</p><p className="font-semibold text-slate-800">{formatNumber(row.product_count)}</p></div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="px-6 py-10 text-sm text-slate-500">No series sales to chart yet.</div>
         )}
       </SectionCard>
 
@@ -923,52 +1210,245 @@ function SalesTab({ data }) {
       </SectionCard>
 
       <SectionCard
-        title="Individual Product Sales Trend"
-        subtitle={selectedProduct ? `Daily movement for ${selectedProduct.label}.` : "Select a product to see daily sales movement."}
+        title="Product Sales Performance"
+        subtitle={
+          selectedProductSummary
+            ? `${productName(selectedProductSummary)} · Day-wise sales · Last order ${formatDate(selectedProductSummary.last_order_at)}`
+            : "Search and select any sold product to see how it is performing."
+        }
         icon="orders"
         actions={
           productOptions.length ? (
-            <select
-              value={selectedProductId}
-              onChange={(event) => setSelectedProductId(event.target.value)}
-              className="h-9 min-w-[260px] rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-            >
-              {productOptions.map((product) => (
-                <option key={product.id} value={product.id}>
-                  {product.label}
-                </option>
-              ))}
-            </select>
+            <div className="grid w-full gap-2 sm:grid-cols-2 md:w-auto">
+              <input
+                type="search"
+                value={productSearch}
+                onChange={(event) => setProductSearch(event.target.value)}
+                placeholder="Search article, color or series…"
+                className="h-10 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 sm:min-w-[250px]"
+              />
+              <select
+                value={selectedProductId}
+                onChange={(event) => setSelectedProductId(event.target.value)}
+                className="h-10 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 sm:min-w-[260px]"
+              >
+                {selectableProductOptions.length ? (
+                  selectableProductOptions.map((product) => (
+                    <option key={product.id} value={product.id}>
+                      {product.label}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">No matching product</option>
+                )}
+              </select>
+            </div>
           ) : null
         }
       >
-        {selectedProductTrendRows.length ? (
+        {productPerformanceLoading ? (
+          <div className="px-6 py-10 text-sm text-slate-500">Loading product performance…</div>
+        ) : productPerformanceError ? (
+          <div className="px-6 py-10 text-sm text-red-600">{productPerformanceError}</div>
+        ) : selectedProductSummary ? (
           <>
             <ChartSummary
               items={[
-                { label: "Order Dates", value: formatNumber(selectedProductTrendRows.length) },
-                { label: "Orders", value: formatNumber(sumRows(selectedProductTrendRows, "order_count")) },
-                { label: "Qty Ordered", value: formatNumber(sumRows(selectedProductTrendRows, "total_quantity")) },
-                { label: "Last Order Date", value: selectedProductTrendRows.at(-1)?.day || "-" },
+                { label: "Qty Ordered", value: formatNumber(selectedProductSummary.total_quantity) },
+                { label: "Delivered", value: formatNumber(selectedProductSummary.delivered_quantity) },
+                { label: "Active Orders", value: formatNumber(selectedProductSummary.active_quantity) },
+                { label: "Current Stock", value: formatNumber(selectedProductSummary.current_stock) },
               ]}
             />
-            <ChartFrame height={360}>
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={selectedProductTrendRows} margin={{ top: 8, right: 36, bottom: 28, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="day" tick={{ fontSize: 12 }} angle={-30} textAnchor="end" interval="preserveStartEnd" height={56} />
-                  <YAxis yAxisId="orders" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                  <YAxis yAxisId="quantity" orientation="right" tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
-                  <Tooltip formatter={numberTooltip} />
-                  <Legend />
-                  <Line yAxisId="orders" type="monotone" dataKey="order_count" name="Orders" stroke="#4f46e5" strokeWidth={2} />
-                  <Line yAxisId="quantity" type="monotone" dataKey="total_quantity" name="Qty Ordered" stroke="#0f766e" strokeWidth={2} />
-                </LineChart>
-              </ResponsiveContainer>
-            </ChartFrame>
+            {selectedProductTrendRows.length ? (
+              <ChartFrame height={380}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={selectedProductTrendRows} margin={{ top: 8, right: 36, bottom: 20, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis
+                      dataKey="day"
+                      tick={{ fontSize: 12 }}
+                      angle={-30}
+                      textAnchor="end"
+                      interval="preserveStartEnd"
+                      height={58}
+                    />
+                    <YAxis tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                    <Tooltip formatter={numberTooltip} />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="total_quantity"
+                      name={`${selectedProductSummary.color || "Selected color"} ordered`}
+                      stroke={getProductLineColor(selectedProductSummary.color)}
+                      strokeWidth={3}
+                      activeDot={{ r: 5 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </ChartFrame>
+            ) : (
+              <div className="px-6 py-8 text-sm text-slate-500">
+                No day-wise sales were recorded for this product.
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-4 md:px-6">
+              {(productPerformance?.status_summary || [])
+                .filter((row) => row.status !== "CANCELLED")
+                .map((row) => (
+                <span
+                  key={row.status}
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700"
+                >
+                  {row.status}: {formatNumber(row.total_quantity)} pairs
+                </span>
+              ))}
+              <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700">
+                Cancelled: {formatNumber(selectedProductSummary.cancelled_quantity)} pairs
+              </span>
+            </div>
           </>
         ) : (
-          <div className="px-6 py-10 text-sm text-slate-500">No daily trend found for this product yet.</div>
+          <div className="px-6 py-10 text-sm text-slate-500">Select a product to view its sales performance.</div>
+        )}
+      </SectionCard>
+
+      <SectionCard
+        title="Compare Products"
+        subtitle="Compare day-wise sales for 2–4 exact product colors."
+        icon="finishedGoods"
+        actions={
+          <div className="grid w-full gap-2 sm:grid-cols-[minmax(190px,1fr)_minmax(230px,1fr)_auto] md:w-auto">
+            <input
+              type="search"
+              value={compareSearch}
+              onChange={(event) => setCompareSearch(event.target.value)}
+              placeholder="Search comparison product…"
+              className="h-10 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            />
+            <select
+              value={compareCandidateId}
+              onChange={(event) => setCompareCandidateId(event.target.value)}
+              className="h-10 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            >
+              {compareProductOptions.length ? (
+                compareProductOptions.map((product) => (
+                  <option key={product.id} value={product.id}>{product.label}</option>
+                ))
+              ) : (
+                <option value="">No matching product</option>
+              )}
+            </select>
+            <button
+              type="button"
+              disabled={!compareCandidateId || compareProductIds.length >= 4}
+              onClick={() => {
+                if (!compareCandidateId || compareProductIds.length >= 4) return;
+                setCompareProductIds((current) => [...current, compareCandidateId]);
+                setCompareSearch("");
+              }}
+              className="h-10 rounded-lg bg-indigo-600 px-4 text-sm font-bold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              Add
+            </button>
+          </div>
+        }
+      >
+        <div className="flex flex-wrap gap-2 border-b border-slate-100 px-4 py-4 md:px-6">
+          {compareProductIds.map((id, index) => {
+            const product = productOptions.find((option) => option.id === id);
+            return (
+              <span
+                key={`compare-chip-${id}`}
+                className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold text-slate-700"
+                style={{ borderColor: getSeriesColor(index), backgroundColor: `${getSeriesColor(index)}12` }}
+              >
+                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: getSeriesColor(index) }} />
+                {product?.label || `Product #${id}`}
+                <button
+                  type="button"
+                  onClick={() => setCompareProductIds((current) => current.filter((productId) => productId !== id))}
+                  className="ml-1 text-base leading-none text-slate-400 hover:text-red-600"
+                  aria-label={`Remove ${product?.label || `product ${id}`} from comparison`}
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
+          {!compareProductIds.length && (
+            <p className="text-sm text-slate-500">Add at least two products to start comparing.</p>
+          )}
+        </div>
+
+        {compareLoading ? (
+          <div className="px-6 py-10 text-sm text-slate-500">Loading product comparison…</div>
+        ) : compareError ? (
+          <div className="px-6 py-10 text-sm text-red-600">{compareError}</div>
+        ) : compareProductIds.length < 2 ? (
+          <div className="px-6 py-10 text-sm text-slate-500">Choose at least two products for comparison.</div>
+        ) : (
+          <>
+            {compareChartRows.length ? (
+              <ChartFrame height={420}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={compareChartRows} margin={{ top: 8, right: 28, bottom: 24, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis
+                      dataKey="day"
+                      tick={{ fontSize: 12 }}
+                      angle={-30}
+                      textAnchor="end"
+                      interval="preserveStartEnd"
+                      height={62}
+                    />
+                    <YAxis tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                    <Tooltip formatter={numberTooltip} />
+                    <Legend />
+                    {compareResults.map((result, index) => (
+                      <Line
+                        key={`compare-line-${result.id}`}
+                        type="monotone"
+                        dataKey={`product_${result.id}`}
+                        name={productName(result.data?.summary || {})}
+                        stroke={getSeriesColor(index)}
+                        strokeWidth={2.5}
+                        dot={false}
+                        activeDot={{ r: 5 }}
+                      />
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </ChartFrame>
+            ) : (
+              <div className="px-6 py-8 text-sm text-slate-500">These products have no day-wise sales to compare.</div>
+            )}
+
+            <div className="grid gap-3 border-t border-slate-100 p-4 sm:grid-cols-2 xl:grid-cols-4 md:p-6">
+              {compareResults.map((result, index) => {
+                const summary = result.data?.summary || {};
+                return (
+                  <article key={`compare-summary-${result.id}`} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-start gap-2">
+                      <span className="mt-1 h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: getSeriesColor(index) }} />
+                      <div className="min-w-0">
+                        <h3 className="truncate text-sm font-bold text-slate-950">{productName(summary)}</h3>
+                        <p className="text-xs text-slate-500">{getSeriesName(summary.sole_code)}</p>
+                      </div>
+                    </div>
+                    <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                      <div><dt className="text-slate-400">Ordered</dt><dd className="font-bold text-slate-900">{formatNumber(summary.total_quantity)}</dd></div>
+                      <div><dt className="text-slate-400">Delivered</dt><dd className="font-bold text-slate-900">{formatNumber(summary.delivered_quantity)}</dd></div>
+                      <div><dt className="text-slate-400">Active</dt><dd className="font-bold text-slate-900">{formatNumber(summary.active_quantity)}</dd></div>
+                      <div><dt className="text-slate-400">Cancelled</dt><dd className="font-bold text-red-600">{formatNumber(summary.cancelled_quantity)}</dd></div>
+                      <div><dt className="text-slate-400">Orders</dt><dd className="font-bold text-slate-900">{formatNumber(summary.order_count)}</dd></div>
+                      <div><dt className="text-slate-400">Stock</dt><dd className="font-bold text-slate-900">{formatNumber(summary.current_stock)}</dd></div>
+                    </dl>
+                  </article>
+                );
+              })}
+            </div>
+          </>
         )}
       </SectionCard>
 
@@ -1010,7 +1490,116 @@ function SalesTab({ data }) {
   );
 }
 
-function DealersTab({ data }) {
+function DealersTab({ data, token }) {
+  const [analysisMode, setAnalysisMode] = useState("ALL");
+  const dealerOptions =
+    analysisMode === "OFFERS"
+      ? data?.offer_dealer_options || []
+      : data?.dealer_options || [];
+  const [dealerSearch, setDealerSearch] = useState("");
+  const [selectedDealerIndex, setSelectedDealerIndex] = useState("");
+  const [dealerDetail, setDealerDetail] = useState(null);
+  const [dealerDetailLoading, setDealerDetailLoading] = useState(false);
+  const [dealerDetailError, setDealerDetailError] = useState("");
+  const [productStatus, setProductStatus] = useState("ALL");
+  const [productSearch, setProductSearch] = useState("");
+  const selectedDealer = dealerOptions[Number(selectedDealerIndex)] || null;
+
+  const filteredDealerOptions = useMemo(() => {
+    const query = dealerSearch.trim().toLowerCase();
+    if (!query) return dealerOptions;
+    return dealerOptions.filter((row) =>
+      [row.dealer_name, row.dealer_email, row.dealer_role]
+        .some((value) => String(value || "").toLowerCase().includes(query))
+    );
+  }, [dealerOptions, dealerSearch]);
+
+  useEffect(() => {
+    if (selectedDealerIndex || !dealerOptions.length) return;
+    setSelectedDealerIndex("0");
+  }, [dealerOptions, selectedDealerIndex]);
+
+  useEffect(() => {
+    const selected = dealerOptions[Number(selectedDealerIndex)];
+    if (!selected || !token) {
+      setDealerDetail(null);
+      return;
+    }
+
+    let active = true;
+    setDealerDetailLoading(true);
+    setDealerDetailError("");
+    api.getDealerAnalytics(
+      {
+        dealer_id: selected.dealer_id,
+        mode: analysisMode === "OFFERS" ? "offers" : "all",
+      },
+      token
+    )
+      .then((result) => {
+        if (active) setDealerDetail(result.data || null);
+      })
+      .catch((error) => {
+        if (active) setDealerDetailError(error.message || "Could not load dealer analysis.");
+      })
+      .finally(() => {
+        if (active) setDealerDetailLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [analysisMode, dealerOptions, selectedDealerIndex, token]);
+
+  useEffect(() => {
+    setSelectedDealerIndex("");
+    setDealerDetail(null);
+    setProductStatus("ALL");
+    setProductSearch("");
+  }, [analysisMode]);
+
+  const dealerProducts = useMemo(() => {
+    const query = productSearch.trim().toLowerCase();
+    return (dealerDetail?.products || []).filter((row) => {
+      const matchesStatus = productStatus === "ALL" || row.status === productStatus;
+      const matchesSearch = !query || [row.article_code, row.sole_code, row.color, row.size]
+        .some((value) => String(value || "").toLowerCase().includes(query));
+      return matchesStatus && matchesSearch;
+    });
+  }, [dealerDetail?.products, productSearch, productStatus]);
+  const dealerTotalCartons = (dealerDetail?.products || []).reduce(
+    (sum, row) => sum + Number(row.ordered_cartons || 0),
+    0
+  );
+  const dealerStatusCounts = (dealerDetail?.products || []).reduce((acc, row) => {
+    acc[row.status] = Number(acc[row.status] || 0) + 1;
+    return acc;
+  }, {});
+  const displayedAccountInterest = useMemo(
+    () =>
+      (data?.account_product_interest || []).filter(
+        (row) =>
+          Number(row.user_id) === Number(selectedDealer?.dealer_id) &&
+          (
+            analysisMode !== "OFFERS" ||
+            ["OFFERS", "OFFER_GALLERY"].includes(String(row.surface || "").toUpperCase())
+          )
+      ),
+    [analysisMode, data?.account_product_interest, selectedDealer?.dealer_id]
+  );
+  const displayedSearchTerms = useMemo(
+    () =>
+      (data?.account_search_terms || []).filter(
+        (row) =>
+          Number(row.user_id) === Number(selectedDealer?.dealer_id) &&
+          (
+            analysisMode !== "OFFERS" ||
+            ["OFFERS", "OFFER_GALLERY"].includes(String(row.surface || "").toUpperCase())
+          )
+      ),
+    [analysisMode, data?.account_search_terms, selectedDealer?.dealer_id]
+  );
+
   const monthlyTopRows = useMemo(
     () => (data?.dealer_monthly_order_trend || []).slice(0, 50),
     [data?.dealer_monthly_order_trend]
@@ -1075,6 +1664,253 @@ function DealersTab({ data }) {
 
   return (
     <div className="space-y-4">
+      <SectionCard
+        title={analysisMode === "OFFERS" ? "Dealer Offer Product Intelligence" : "Dealer Product Intelligence"}
+        subtitle={
+          analysisMode === "OFFERS"
+            ? "Choose a dealer account to analyse its offer orders and the customer shops it supplied."
+            : "Choose a dealer account to see what it sells, misses, stopped ordering, and may take next."
+        }
+        icon="users"
+      >
+        <div className="grid gap-3 border-b border-slate-200 p-4 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.4fr)]">
+          <select
+            value={analysisMode}
+            onChange={(event) => setAnalysisMode(event.target.value)}
+            className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+          >
+            <option value="ALL">All products</option>
+            <option value="OFFERS">Offer products only</option>
+          </select>
+          <input
+            value={dealerSearch}
+            onChange={(event) => setDealerSearch(event.target.value)}
+            placeholder="Search dealer name or email..."
+            className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+          />
+          <select
+            value={selectedDealerIndex}
+            onChange={(event) => setSelectedDealerIndex(event.target.value)}
+            className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+          >
+            {!filteredDealerOptions.length ? <option value="">No dealer found</option> : null}
+            {filteredDealerOptions.map((dealer) => {
+              const originalIndex = dealerOptions.indexOf(dealer);
+              return (
+                <option key={`${dealer.dealer_id}-${dealer.dealer_email}-${originalIndex}`} value={originalIndex}>
+                  {dealer.dealer_name}
+                  {dealer.dealer_email ? ` · ${dealer.dealer_email}` : ""}
+                  {` · ${formatNumber(dealer.customer_count)} customers`}
+                  {` · ${formatNumber(dealer.total_quantity)} ${analysisMode === "OFFERS" ? "offer pairs ordered" : "pairs ordered"}`}
+                </option>
+              );
+            })}
+          </select>
+        </div>
+
+        {dealerDetailLoading ? (
+          <div className="px-6 py-12 text-sm text-slate-500">Loading dealer product analysis...</div>
+        ) : dealerDetailError ? (
+          <div className="px-6 py-8 text-sm font-semibold text-red-600">{dealerDetailError}</div>
+        ) : dealerDetail ? (
+          <div className="space-y-5 p-4">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <StatCard label="Orders" value={formatNumber(dealerDetail.summary?.order_count)} icon="orders" />
+              <StatCard label="Ordered Pairs" value={formatNumber(dealerDetail.summary?.total_quantity)} icon="finishedGoods" />
+              <StatCard label="Ordered CTN" value={formatNumber(dealerTotalCartons)} icon="stock" />
+              <StatCard label="Cancelled Pairs" value={formatNumber(dealerDetail.summary?.cancelled_quantity)} tone="alert" icon="orders" />
+              <StatCard label="Cancellation Rate" value={`${Number(dealerDetail.summary?.cancellation_rate || 0).toFixed(1)}%`} tone="alert" icon="users" />
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-3">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 xl:col-span-2">
+                <h3 className="font-bold text-slate-950">Monthly sales trend</h3>
+                <p className="text-sm text-slate-500">Non-cancelled quantities during the last 12 months.</p>
+                <div className="mt-3 h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={dealerDetail.monthly_trend || []} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                      <YAxis tickFormatter={formatNumber} tick={{ fontSize: 12 }} />
+                      <Tooltip content={<WorkflowTooltip />} />
+                      <Line type="monotone" dataKey="total_quantity" name="Ordered pairs" stroke="#4f46e5" strokeWidth={3} dot={{ r: 4 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <div className="rounded-xl border border-slate-200 p-4">
+                  <h3 className="font-bold text-slate-950">Best series</h3>
+                  <div className="mt-3 space-y-2">
+                    {(dealerDetail.best_series || []).slice(0, 5).map((row) => (
+                      <div key={row.name} className="flex justify-between gap-3 text-sm">
+                        <span className="truncate text-slate-600">{getSeriesName(row.name)}</span>
+                        <strong>{formatNumber(row.total_quantity)} pairs</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 p-4">
+                  <h3 className="font-bold text-slate-950">Best colors</h3>
+                  <div className="mt-3 space-y-2">
+                    {(dealerDetail.best_colors || []).slice(0, 5).map((row) => (
+                      <div key={row.name} className="flex justify-between gap-3 text-sm">
+                        <span className="truncate text-slate-600">{row.name}</span>
+                        <strong>{formatNumber(row.total_quantity)} pairs</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h3 className="font-bold text-slate-950">Customers supplied by this dealer</h3>
+              <p className="mb-3 text-sm text-slate-500">
+                Customer shops are shown under the dealer account; they are not treated as dealers.
+              </p>
+              <DataTable
+                rows={dealerDetail.customers || []}
+                emptyTitle="No customer orders for this dealer"
+                columns={[
+                  { key: "customer_name", label: "Customer shop" },
+                  { key: "customer_phone", label: "Phone" },
+                  { key: "order_count", label: "Orders", render: (row) => formatNumber(row.order_count) },
+                  { key: "total_quantity", label: "Pairs", render: (row) => formatNumber(row.total_quantity) },
+                  { key: "cancelled_quantity", label: "Cancelled", render: (row) => formatNumber(row.cancelled_quantity) },
+                  { key: "last_order_at", label: "Last order", render: (row) => row.last_order_at ? formatDate(row.last_order_at) : "-" },
+                ]}
+              />
+            </div>
+
+            <div>
+              <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <h3 className="font-bold text-slate-950">Product performance</h3>
+                  <p className="text-sm text-slate-500">Statuses explain current stock and this dealer's ordering pattern.</p>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <input
+                    value={productSearch}
+                    onChange={(event) => setProductSearch(event.target.value)}
+                    placeholder="Search product, series or color..."
+                    className="h-10 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-indigo-400"
+                  />
+                  <select
+                    value={productStatus}
+                    onChange={(event) => setProductStatus(event.target.value)}
+                    className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold"
+                  >
+                    <option value="ALL">All statuses</option>
+                    {["GREAT", "LOW SALES", "NOT TAKEN", "STOPPED ORDERING", "OUT OF STOCK"].map((status) => (
+                      <option key={status} value={status}>{status} ({formatNumber(dealerStatusCounts[status] || 0)})</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <DataTable
+                rows={dealerProducts}
+                emptyTitle="No products match this filter"
+                exportFilename={`dealer-product-analysis-${dealerDetail.dealer?.name || "dealer"}`}
+                columns={[
+                  { key: "article_code", label: "Product" },
+                  { key: "sole_code", label: "Series", render: (row) => getSeriesName(row.sole_code) },
+                  { key: "color", label: "Color" },
+                  ...(analysisMode === "OFFERS" ? [{
+                    key: "offer_state",
+                    label: "Offer",
+                    render: (row) => <StatusBadge tone={Number(row.is_active_offer) === 1 ? "success" : "neutral"}>{Number(row.is_active_offer) === 1 ? "ACTIVE" : "ENDED"}</StatusBadge>,
+                  }] : []),
+                  {
+                    key: "ordered",
+                    label: analysisMode === "OFFERS" ? "Taken / shown" : "Taken",
+                    exportValue: (row) =>
+                      analysisMode === "OFFERS"
+                        ? `${row.ordered_cartons} CTN / ${row.total_quantity} pairs taken out of ${row.assigned_cartons || 0} CTN / ${row.assigned_quantity || 0} pairs shown`
+                        : `${row.ordered_cartons} CTN / ${row.total_quantity} pairs`,
+                    render: (row) => (
+                      <div className="min-w-36">
+                        <strong>{formatNumber(row.ordered_cartons)} CTN</strong>
+                        <p className="text-xs text-slate-500">{formatNumber(row.total_quantity)} pairs taken</p>
+                        {analysisMode === "OFFERS" ? (
+                          row.assigned_quantity > 0 ? (
+                            <p className="mt-1 border-t border-slate-200 pt-1 text-xs font-semibold text-indigo-700">
+                              out of {formatNumber(row.assigned_cartons)} CTN · {formatNumber(row.assigned_quantity)} pairs shown
+                            </p>
+                          ) : (
+                            <p className="mt-1 text-xs text-slate-400">No saved shown-limit snapshot</p>
+                          )
+                        ) : null}
+                      </div>
+                    ),
+                  },
+                  { key: "order_count", label: "Orders", render: (row) => formatNumber(row.order_count) },
+                  { key: "last_order_at", label: "Last order", render: (row) => row.last_order_at ? formatDate(row.last_order_at) : "-" },
+                  { key: "status", label: "Status", render: (row) => <StatusBadge tone={row.status === "GREAT" ? "success" : row.status === "OUT OF STOCK" ? "danger" : row.status === "LOW SALES" ? "warning" : "neutral"}>{row.status}</StatusBadge> },
+                  { key: "reason", label: "Why / evidence" },
+                ]}
+              />
+            </div>
+
+            <div>
+              <h3 className="font-bold text-slate-950">Suggested products to discuss with this dealer</h3>
+              <p className="mb-3 text-sm text-slate-500">In-stock products ranked by demand from other dealers.</p>
+              <DataTable
+                rows={dealerDetail.suggestions || []}
+                emptyTitle="No product suggestions"
+                columns={[
+                  { key: "article_code", label: "Product" },
+                  { key: "sole_code", label: "Series", render: (row) => getSeriesName(row.sole_code) },
+                  { key: "color", label: "Color" },
+                  { key: "status", label: "Dealer status" },
+                  { key: "global_quantity", label: "Other dealer demand", render: (row) => `${formatNumber(row.global_quantity)} pairs` },
+                  { key: "current_stock", label: "Stock", render: (row) => `${formatNumber(row.current_stock)} pairs` },
+                  { key: "reason", label: "Recommendation reason" },
+                ]}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="px-6 py-10 text-sm text-slate-500">Select a dealer to view product intelligence.</div>
+        )}
+      </SectionCard>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="Most Interested Products By Account" subtitle="Products opened or added from Gallery, Offers, or Our Products." icon="finishedGoods">
+          <DataTable
+            rows={displayedAccountInterest}
+            emptyTitle={data?.product_interest_tracking_ready ? "No product interest recorded yet" : "Run the product-interest SQL migration"}
+            columns={[
+              { key: "account_name", label: "Account" },
+              { key: "email", label: "Email" },
+              { key: "article_code", label: "Product" },
+              { key: "color", label: "Color" },
+              { key: "surface", label: "Page" },
+              { key: "interest_count", label: "Interest", render: (row) => formatNumber(row.interest_count) },
+              { key: "converted_order_count", label: "Orders after interest", render: (row) => formatNumber(row.converted_order_count) },
+              { key: "converted_quantity", label: "Ordered pairs", render: (row) => formatNumber(row.converted_quantity) },
+              { key: "account_conversion_rate", label: "Account conversion", render: (row) => `${Number(row.account_conversion_rate || 0).toFixed(1)}%` },
+              { key: "conversion", label: "Conversion", render: (row) => <StatusBadge tone={Number(row.converted_order_count || 0) > 0 ? "success" : "warning"}>{Number(row.converted_order_count || 0) > 0 ? "ORDERED" : "NOT ORDERED"}</StatusBadge> },
+              { key: "last_interested_at", label: "Last interest", render: (row) => formatDate(row.last_interested_at) },
+            ]}
+          />
+        </SectionCard>
+        <SectionCard title="Most Searched Terms By Account" subtitle="Debounced searches, recorded after the user stops typing." icon="users">
+          <DataTable
+            rows={displayedSearchTerms}
+            emptyTitle={data?.product_interest_tracking_ready ? "No searches recorded yet" : "Run the product-interest SQL migration"}
+            columns={[
+              { key: "account_name", label: "Account" },
+              { key: "email", label: "Email" },
+              { key: "search_term", label: "Search" },
+              { key: "surface", label: "Page" },
+              { key: "search_count", label: "Searches", render: (row) => formatNumber(row.search_count) },
+              { key: "last_searched_at", label: "Last searched", render: (row) => formatDate(row.last_searched_at) },
+            ]}
+          />
+        </SectionCard>
+      </div>
+
       <div className="grid gap-4 xl:grid-cols-2">
         <SectionCard title="Dealer Quantity Ranking" subtitle="Top dealers by total quantity ordered." icon="users">
           {dealerQuantityRows.length ? (
@@ -1634,8 +2470,8 @@ export default function AnalyticsPage() {
     if (error && !activeData) return <ErrorState message={error} onRetry={loadTab} />;
     if (activeTab === "inventory") return <InventoryTab data={activeData} />;
     if (activeTab === "production") return <ProductionTab data={activeData} />;
-    if (activeTab === "sales") return <SalesTab data={activeData} />;
-    if (activeTab === "dealers") return <DealersTab data={activeData} />;
+    if (activeTab === "sales") return <SalesTab data={activeData} token={token} />;
+    if (activeTab === "dealers") return <DealersTab data={activeData} token={token} />;
     if (activeTab === "users") return <UsersTab data={activeData} />;
     if (activeTab === "support") return <SupportTab data={activeData} />;
     return <DashboardTab data={activeData} />;

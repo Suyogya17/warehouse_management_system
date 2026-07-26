@@ -3,24 +3,38 @@ const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 30000);
 
 export const APP_BASE_URL = API_BASE_URL.replace(/\/api$/, "");
 
-let activeLoadingRequests = 0;
+const activeLoadingRequests = {
+  overlay: 0,
+  progress: 0,
+};
 
-const announceApiLoading = () => {
+const announceApiLoading = (mode) => {
   window.dispatchEvent(
-    new CustomEvent("nepcha:api-loading", {
-      detail: { loading: activeLoadingRequests > 0 },
-    })
+    new CustomEvent(
+      mode === "overlay" ? "nepcha:api-loading" : "nepcha:api-progress",
+      {
+        detail: { loading: activeLoadingRequests[mode] > 0 },
+      }
+    )
   );
 };
 
-const beginApiLoading = () => {
-  activeLoadingRequests += 1;
-  announceApiLoading();
+const beginApiLoading = (mode) => {
+  if (!mode) return;
+  activeLoadingRequests[mode] += 1;
+  announceApiLoading(mode);
 };
 
-const endApiLoading = () => {
-  activeLoadingRequests = Math.max(0, activeLoadingRequests - 1);
-  announceApiLoading();
+const endApiLoading = (mode) => {
+  if (!mode) return;
+  activeLoadingRequests[mode] = Math.max(0, activeLoadingRequests[mode] - 1);
+  announceApiLoading(mode);
+};
+
+const getLoadingMode = (showLoader) => {
+  if (showLoader === false) return null;
+  if (showLoader === true) return "overlay";
+  return "progress";
 };
 
 const buildQueryString = (params = {}) =>
@@ -63,9 +77,9 @@ export const apiRequest = async (path, options = {}, token) => {
   const isFormData = options.body instanceof FormData;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs || API_TIMEOUT_MS);
-  const shouldShowLoader = options.showLoader !== false;
+  const loadingMode = getLoadingMode(options.showLoader);
 
-  if (shouldShowLoader) beginApiLoading();
+  beginApiLoading(loadingMode);
 
   try {
     const { timeoutMs, showLoader, ...fetchOptions } = options;
@@ -87,7 +101,7 @@ export const apiRequest = async (path, options = {}, token) => {
     throw error;
   } finally {
     window.clearTimeout(timeout);
-    if (shouldShowLoader) endApiLoading();
+    endApiLoading(loadingMode);
   }
 };
 
@@ -133,6 +147,7 @@ export const api = {
     apiRequest("/auth/login", {
       method: "POST",
       body: JSON.stringify(payload),
+      showLoader: true,
     }),
 
   registerUser: (payload, token) =>
@@ -506,6 +521,24 @@ deleteStockAdjustment: (id, token) =>
   },
 
   getAnalytics: (section, token) => apiRequest(`/analytics/${section}`, {}, token),
+  getProductSalesAnalytics: (id, token) =>
+    apiRequest(`/analytics/sales/product/${id}`, {}, token),
+  getDealerAnalytics: (params, token) => {
+    const query = buildQueryString(params);
+    return apiRequest(`/analytics/dealers/detail${query ? `?${query}` : ""}`, {}, token);
+  },
+  trackProductSearch: (payload, token) =>
+    apiRequest(
+      "/product-interest/search",
+      { method: "POST", body: JSON.stringify(payload), showLoader: false },
+      token
+    ),
+  trackProductInterest: (payload, token) =>
+    apiRequest(
+      "/product-interest/product",
+      { method: "POST", body: JSON.stringify(payload), showLoader: false },
+      token
+    ),
 
   getActivityLogs: (token, params = {}) => {
     const query = buildQueryString(params);

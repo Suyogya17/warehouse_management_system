@@ -233,7 +233,7 @@ export default function ImportTrackingPage() {
   const [orders, setOrders] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [report, setReport] = useState(null);
-  const [filters, setFilters] = useState({ search: "", date_from: "", date_to: "", is_test: "1" });
+  const [filters, setFilters] = useState({ search: "", date_from: "", date_to: "", is_test: "0" });
   const [slip, setSlip] = useState(emptySlip);
   const [slipItems, setSlipItems] = useState([createSlipItem()]);
   const [editingId, setEditingId] = useState(null);
@@ -277,9 +277,9 @@ export default function ImportTrackingPage() {
     setLoading(true);
     try {
       const [ordersResult, materialsResult, reportResult] = await Promise.all([
-        api.getImportOrders(token, { ...filters, limit: 300 }),
+        api.getImportOrders(token, { ...filters, is_test: "0", limit: 300 }),
         api.getRawMaterials(token),
-        api.getImportReport(token, filters),
+        api.getImportReport(token, { ...filters, is_test: "0" }),
       ]);
 
       setOrders(ordersResult.data || []);
@@ -332,7 +332,6 @@ export default function ImportTrackingPage() {
             return {
               id: `${order.id}-${item.id}`,
               order_number: order.order_number,
-              mode: Number(order.is_test ?? 1) === 1 ? "Test" : "Real",
               material_name: item.material_name,
               article_code: item.article_code,
               category: item.category,
@@ -397,27 +396,27 @@ export default function ImportTrackingPage() {
       : Number(splitModal.item.ordered_qty || 0)
     : 0;
   const splitRemainingQty = Math.max(splitMaxQty - splitTotalQty, 0);
+  const splitReceivedQty = Number(splitModal?.item?.received_qty || 0);
+  const splitPostedQty = splitRows.reduce(
+    (sum, row) => sum + (row.stock_added_at ? Number(row.quantity || 0) : 0),
+    0
+  );
+  const splitReceivedAvailable = Math.max(splitReceivedQty - splitPostedQty, 0);
+  const splitAllocationLocked = splitRows.some((row) => Boolean(row.stock_added_at));
 
   const openViewingOrder = (order) => {
     setViewingItemsPage(1);
     setViewingOrder(order);
   };
 
-  const setSlipMode = (isTestMode) => {
-    setFilters((current) => ({ ...current, is_test: isTestMode ? "1" : "0" }));
-    setViewingOrder(null);
-    setSplitModal(null);
-    setShowSlipForm(false);
-    setEditingId(null);
-    setViewingItemsPage(1);
-    setReceivedRowsPage(1);
-  };
-
   const createSplitRow = (item = {}) => ({
     client_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     id: item.id || null,
     raw_material_id: item.raw_material_id || null,
+    raw_material_name: item.raw_material_name || "",
+    raw_material_stock: Number(item.raw_material_stock || 0),
     stock_added_at: item.stock_added_at || null,
+    stock_added_by_name: item.stock_added_by_name || "",
     product_article: item.product_article || "",
     product_name: item.product_name || "",
     color: item.color || "",
@@ -493,10 +492,16 @@ export default function ImportTrackingPage() {
       );
 
       const refreshedOrder = await api.getImportOrder(splitModal.order.id, token);
-      showToast({ tone: "success", title: "Split saved", message: "Article breakdown was saved for this material." });
-      setViewingOrder(refreshedOrder.data || null);
-      setSplitModal(null);
-      setSplitRows([]);
+      const refreshed = refreshedOrder.data;
+      const refreshedItem = refreshed?.items?.find((item) => Number(item.id) === Number(splitModal.item.id));
+      showToast({
+        tone: "success",
+        title: "Allocation saved",
+        message: "The raw material allocation was saved. Stock has not changed.",
+      });
+      setViewingOrder(refreshed || null);
+      setSplitModal(refreshedItem ? { order: refreshed, item: refreshedItem } : null);
+      setSplitRows((refreshedItem?.splits || []).map((split) => createSplitRow(split)));
       await load();
     } catch (error) {
       showToast({
@@ -511,6 +516,11 @@ export default function ImportTrackingPage() {
 
   const addSplitStockToRawMaterial = async (row) => {
     if (!splitModal || !row.id || row.stock_added_at || addingSplitStockIds.includes(row.id)) return;
+    const currentStock = Number(row.raw_material_stock || 0);
+    const quantity = Number(row.quantity || 0);
+    if (!window.confirm(
+      `Add ${formatNumber(quantity)} ${splitModal.item.unit || "pairs"} to ${row.raw_material_name || row.product_name || "this raw material"}?\n\nCurrent stock: ${formatNumber(currentStock)}\nNew stock: ${formatNumber(currentStock + quantity)}\n\nThis can only be performed once.`
+    )) return;
     setAddingSplitStockIds((current) => [...current, row.id]);
     try {
       const result = await api.addImportSplitToRawMaterial(
@@ -524,7 +534,11 @@ export default function ImportTrackingPage() {
       const refreshedItem = refreshed?.items?.find((item) => Number(item.id) === Number(splitModal.item.id));
       setSplitModal(refreshedItem ? { order: refreshed, item: refreshedItem } : null);
       setSplitRows((refreshedItem?.splits || []).map((split) => createSplitRow(split)));
-      showToast({ tone: "success", title: "Added to raw material", message: result.message || `${formatNumber(row.quantity)} added to raw material stock.` });
+      showToast({
+        tone: "success",
+        title: "Added to stock",
+        message: result.message || `${formatNumber(row.quantity)} added to raw material stock.`,
+      });
       await load();
     } catch (error) {
       showToast({ tone: "error", title: "Stock was not added", message: error.message || "Could not add this split to raw material stock." });
@@ -644,7 +658,7 @@ export default function ImportTrackingPage() {
       order_date: slip.order_date,
       expected_delivery_date: slip.expected_delivery_date,
       status: "ORDERED",
-      is_test: filters.is_test !== "0",
+      is_test: false,
       notes: slip.notes,
       items,
       containers: slip.container_number
@@ -864,7 +878,6 @@ export default function ImportTrackingPage() {
     exportOrders.flatMap((order) =>
       (order.items || []).map((item) => ({
         "Order No": order.order_number,
-        Mode: Number(order.is_test ?? 1) === 1 ? "Test" : "Real",
         Supplier: order.supplier_name,
         By: order.agent_name,
         "Transportation": order.shipping_method || "",
@@ -914,10 +927,9 @@ export default function ImportTrackingPage() {
     XLSX.writeFile(workbook, `${fileOrder}-items.xlsx`);
   };
 
-  const renderCard = (order) => {
+  const renderCard = (order, serialNumber) => {
     const items = order.items || [];
     const container = firstContainer(order);
-    const isTest = Number(order.is_test ?? 1) === 1;
     const stockStatus = getStockEntryStatus(order);
     const totalOrdered = items.reduce((sum, item) => sum + Number(item.ordered_qty || 0), 0);
     const totalReceived = items.reduce((sum, item) => sum + Number(item.received_qty || 0), 0);
@@ -945,14 +957,16 @@ export default function ImportTrackingPage() {
         }`}
       >
         <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-slate-900">{order.order_number}</p>
-            <p className="truncate text-xs text-slate-500">{order.supplier_name}</p>
+          <div className="flex min-w-0 items-start gap-2">
+            <span className="shrink-0 rounded-md bg-slate-200 px-2 py-1 text-[11px] font-bold text-slate-600">
+              S.N. {serialNumber}
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-slate-900">{order.order_number}</p>
+              <p className="truncate text-xs text-slate-500">{order.supplier_name}</p>
+            </div>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
-            <StatusBadge tone={Number(order.is_test ?? 1) === 1 ? "warning" : "success"}>
-              {Number(order.is_test ?? 1) === 1 ? "TEST" : "REAL"}
-            </StatusBadge>
             <StatusBadge tone={statusTone[order.status] || "neutral"}>{label(order.status)}</StatusBadge>
             <StatusBadge tone={stockStatus.tone}>{stockStatus.label}</StatusBadge>
           </div>
@@ -1030,39 +1044,15 @@ export default function ImportTrackingPage() {
         <StatCard label="Received Qty" value={formatNumber(summary.received_qty)} icon="check" />
       </div>
 
-      <SectionCard title="Start" subtitle="Choose the board, then create or export slips." icon="permission">
+      <SectionCard title="Start" subtitle="Create and export real import slips." icon="permission">
         <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <div className="inline-flex w-full rounded-xl border border-slate-200 bg-slate-50 p-1 sm:w-auto">
-              <button
-                type="button"
-                onClick={() => setSlipMode(true)}
-                className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition sm:flex-none ${
-                  filters.is_test === "1" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-white"
-                }`}
-              >
-                Test slips
-              </button>
-              <button
-                type="button"
-                onClick={() => setSlipMode(false)}
-                className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition sm:flex-none ${
-                  filters.is_test === "0" ? "bg-purple-600 text-white shadow-sm" : "text-slate-600 hover:bg-purple"
-                }`}
-              >
-                Real slips
-              </button>
-            </div>
-            <p className="text-sm text-slate-500">
-              {filters.is_test === "1"
-                ? "You are working with test slips."
-                : "You are working with real import records."}
-            </p>
-          </div>
+          <p className="text-sm text-slate-500">
+            All new slips are real import records and can update raw-material stock when received.
+          </p>
           <div className="flex flex-col gap-2 sm:flex-row">
             {canCreateImport ? (
               <Button icon="plus" onClick={() => setShowSlipForm((open) => !open)}>
-                {showSlipForm ? "Close slip form" : `New ${filters.is_test === "1" ? "test" : "real"} slip`}
+                {showSlipForm ? "Close slip form" : "New import slip"}
               </Button>
             ) : null}
             <Button variant="secondary" icon="download" onClick={exportReport} disabled={!orders.length}>
@@ -1340,9 +1330,9 @@ export default function ImportTrackingPage() {
                         if (!canEditImport) return;
                         moveOrder(event.dataTransfer.getData("text/plain"), column.key);
                       }}
-                      className="min-h-[420px] w-[280px] shrink-0 rounded-2xl border border-slate-200 bg-slate-50"
+                      className="flex h-[70vh] min-h-[420px] max-h-[720px] w-[280px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-50"
                     >
-                      <div className="border-b border-slate-200 px-3 py-3">
+                      <div className="sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-slate-50/95 px-3 py-3 backdrop-blur">
                         <div className="flex items-center justify-between gap-2">
                           <div>
                             <p className="text-sm font-semibold text-slate-900">{column.title}</p>
@@ -1353,9 +1343,9 @@ export default function ImportTrackingPage() {
                           </span>
                         </div>
                       </div>
-                      <div className="space-y-3 p-3">
+                      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-auto p-3">
                         {columnOrders.length ? (
-                          columnOrders.map(renderCard)
+                          columnOrders.map((order, index) => renderCard(order, index + 1))
                         ) : (
                           <div className="rounded-xl border border-dashed border-slate-200 bg-white/70 px-3 py-6 text-center text-xs text-slate-400">
                             Drop slips here
@@ -1389,7 +1379,7 @@ export default function ImportTrackingPage() {
                           {row.order_number} · {row.supplier_name || "-"}
                         </p>
                       </div>
-                      <StatusBadge tone={row.mode === "Test" ? "warning" : "success"}>{row.mode}</StatusBadge>
+                      <StatusBadge tone={row.remaining_qty > 0 ? "warning" : "success"}>{row.status}</StatusBadge>
                     </div>
                     <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
                       <p>Article: <span className="font-medium text-slate-800">{row.article_code || "-"}</span></p>
@@ -1411,7 +1401,7 @@ export default function ImportTrackingPage() {
                 <table className="min-w-full divide-y divide-slate-200 text-sm">
                   <thead className="bg-slate-50">
                     <tr>
-                      {["Mode", "Order", "Material", "Article", "Category", "Color", "Size", "CTN", "QTY/CTN", "Qty", "Unit", "Rate", "Amount", "Creditor", "Received", "Damaged", "Short", "Remaining", "Supplier", "Container", "Note", "Status"].map((heading) => (
+                      {["Order", "Material", "Article", "Category", "Color", "Size", "CTN", "QTY/CTN", "Qty", "Unit", "Rate", "Amount", "Creditor", "Received", "Damaged", "Short", "Remaining", "Supplier", "Container", "Note", "Status"].map((heading) => (
                         <th key={heading} className="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                           {heading}
                         </th>
@@ -1421,9 +1411,6 @@ export default function ImportTrackingPage() {
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {paginatedReceivedRows.map((row) => (
                       <tr key={row.id} className="hover:bg-slate-50">
-                        <td className="whitespace-nowrap px-3 py-3">
-                          <StatusBadge tone={row.mode === "Test" ? "warning" : "success"}>{row.mode}</StatusBadge>
-                        </td>
                         <td className="whitespace-nowrap px-3 py-3 font-medium text-slate-900">{row.order_number}</td>
                         <td className="min-w-[180px] px-3 py-3 text-slate-700">{row.material_name}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{row.article_code || "-"}</td>
@@ -1736,9 +1723,9 @@ export default function ImportTrackingPage() {
           <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200">
             <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 p-5">
               <div>
-                <p className="text-base font-semibold text-slate-900">Split {splitModal.item.material_name}</p>
+                <p className="text-base font-semibold text-slate-900">Allocate {splitModal.item.material_name}</p>
                 <p className="mt-1 text-sm text-slate-500">
-                  Each row creates or links its own raw material. Total {formatNumber(splitTotalQty)} / {formatNumber(splitMaxQty)} {splitModal.item.unit || ""}.
+                  Step 1 saves the product breakdown. Step 2 posts received quantities into usable stock.
                 </p>
               </div>
               <Button variant="secondary" onClick={() => setSplitModal(null)}>
@@ -1747,11 +1734,36 @@ export default function ImportTrackingPage() {
             </div>
 
             <div className="max-h-[70vh] space-y-4 overflow-auto p-5">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3">
+                  <p className="text-xs font-bold uppercase tracking-wide text-indigo-600">Step 1 · Save allocation</p>
+                  <p className="mt-1 text-sm text-indigo-950">
+                    Creates or links each raw material and records its allocated quantity. Stock does not change.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                  <p className="text-xs font-bold uppercase tracking-wide text-emerald-600">Step 2 · Add received stock</p>
+                  <p className="mt-1 text-sm text-emerald-950">
+                    Available after receipt. Each saved quantity can be added to stock only once.
+                  </p>
+                </div>
+              </div>
+
               <div className={`rounded-xl border p-3 text-sm ${
                 splitTotalQty > splitMaxQty ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"
               }`}>
-                Remaining to assign: <span className="font-bold">{formatNumber(splitRemainingQty)} {splitModal.item.unit || ""}</span>
+                <div className="flex flex-wrap justify-between gap-2">
+                  <span>Allocated: <strong>{formatNumber(splitTotalQty)} / {formatNumber(splitMaxQty)} {splitModal.item.unit || ""}</strong></span>
+                  <span>Remaining to assign: <strong>{formatNumber(splitRemainingQty)} {splitModal.item.unit || ""}</strong></span>
+                  <span>Received available to post: <strong>{formatNumber(splitReceivedAvailable)} {splitModal.item.unit || ""}</strong></span>
+                </div>
               </div>
+
+              {splitAllocationLocked ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  Allocation fields are locked because stock has already been posted from this breakdown.
+                </div>
+              ) : null}
 
               <div className="space-y-3">
                 {splitRows.map((row, index) => (
@@ -1761,6 +1773,7 @@ export default function ImportTrackingPage() {
                         value={row.product_article}
                         onChange={(event) => updateSplitRow(index, "product_article", event.target.value)}
                         placeholder="NK-201"
+                        disabled={splitAllocationLocked}
                       />
                     </Field>
                     <Field label="Product name">
@@ -1768,18 +1781,21 @@ export default function ImportTrackingPage() {
                         value={row.product_name}
                         onChange={(event) => updateSplitRow(index, "product_name", event.target.value)}
                         placeholder="NK-201_Black raw material name"
+                        disabled={splitAllocationLocked}
                       />
                     </Field>
                     <Field label="Color">
                       <TextInput
                         value={row.color}
                         onChange={(event) => updateSplitRow(index, "color", event.target.value)}
+                        disabled={splitAllocationLocked}
                       />
                     </Field>
                     <Field label="Size">
                       <TextInput
                         value={row.size}
                         onChange={(event) => updateSplitRow(index, "size", event.target.value)}
+                        disabled={splitAllocationLocked}
                       />
                     </Field>
                     <Field label={`Qty (${splitModal.item.unit || "pcs"})`}>
@@ -1788,6 +1804,7 @@ export default function ImportTrackingPage() {
                         min="0"
                         value={row.quantity}
                         onChange={(event) => updateSplitRow(index, "quantity", event.target.value)}
+                        disabled={splitAllocationLocked}
                       />
                     </Field>
                     <div className="flex flex-col items-stretch justify-end gap-2">
@@ -1796,32 +1813,61 @@ export default function ImportTrackingPage() {
                           type="button"
                           size="sm"
                           variant={row.stock_added_at ? "secondary" : "primary"}
-                          disabled={Boolean(row.stock_added_at) || addingSplitStockIds.includes(row.id)}
+                          disabled={
+                            Boolean(row.stock_added_at) ||
+                            addingSplitStockIds.includes(row.id) ||
+                            splitReceivedQty <= 0 ||
+                            Number(row.quantity || 0) > splitReceivedAvailable
+                          }
                           onClick={() => addSplitStockToRawMaterial(row)}
                         >
                           {row.stock_added_at
-                            ? "Added to raw material"
+                            ? "Added to stock"
                             : addingSplitStockIds.includes(row.id)
                               ? "Adding..."
-                              : `Add ${formatNumber(row.quantity)} to raw material`}
+                              : splitReceivedQty <= 0
+                                ? "Waiting for receipt"
+                                : Number(row.quantity || 0) > splitReceivedAvailable
+                                  ? `Only ${formatNumber(splitReceivedAvailable)} received`
+                                  : `Add ${formatNumber(row.quantity)} to stock`}
                         </Button>
                       ) : null}
                       <Button
                         type="button"
                         variant="danger"
                         size="sm"
-                        disabled={splitRows.length <= 1}
+                        disabled={splitRows.length <= 1 || splitAllocationLocked}
                         onClick={() => removeSplitRow(index)}
                       >
                         Remove
                       </Button>
                     </div>
                     <div className="md:col-span-6">
+                      {row.id ? (
+                        <div className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
+                          row.stock_added_at
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                            : splitReceivedQty <= 0
+                              ? "border-amber-200 bg-amber-50 text-amber-800"
+                              : "border-slate-200 bg-white text-slate-600"
+                        }`}>
+                          <strong>{row.raw_material_name || row.product_name}</strong>
+                          {" · "}Allocated {formatNumber(row.quantity)} {splitModal.item.unit || ""}
+                          {" · "}Current stock {formatNumber(row.raw_material_stock)}
+                          {" · "}
+                          {row.stock_added_at
+                            ? `Added to stock${row.stock_added_by_name ? ` by ${row.stock_added_by_name}` : ""}`
+                            : splitReceivedQty <= 0
+                              ? "Stock posting pending receipt"
+                              : "Ready for stock posting"}
+                        </div>
+                      ) : null}
                       <Field label="Note">
                         <TextInput
                           value={row.note}
                           onChange={(event) => updateSplitRow(index, "note", event.target.value)}
                           placeholder="Optional"
+                          disabled={splitAllocationLocked}
                         />
                       </Field>
                     </div>
@@ -1831,7 +1877,7 @@ export default function ImportTrackingPage() {
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 p-5">
-              <Button type="button" variant="secondary" onClick={addSplitRow}>
+              <Button type="button" variant="secondary" onClick={addSplitRow} disabled={splitAllocationLocked}>
                 Add split row
               </Button>
               <div className="flex gap-2">
@@ -1840,10 +1886,10 @@ export default function ImportTrackingPage() {
                 </Button>
                 <Button
                   type="button"
-                  disabled={savingSplits || splitTotalQty > splitMaxQty}
+                  disabled={savingSplits || splitTotalQty > splitMaxQty || splitAllocationLocked}
                   onClick={saveSplitRows}
                 >
-                  {savingSplits ? "Saving..." : "Save split"}
+                  {savingSplits ? "Saving..." : "Save allocation"}
                 </Button>
               </div>
             </div>

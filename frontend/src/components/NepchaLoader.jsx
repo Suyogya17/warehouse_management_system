@@ -52,8 +52,8 @@ export function InitialLoadingOverlay() {
     const fadeTimer = window.setTimeout(() => {
       setActive(false);
       window.dispatchEvent(new Event("nepcha:initial-loader-complete"));
-    }, 2200);
-    const unmountTimer = window.setTimeout(() => setMounted(false), 2500);
+    }, 900);
+    const unmountTimer = window.setTimeout(() => setMounted(false), 1200);
 
     return () => {
       window.clearTimeout(fadeTimer);
@@ -113,21 +113,21 @@ export function ApiLoadingOverlay() {
           visibleSinceRef.current = Date.now();
           setMounted(true);
           window.requestAnimationFrame(() => setActive(true));
-        }, 220);
+        }, 180);
         return;
       }
 
       if (!mountedRef.current) return;
 
       const visibleFor = Date.now() - visibleSinceRef.current;
-      const remainingMinimum = Math.max(0, 900 - visibleFor);
+      const remainingMinimum = Math.max(0, 400 - visibleFor);
 
       hideTimerRef.current = window.setTimeout(() => {
         setActive(false);
         unmountTimerRef.current = window.setTimeout(() => {
           mountedRef.current = false;
           setMounted(false);
-        }, 300);
+        }, 220);
       }, remainingMinimum);
     };
 
@@ -156,6 +156,45 @@ export function ApiLoadingOverlay() {
       }`}
     >
       <NepchaLoader overlay />
+    </div>
+  );
+}
+
+export function ApiProgressBar() {
+  const [active, setActive] = useState(false);
+  const showTimerRef = useRef(null);
+  const hideTimerRef = useRef(null);
+
+  useEffect(() => {
+    const handleProgress = (event) => {
+      const isLoading = Boolean(event.detail?.loading);
+      window.clearTimeout(showTimerRef.current);
+      window.clearTimeout(hideTimerRef.current);
+
+      if (isLoading) {
+        showTimerRef.current = window.setTimeout(() => setActive(true), 120);
+        return;
+      }
+
+      hideTimerRef.current = window.setTimeout(() => setActive(false), 120);
+    };
+
+    window.addEventListener("nepcha:api-progress", handleProgress);
+    return () => {
+      window.clearTimeout(showTimerRef.current);
+      window.clearTimeout(hideTimerRef.current);
+      window.removeEventListener("nepcha:api-progress", handleProgress);
+    };
+  }, []);
+
+  return (
+    <div
+      className={`pointer-events-none fixed inset-x-0 top-0 z-[120] h-1 overflow-hidden bg-indigo-100 transition-opacity duration-150 ${
+        active ? "opacity-100" : "opacity-0"
+      }`}
+      aria-hidden="true"
+    >
+      <span className="nepcha-api-progress" />
     </div>
   );
 }

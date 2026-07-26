@@ -17,6 +17,7 @@ import SectionCard from "../../components/SectionCard";
 
 import { useAuth } from "../../context/AuthContext";
 import { useDataRefresh } from "../../hooks/useDataRefresh";
+import { useProductInterestTracking } from "../../hooks/useProductInterestTracking";
 
 import { api, APP_BASE_URL } from "../../services/api";
 import { getCustomerVisibleStock, getRoundedCartons } from "../../utils/displayStock";
@@ -53,7 +54,7 @@ const getSortLabel = (sort) => {
   return "Oldest";
 };
 
-function ProductCard({ variants = [], onAddToCart, cartProductIds, user }) {
+function ProductCard({ variants = [], onAddToCart, onProductInterest, cartProductIds, user }) {
   const [selectedVariant, setSelectedVariant] = useState(
     variants?.find((v) => getAvailableQty(v) > 0) || variants?.[0] || null
   );
@@ -186,7 +187,10 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds, user }) {
             height={300}
             src={`${APP_BASE_URL}${selectedVariant.image_url}`}
             alt={selectedVariant.name}
-            onClick={() => setLightbox(true)}
+            onClick={() => {
+              setLightbox(true);
+              onProductInterest?.(selectedVariant);
+            }}
             className="w-full h-full object-cover group-hover:scale-105 transition duration-500 cursor-zoom-in"
           />
         ) : (
@@ -576,6 +580,12 @@ export default function FinishedGoodsUserPage() {
         return sort !== "oldest" ? dateB - dateA : dateA - dateB;
       });
   }, [groupedProducts, filters, sort]);
+  const trackProductInterest = useProductInterestTracking({
+    token,
+    search: filters.search,
+    resultCount: filteredProducts.reduce((sum, variants) => sum + variants.length, 0),
+    surface: "OUR_PRODUCTS",
+  });
 
   useEffect(() => {
     setCurrentPage(1);
@@ -600,6 +610,7 @@ export default function FinishedGoodsUserPage() {
   // ─── ADD TO CART ──────────────────────────────────
 
   const handleAddToCart = (product) => {
+    trackProductInterest(product);
     // FIX: Guard against out-of-stock using available_qty, not quantity
     const availableQty = getAvailableQty(product);
     if (!product || availableQty <= 0) return;
@@ -787,6 +798,7 @@ export default function FinishedGoodsUserPage() {
                 key={variants.map((variant) => variant.id).join("-")}
                 variants={variants}
                 onAddToCart={handleAddToCart}
+                onProductInterest={trackProductInterest}
                 cartProductIds={cartProductIds}
                 user={user}
               />

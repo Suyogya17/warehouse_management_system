@@ -352,7 +352,6 @@ const getDashboard = async (req, res, next) => {
          ORDER BY pc.country_label, pc.quantity DESC, pc.article_code, pc.color, pc.id`
       ),
     ]);
-
     return res.json({
       success: true,
       data: {
@@ -658,6 +657,8 @@ const getSales = async (req, res, next) => {
       productDailyTrend,
       orderStatusSummary,
       fulfilledDeliveredOrders,
+      productSalesOptions,
+      seriesSales,
     ] = await Promise.all([
       run(
         `SELECT DATE_FORMAT(o.created_at, '%Y-%m') AS month,
@@ -731,6 +732,30 @@ const getSales = async (req, res, next) => {
          ORDER BY COALESCE(o.delivered_at, o.created_at) DESC
          LIMIT 50`
       ),
+      run(
+        `SELECT fg.id, fg.name, fg.article_code, fg.sole_code, fg.color, fg.size, fg.unit,
+                COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS total_quantity,
+                COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
+                MAX(CASE WHEN o.status <> 'CANCELLED' THEN o.created_at END) AS last_order_at
+         FROM finished_goods fg
+         LEFT JOIN order_items oi ON oi.finished_good_id = fg.id
+         LEFT JOIN orders o ON o.id = oi.order_id
+         WHERE fg.is_deleted = 0
+         GROUP BY fg.id, fg.name, fg.article_code, fg.sole_code, fg.color, fg.size, fg.unit
+         ORDER BY total_quantity DESC, fg.article_code, fg.color`
+      ),
+      run(
+        `SELECT COALESCE(NULLIF(TRIM(fg.sole_code), ''), 'Unassigned') AS series,
+                COALESCE(SUM(oi.qty_ordered), 0) AS total_quantity,
+                COUNT(DISTINCT o.id) AS order_count,
+                COUNT(DISTINCT fg.id) AS product_count
+         FROM order_items oi
+         JOIN orders o ON o.id = oi.order_id
+         JOIN finished_goods fg ON fg.id = oi.finished_good_id
+         WHERE o.status <> 'CANCELLED'
+         GROUP BY COALESCE(NULLIF(TRIM(fg.sole_code), ''), 'Unassigned')
+         ORDER BY total_quantity DESC`
+      ),
     ]);
 
     return res.json({
@@ -742,6 +767,86 @@ const getSales = async (req, res, next) => {
         product_daily_order_trend: mapNumeric(productDailyTrend, ["order_count", "total_quantity"]),
         order_status_summary: mapNumeric(orderStatusSummary, ["order_count"]),
         fulfilled_delivered_orders: mapNumeric(fulfilledDeliveredOrders, ["total_quantity"]),
+        product_sales_options: mapNumeric(productSalesOptions, ["total_quantity", "order_count"]),
+        series_sales: mapNumeric(seriesSales, ["total_quantity", "order_count", "product_count"]),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getProductSales = async (req, res, next) => {
+  try {
+    const productId = Number(req.params.id);
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({ success: false, message: "Valid product id required" });
+    }
+
+    const [summaryRows, dailyTrend, statusSummary] = await Promise.all([
+      run(
+        `SELECT fg.id, fg.name, fg.article_code, fg.sole_code, fg.color, fg.size, fg.unit,
+                fg.quantity AS current_stock,
+                COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS total_quantity,
+                COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
+                COALESCE(SUM(CASE WHEN o.status = 'DELIVERED' THEN oi.qty_ordered ELSE 0 END), 0) AS delivered_quantity,
+                COALESCE(SUM(CASE WHEN o.status IN ('PENDING', 'CONFIRMED', 'PACKED') THEN oi.qty_ordered ELSE 0 END), 0) AS active_quantity,
+                COALESCE(SUM(CASE WHEN o.status = 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
+                MAX(CASE WHEN o.status <> 'CANCELLED' THEN o.created_at END) AS last_order_at
+         FROM finished_goods fg
+         LEFT JOIN order_items oi ON oi.finished_good_id = fg.id
+         LEFT JOIN orders o ON o.id = oi.order_id
+         WHERE fg.id = ? AND fg.is_deleted = 0
+         GROUP BY fg.id, fg.name, fg.article_code, fg.sole_code, fg.color, fg.size, fg.unit, fg.quantity`,
+        [productId]
+      ),
+      run(
+        `SELECT DATE_FORMAT(o.created_at, '%Y-%m-%d') AS day,
+                COUNT(DISTINCT o.id) AS order_count,
+                COALESCE(SUM(oi.qty_ordered), 0) AS total_quantity,
+                COALESCE(SUM(CASE WHEN o.status = 'DELIVERED' THEN oi.qty_ordered ELSE 0 END), 0) AS delivered_quantity
+         FROM order_items oi
+         JOIN orders o ON o.id = oi.order_id
+         WHERE oi.finished_good_id = ?
+           AND o.status <> 'CANCELLED'
+         GROUP BY DATE_FORMAT(o.created_at, '%Y-%m-%d')
+         ORDER BY day`,
+        [productId]
+      ),
+      run(
+        `SELECT o.status,
+                COUNT(DISTINCT o.id) AS order_count,
+                COALESCE(SUM(oi.qty_ordered), 0) AS total_quantity
+         FROM order_items oi
+         JOIN orders o ON o.id = oi.order_id
+         WHERE oi.finished_good_id = ?
+         GROUP BY o.status
+         ORDER BY total_quantity DESC`,
+        [productId]
+      ),
+    ]);
+
+    if (!summaryRows.length) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        summary: mapNumeric(summaryRows, [
+          "current_stock",
+          "total_quantity",
+          "order_count",
+          "delivered_quantity",
+          "active_quantity",
+          "cancelled_quantity",
+        ])[0],
+        daily_trend: mapNumeric(dailyTrend, [
+          "order_count",
+          "total_quantity",
+          "delivered_quantity",
+        ]),
+        status_summary: mapNumeric(statusSummary, ["order_count", "total_quantity"]),
       },
     });
   } catch (err) {
@@ -751,12 +856,20 @@ const getSales = async (req, res, next) => {
 
 const getDealers = async (req, res, next) => {
   try {
+    const [supportsProductInterest, supportsOfferSnapshots] = await Promise.all([
+      hasTable("product_interest_events"),
+      hasColumn("order_items", "ordered_from_offer"),
+    ]);
     const [
       topDealersByQuantity,
       topDealersByOrderCount,
       dealerOrderStatusSummary,
       dealerMonthlyOrderTrend,
       dealerCustomerSummary,
+      dealerOptions,
+      offerDealerOptions,
+      accountProductInterest,
+      accountSearchTerms,
     ] = await Promise.all([
       run(
         `SELECT COALESCE(u.name, 'Unknown dealer') AS dealer_name,
@@ -822,7 +935,108 @@ const getDealers = async (req, res, next) => {
          ORDER BY dealer_name, total_quantity DESC
          LIMIT 50`
       ),
+      run(
+        `SELECT u.id AS dealer_id,
+                COALESCE(u.name, 'Unknown dealer') AS dealer_name,
+                u.email AS dealer_email,
+                u.role AS dealer_role,
+                COUNT(DISTINCT o.customer_name) AS customer_count,
+                COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
+                COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS total_quantity,
+                MAX(CASE WHEN o.status <> 'CANCELLED' THEN o.created_at END) AS last_order_at
+         FROM orders o
+         LEFT JOIN order_items oi ON oi.order_id = o.id
+         LEFT JOIN users u ON u.id = o.created_by
+         WHERE o.created_by IS NOT NULL
+         GROUP BY o.created_by, u.id, u.name, u.email, u.role
+         ORDER BY dealer_name`
+      ),
+      supportsOfferSnapshots
+        ? run(
+          `SELECT u.id AS dealer_id,
+                  COALESCE(u.name, 'Unknown dealer') AS dealer_name,
+                  u.email AS dealer_email,
+                  u.role AS dealer_role,
+                  COUNT(DISTINCT o.customer_name) AS customer_count,
+                  COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
+                  COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS total_quantity,
+                  MAX(CASE WHEN o.status <> 'CANCELLED' THEN o.created_at END) AS last_order_at
+           FROM orders o
+           JOIN order_items oi ON oi.order_id = o.id
+           LEFT JOIN users u ON u.id = o.created_by
+           WHERE oi.ordered_from_offer = 1
+             AND o.created_by IS NOT NULL
+           GROUP BY o.created_by, u.id, u.name, u.email, u.role
+           ORDER BY dealer_name`
+        )
+        : Promise.resolve([]),
+      supportsProductInterest
+        ? run(
+          `SELECT u.id AS user_id, u.name AS account_name, u.email,
+                  fg.id AS finished_good_id, fg.article_code, fg.sole_code, fg.color, fg.size,
+                  interest.surface,
+                  interest.interest_count,
+                  interest.last_interested_at,
+                  COUNT(DISTINCT CASE WHEN oi.id IS NOT NULL THEN o.id END) AS converted_order_count,
+                  COALESCE(SUM(CASE WHEN oi.id IS NOT NULL THEN oi.qty_ordered ELSE 0 END), 0) AS converted_quantity
+           FROM (
+             SELECT user_id, finished_good_id, surface,
+                    COUNT(*) AS interest_count,
+                    MIN(created_at) AS first_interested_at,
+                    MAX(created_at) AS last_interested_at
+             FROM product_interest_events
+             WHERE event_type = 'PRODUCT_INTEREST'
+             GROUP BY user_id, finished_good_id, surface
+           ) interest
+           JOIN users u ON u.id = interest.user_id
+           JOIN finished_goods fg ON fg.id = interest.finished_good_id
+           LEFT JOIN orders o ON o.created_by = interest.user_id
+             AND o.status <> 'CANCELLED'
+             AND o.created_at >= interest.first_interested_at
+           LEFT JOIN order_items oi ON oi.order_id = o.id
+             AND oi.finished_good_id = interest.finished_good_id
+           GROUP BY u.id, u.name, u.email, fg.id, fg.article_code, fg.sole_code, fg.color, fg.size,
+                    interest.surface, interest.interest_count, interest.last_interested_at
+           ORDER BY interest.interest_count DESC, interest.last_interested_at DESC
+           LIMIT 100`
+        )
+        : Promise.resolve([]),
+      supportsProductInterest
+        ? run(
+          `SELECT u.id AS user_id, u.name AS account_name, u.email,
+                  pie.search_term, pie.surface,
+                  COUNT(*) AS search_count,
+                  MAX(pie.created_at) AS last_searched_at
+           FROM product_interest_events pie
+           JOIN users u ON u.id = pie.user_id
+           WHERE pie.event_type = 'SEARCH'
+           GROUP BY u.id, u.name, u.email, pie.search_term, pie.surface
+           ORDER BY search_count DESC, last_searched_at DESC
+           LIMIT 100`
+        )
+        : Promise.resolve([]),
     ]);
+    const normalizedAccountProductInterest = mapNumeric(accountProductInterest, [
+      "interest_count",
+      "converted_order_count",
+      "converted_quantity",
+    ]);
+    const conversionByUser = normalizedAccountProductInterest.reduce((acc, row) => {
+      const key = Number(row.user_id);
+      acc[key] = acc[key] || { interested_products: 0, converted_products: 0 };
+      acc[key].interested_products += 1;
+      if (row.converted_order_count > 0) acc[key].converted_products += 1;
+      return acc;
+    }, {});
+    const accountProductInterestWithConversion = normalizedAccountProductInterest.map((row) => {
+      const totals = conversionByUser[Number(row.user_id)] || {};
+      return {
+        ...row,
+        account_conversion_rate: Number(totals.interested_products || 0) > 0
+          ? (Number(totals.converted_products || 0) / Number(totals.interested_products)) * 100
+          : 0,
+      };
+    });
 
     return res.json({
       success: true,
@@ -849,6 +1063,259 @@ const getDealers = async (req, res, next) => {
           "order_count",
           "total_quantity",
         ]),
+        dealer_options: mapNumeric(dealerOptions, ["dealer_id", "customer_count", "order_count", "total_quantity"]),
+        offer_dealer_options: mapNumeric(offerDealerOptions, ["dealer_id", "customer_count", "order_count", "total_quantity"]),
+        account_product_interest: accountProductInterestWithConversion,
+        account_search_terms: mapNumeric(accountSearchTerms, ["search_count"]),
+        product_interest_tracking_ready: supportsProductInterest,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getDealerDetail = async (req, res, next) => {
+  try {
+    const dealerId = Number(req.query.dealer_id);
+    const offerOnly = String(req.query.mode || "").trim().toLowerCase() === "offers";
+    if (!Number.isInteger(dealerId) || dealerId <= 0) {
+      return res.status(400).json({ success: false, message: "Valid dealer account required" });
+    }
+    const [supportsOfferSnapshots, supportsOfferQuantitySnapshot] = await Promise.all([
+      hasColumn("order_items", "ordered_from_offer"),
+      hasColumn("order_items", "offer_display_quantity"),
+    ]);
+    if (offerOnly && !supportsOfferSnapshots) {
+      return res.status(409).json({
+        success: false,
+        message: "Offer-order snapshots are not installed on the backend.",
+      });
+    }
+
+    const dealerMatch = "o.created_by = ?";
+    const dealerParams = [dealerId];
+    const offerItemCondition = offerOnly ? "AND COALESCE(oi.ordered_from_offer, 0) = 1" : "";
+    const productUniverseCondition = offerOnly
+      ? `AND (
+          (fg.offer_enabled = 1 AND (fg.offer_ends_at IS NULL OR fg.offer_ends_at >= CURRENT_TIMESTAMP))
+          OR COALESCE(dealer_sales.total_quantity, 0) > 0
+          OR COALESCE(dealer_sales.cancelled_quantity, 0) > 0
+        )`
+      : "";
+
+    const [summaryRows, monthlyTrend, rawProducts, dealerRows, customerRows] = await Promise.all([
+      run(
+        `SELECT COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
+                COUNT(DISTINCT CASE WHEN o.status = 'CANCELLED' THEN o.id END) AS cancelled_order_count,
+                COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS total_quantity,
+                COALESCE(SUM(CASE WHEN o.status = 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
+                MAX(CASE WHEN o.status <> 'CANCELLED' THEN o.created_at END) AS last_order_at
+         FROM orders o
+         LEFT JOIN order_items oi ON oi.order_id = o.id
+         WHERE ${dealerMatch}
+           ${offerItemCondition}`,
+        dealerParams
+      ),
+      run(
+        `SELECT DATE_FORMAT(o.created_at, '%Y-%m') AS month,
+                COUNT(DISTINCT o.id) AS order_count,
+                COALESCE(SUM(oi.qty_ordered), 0) AS total_quantity
+         FROM orders o
+         LEFT JOIN order_items oi ON oi.order_id = o.id
+         WHERE ${dealerMatch}
+           ${offerItemCondition}
+           AND o.status <> 'CANCELLED'
+           AND o.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)
+         GROUP BY DATE_FORMAT(o.created_at, '%Y-%m')
+         ORDER BY month`,
+        dealerParams
+      ),
+      run(
+        `SELECT fg.id, fg.name, fg.article_code, fg.sole_code, fg.color, fg.size,
+                fg.quantity AS current_stock,
+                fg.inner_boxes_per_outer_box AS pairs_per_carton,
+                COALESCE(dealer_sales.total_quantity, 0) AS total_quantity,
+                COALESCE(dealer_sales.order_count, 0) AS order_count,
+                COALESCE(dealer_sales.cancelled_quantity, 0) AS cancelled_quantity,
+                dealer_sales.last_order_at,
+                dealer_sales.assigned_quantity,
+                COALESCE(global_sales.global_quantity, 0) AS global_quantity,
+                COALESCE(global_sales.global_order_count, 0) AS global_order_count,
+                CASE
+                  WHEN fg.offer_enabled = 1
+                   AND (fg.offer_ends_at IS NULL OR fg.offer_ends_at >= CURRENT_TIMESTAMP)
+                  THEN 1 ELSE 0
+                END AS is_active_offer
+         FROM finished_goods fg
+         LEFT JOIN (
+           SELECT oi.finished_good_id,
+                  COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS total_quantity,
+                  COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
+                  COALESCE(SUM(CASE WHEN o.status = 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
+                  MAX(CASE WHEN o.status <> 'CANCELLED' THEN o.created_at END) AS last_order_at,
+                  ${supportsOfferSnapshots && supportsOfferQuantitySnapshot
+                    ? "MAX(CASE WHEN COALESCE(oi.ordered_from_offer, 0) = 1 THEN oi.offer_display_quantity END)"
+                    : "NULL"} AS assigned_quantity
+           FROM orders o
+           JOIN order_items oi ON oi.order_id = o.id
+           WHERE ${dealerMatch}
+             ${offerItemCondition}
+           GROUP BY oi.finished_good_id
+         ) dealer_sales ON dealer_sales.finished_good_id = fg.id
+         LEFT JOIN (
+           SELECT oi.finished_good_id,
+                  COALESCE(SUM(oi.qty_ordered), 0) AS global_quantity,
+                  COUNT(DISTINCT o.id) AS global_order_count
+           FROM order_items oi
+           JOIN orders o ON o.id = oi.order_id
+           WHERE o.status <> 'CANCELLED'
+             ${offerItemCondition}
+           GROUP BY oi.finished_good_id
+         ) global_sales ON global_sales.finished_good_id = fg.id
+         WHERE fg.is_deleted = 0
+           ${productUniverseCondition}
+         ORDER BY total_quantity DESC, global_quantity DESC, fg.article_code, fg.color`,
+        dealerParams
+      ),
+      run(
+        `SELECT id, name, email, role
+         FROM users
+         WHERE id = ?
+         LIMIT 1`,
+        [dealerId]
+      ),
+      run(
+        `SELECT TRIM(o.customer_name) AS customer_name,
+                MAX(NULLIF(TRIM(o.customer_phone), '')) AS customer_phone,
+                COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
+                COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS total_quantity,
+                COALESCE(SUM(CASE WHEN o.status = 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
+                MAX(CASE WHEN o.status <> 'CANCELLED' THEN o.created_at END) AS last_order_at
+         FROM orders o
+         LEFT JOIN order_items oi ON oi.order_id = o.id
+         WHERE ${dealerMatch}
+           ${offerItemCondition}
+           AND NULLIF(TRIM(o.customer_name), '') IS NOT NULL
+         GROUP BY LOWER(TRIM(o.customer_name)),
+                  REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(o.customer_phone, ''), ' ', ''), '-', ''), '+', ''), '.', '')
+         ORDER BY total_quantity DESC, customer_name`,
+        dealerParams
+      ),
+    ]);
+
+    if (!dealerRows.length) {
+      return res.status(404).json({ success: false, message: "Dealer account not found" });
+    }
+
+    const numericProducts = mapNumeric(rawProducts, [
+      "current_stock",
+      "pairs_per_carton",
+      "total_quantity",
+      "order_count",
+      "cancelled_quantity",
+      "assigned_quantity",
+      "global_quantity",
+      "global_order_count",
+      "is_active_offer",
+    ]);
+    const takenProducts = numericProducts.filter((row) => row.total_quantity > 0);
+    const averageTakenQuantity = takenProducts.length
+      ? takenProducts.reduce((sum, row) => sum + row.total_quantity, 0) / takenProducts.length
+      : 0;
+    const articleTaken = new Set(takenProducts.map((row) => String(row.article_code || "").toLowerCase()));
+    const now = Date.now();
+    const products = numericProducts.map((row) => {
+      const lastOrderTime = row.last_order_at ? new Date(row.last_order_at).getTime() : 0;
+      const inactiveDays = lastOrderTime
+        ? Math.floor((now - lastOrderTime) / (24 * 60 * 60 * 1000))
+        : null;
+      let status = "LOW SALES";
+      let reason = "Ordered below this dealer's normal product quantity.";
+
+      if (row.current_stock <= 0) {
+        status = "OUT OF STOCK";
+        reason = "No current stock is available, so this is not counted as weak dealer demand.";
+      } else if (row.total_quantity <= 0) {
+        status = "NOT TAKEN";
+        reason = articleTaken.has(String(row.article_code || "").toLowerCase())
+          ? "Dealer buys another color of this article but has not taken this color."
+          : row.global_quantity > 0
+            ? "Other dealers order this product, but this dealer has not taken it."
+            : "No recorded dealer orders for this product yet.";
+      } else if (inactiveDays !== null && inactiveDays >= 60) {
+        status = "STOPPED ORDERING";
+        reason = `Previously ordered, but not reordered for ${inactiveDays} days.`;
+      } else if (row.order_count >= 2 || row.total_quantity >= averageTakenQuantity) {
+        status = "GREAT";
+        reason = row.order_count >= 2
+          ? "Repeatedly ordered by this dealer."
+          : "Ordered above this dealer's average product quantity.";
+      }
+
+      return {
+        ...row,
+        status,
+        reason,
+        inactive_days: inactiveDays,
+        ordered_cartons: row.pairs_per_carton > 0 ? row.total_quantity / row.pairs_per_carton : 0,
+        assigned_cartons: row.pairs_per_carton > 0 && row.assigned_quantity > 0
+          ? row.assigned_quantity / row.pairs_per_carton
+          : 0,
+        remaining_assigned_quantity: row.assigned_quantity > 0
+          ? Math.max(0, row.assigned_quantity - row.total_quantity)
+          : null,
+        cancelled_cartons: row.pairs_per_carton > 0 ? row.cancelled_quantity / row.pairs_per_carton : 0,
+      };
+    });
+
+    const summarizeDimension = (key) => {
+      const grouped = new Map();
+      takenProducts.forEach((row) => {
+        const label = String(row[key] || "Unassigned").trim() || "Unassigned";
+        const current = grouped.get(label) || { name: label, total_quantity: 0, order_count: 0 };
+        current.total_quantity += row.total_quantity;
+        current.order_count += row.order_count;
+        grouped.set(label, current);
+      });
+      return [...grouped.values()].sort((a, b) => b.total_quantity - a.total_quantity);
+    };
+
+    const summary = mapNumeric(summaryRows, [
+      "order_count",
+      "cancelled_order_count",
+      "total_quantity",
+      "cancelled_quantity",
+    ])[0] || {};
+    const totalAttempts = Number(summary.order_count || 0) + Number(summary.cancelled_order_count || 0);
+    summary.cancellation_rate = totalAttempts
+      ? (Number(summary.cancelled_order_count || 0) / totalAttempts) * 100
+      : 0;
+
+    return res.json({
+      success: true,
+      data: {
+        dealer: dealerRows[0],
+        mode: offerOnly ? "offers" : "all",
+        offer_snapshot_supported: supportsOfferSnapshots,
+        summary,
+        monthly_trend: mapNumeric(monthlyTrend, ["order_count", "total_quantity"]),
+        products,
+        best_series: summarizeDimension("sole_code"),
+        best_colors: summarizeDimension("color"),
+        customers: mapNumeric(customerRows, [
+          "order_count",
+          "total_quantity",
+          "cancelled_quantity",
+        ]),
+        suggestions: products
+          .filter((row) =>
+            row.current_stock > 0 &&
+            (!offerOnly || row.is_active_offer === 1) &&
+            ["NOT TAKEN", "LOW SALES", "STOPPED ORDERING"].includes(row.status)
+          )
+          .sort((a, b) => b.global_quantity - a.global_quantity)
+          .slice(0, 12),
       },
     });
   } catch (err) {
@@ -998,7 +1465,9 @@ module.exports = {
   getInventory,
   getProduction,
   getSales,
+  getProductSales,
   getDealers,
+  getDealerDetail,
   getUsers,
   getSupport,
 };

@@ -15,6 +15,7 @@ import SectionCard from "../../components/SectionCard";
 
 import { useAuth } from "../../context/AuthContext";
 import { useDataRefresh } from "../../hooks/useDataRefresh";
+import { useProductInterestTracking } from "../../hooks/useProductInterestTracking";
 
 import { api, APP_BASE_URL } from "../../services/api";
 import { getCustomerVisibleStock, getRoundedCartons } from "../../utils/displayStock";
@@ -377,6 +378,12 @@ export default function ElderFinishedGoods() {
         return sort !== "oldest" ? dateB - dateA : dateA - dateB;
       });
   }, [groupedProducts, filters, sort]);
+  useProductInterestTracking({
+    token,
+    search: filters.search,
+    resultCount: filteredProducts.reduce((sum, variants) => sum + variants.length, 0),
+    surface: "OUR_PRODUCTS",
+  });
 
   useEffect(() => {
     setCurrentPage(1);

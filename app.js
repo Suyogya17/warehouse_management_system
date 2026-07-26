@@ -21,6 +21,7 @@ const notificationRoutes = require("./routes/notificationRoutes");
 const analyticsRoutes = require("./routes/analyticsRoutes");
 const importTrackingRoutes = require("./routes/importTrackingRoutes");
 const catalogueRoutes = require("./routes/catalogueRoutes");
+const productInterestRoutes = require("./routes/productInterestRoutes");
 
 const app = express();
 
@@ -66,7 +67,8 @@ app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
 app.use((req, res, next) => {
-  if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+  const isTrackingEvent = req.path.startsWith("/api/product-interest");
+  if (!isTrackingEvent && ["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
     clearCache();
   }
 
@@ -115,6 +117,7 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/import-tracking", importTrackingRoutes);
 app.use("/api/catalogues", catalogueRoutes);
+app.use("/api/product-interest", productInterestRoutes);
 
 /* ─────────────────────────────
    ROOT ENDPOINT

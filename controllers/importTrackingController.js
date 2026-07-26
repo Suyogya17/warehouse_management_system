@@ -196,6 +196,9 @@ const fetchOrdersByIds = async (ids = []) => {
   if (!ids.length) return { items: [], containers: [], containerItems: [], splits: [] };
   const placeholders = ids.map(() => '?').join(',');
   const supportsSplits = await hasTable('import_order_item_splits');
+  const supportsStockAddedBy = supportsSplits
+    ? await hasColumn('import_order_item_splits', 'stock_added_by')
+    : false;
   const [items, containers, containerItems, splits] = await Promise.all([
     query(
       `SELECT * FROM import_order_items
@@ -220,9 +223,14 @@ const fetchOrdersByIds = async (ids = []) => {
     ),
     supportsSplits
       ? query(
-          `SELECT iois.*
+          `SELECT iois.*,
+                  rm.name AS raw_material_name,
+                  rm.quantity AS raw_material_stock
+                  ${supportsStockAddedBy ? ', posted_by.name AS stock_added_by_name' : ''}
            FROM import_order_item_splits iois
            JOIN import_order_items ioi ON ioi.id = iois.import_order_item_id
+           LEFT JOIN raw_materials rm ON rm.id = iois.raw_material_id
+           ${supportsStockAddedBy ? 'LEFT JOIN users posted_by ON posted_by.id = iois.stock_added_by' : ''}
            WHERE ioi.import_order_id IN (${placeholders})
            ORDER BY iois.id`,
           ids
@@ -1323,7 +1331,7 @@ const addSplitToRawMaterial = async (req, res, next) => {
 
     await client.query('START TRANSACTION');
     const splitResult = await client.query(
-      `SELECT iois.*, ioi.import_order_id, ioi.unit, io.order_number
+      `SELECT iois.*, ioi.import_order_id, ioi.unit, ioi.received_qty AS item_received_qty, io.order_number
        FROM import_order_item_splits iois
        JOIN import_order_items ioi ON ioi.id = iois.import_order_item_id
        JOIN import_orders io ON io.id = ioi.import_order_id
@@ -1343,6 +1351,32 @@ const addSplitToRawMaterial = async (req, res, next) => {
     if (!split.raw_material_id || Number(split.quantity || 0) <= 0) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'This split has no linked raw material or valid quantity.' });
+    }
+
+    const postedResult = await client.query(
+      `SELECT COALESCE(SUM(quantity), 0) AS posted_quantity
+       FROM import_order_item_splits
+       WHERE import_order_item_id = ? AND stock_added_at IS NOT NULL`,
+      [split.import_order_item_id]
+    );
+    const receivedQuantity = Number(split.item_received_qty || 0);
+    const postedQuantity = Number(postedResult.rows[0]?.posted_quantity || 0);
+    const receivedAvailable = Math.max(receivedQuantity - postedQuantity, 0);
+
+    if (receivedQuantity <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Mark this import item as received before adding its split quantity to raw material stock.',
+      });
+    }
+
+    if (Number(split.quantity) > receivedAvailable) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: `Only ${receivedAvailable} ${split.unit || 'pcs'} of received quantity remains available to post.`,
+      });
     }
 
     const materialResult = await client.query(

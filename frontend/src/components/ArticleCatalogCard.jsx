@@ -13,6 +13,7 @@ export default function ArticleCatalogCard({
   variants = [],
   offer = false,
   onAddToCart,
+  onProductInterest,
   cartProductIds = new Set(),
 }) {
   const [previewProduct, setPreviewProduct] = useState(null);
@@ -80,7 +81,10 @@ export default function ArticleCatalogCard({
               <button
                 type="button"
                 disabled={!variant.image_url}
-                onClick={() => setPreviewProduct(variant)}
+                onClick={() => {
+                  setPreviewProduct(variant);
+                  onProductInterest?.(variant);
+                }}
                 className="group relative block aspect-[4/3] w-full overflow-hidden rounded-xl bg-slate-100 disabled:cursor-default"
                 aria-label={`View ${variant.article_code || variant.name} ${
                   variant.color || ""
@@ -111,7 +115,10 @@ export default function ArticleCatalogCard({
                   <button
                     type="button"
                     disabled={isOutOfStock}
-                    onClick={() => onAddToCart(variant)}
+                    onClick={() => {
+                      onProductInterest?.(variant);
+                      onAddToCart(variant);
+                    }}
                     className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition ${
                       isOutOfStock
                         ? "cursor-not-allowed bg-slate-100 text-slate-400"
