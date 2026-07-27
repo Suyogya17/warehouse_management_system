@@ -561,6 +561,8 @@ export default function ProductDisplayPage() {
                         <img
                           src={`${APP_BASE_URL}${product.image_url}`}
                           alt={product.article_code || product.name}
+                          loading="lazy"
+                          decoding="async"
                           className="h-12 w-12 shrink-0 rounded-lg object-cover"
                         />
                       ) : (
@@ -761,7 +763,13 @@ export default function ProductDisplayPage() {
                   className="flex w-full items-center gap-3 rounded-lg bg-white p-2 text-left shadow-sm transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {product.image_url ? (
-                    <img src={`${APP_BASE_URL}${product.image_url}`} alt={product.article_code || product.name} className="h-12 w-12 rounded-lg object-cover" />
+                    <img
+                      src={`${APP_BASE_URL}${product.image_url}`}
+                      alt={product.article_code || product.name}
+                      loading="lazy"
+                      decoding="async"
+                      className="h-12 w-12 rounded-lg object-cover"
+                    />
                   ) : (
                     <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400">
                       No image
@@ -805,7 +813,13 @@ export default function ProductDisplayPage() {
                       {index + 1}
                     </span>
                     {product.image_url ? (
-                      <img src={`${APP_BASE_URL}${product.image_url}`} alt={product.article_code || product.name} className="h-14 w-14 rounded-lg object-cover" />
+                      <img
+                        src={`${APP_BASE_URL}${product.image_url}`}
+                        alt={product.article_code || product.name}
+                        loading="lazy"
+                        decoding="async"
+                        className="h-14 w-14 rounded-lg object-cover"
+                      />
                     ) : (
                       <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400">
                         No image
@@ -1046,6 +1060,8 @@ export default function ProductDisplayPage() {
                         <img
                           src={`${APP_BASE_URL}${group.items.find((item) => item.image_url).image_url}`}
                           alt={group.articleCode}
+                          loading="lazy"
+                          decoding="async"
                           className="h-14 w-14 rounded-lg object-cover"
                         />
                       ) : (

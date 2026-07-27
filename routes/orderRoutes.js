@@ -5,8 +5,8 @@ const { cacheResponse } = require('../middleware/cacheMiddleware');
 
 router.use(authenticate);
 
-router.get('/', cacheResponse(5000), ctrl.getAll);
-router.get('/availability', cacheResponse(5000), ctrl.getAvailability);
+router.get('/', cacheResponse(10000), ctrl.getAll);
+router.get('/availability', cacheResponse(15000), ctrl.getAvailability);
 router.get('/offer-purchases', authorize('ADMIN', 'CO_ADMIN'), cacheResponse(5000), ctrl.getOfferPurchases);
 router.post('/', authorize('ADMIN','CO_ADMIN', 'USER'), ctrl.create);
 router.put('/:id/items', authorize('ADMIN', 'CO_ADMIN'), ctrl.correctItems);

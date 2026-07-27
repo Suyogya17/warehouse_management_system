@@ -45,7 +45,8 @@ export default function GalleryPage() {
   const [search, setSearch] = useState("");
   const [stock, setStock] = useState("ALL");
   const [currentPage, setCurrentPage] = useState(1);
-  const [loading, setLoading] = useState(true);
+  const [regularLoading, setRegularLoading] = useState(true);
+  const [offerLoading, setOfferLoading] = useState(canBrowseOffers);
   const [cart, setCart] = useState([]);
   const [cartLoaded, setCartLoaded] = useState(false);
   const [downloadOption, setDownloadOption] = useState("FILTERED");
@@ -53,19 +54,28 @@ export default function GalleryPage() {
   const [downloadError, setDownloadError] = useState("");
 
   const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [regularResult, offerResult] = await Promise.all([
-        api.getAvailability(token),
-        canBrowseOffers
-          ? api.getAvailability(token, { offer_view: 1 })
-          : Promise.resolve({ data: [] }),
-      ]);
-      setRegularProducts((regularResult.data || []).filter((product) => !isActiveOffer(product)));
-      setOfferProducts((offerResult.data || []).filter(isActiveOffer));
-    } finally {
-      setLoading(false);
-    }
+    setRegularLoading(true);
+    setOfferLoading(canBrowseOffers);
+
+    const regularRequest = api
+      .getAvailability(token)
+      .then((result) => {
+        setRegularProducts((result.data || []).filter((product) => !isActiveOffer(product)));
+      })
+      .catch((error) => console.error("Gallery products load failed:", error))
+      .finally(() => setRegularLoading(false));
+
+    const offerRequest = canBrowseOffers
+      ? api
+          .getAvailability(token, { offer_view: 1 })
+          .then((result) => {
+            setOfferProducts((result.data || []).filter(isActiveOffer));
+          })
+          .catch((error) => console.error("Gallery offers load failed:", error))
+          .finally(() => setOfferLoading(false))
+      : Promise.resolve();
+
+    await Promise.allSettled([regularRequest, offerRequest]);
   }, [canBrowseOffers, token]);
 
   useEffect(() => {
@@ -89,6 +99,7 @@ export default function GalleryPage() {
   }, [cart, cartLoaded]);
 
   const sourceProducts = mode === "OFFERS" ? offerProducts : regularProducts;
+  const loading = mode === "OFFERS" ? offerLoading : regularLoading;
   const seriesOptions = useMemo(
     () =>
       [...new Set(sourceProducts.map((product) => getSeriesName(product.sole_code)).filter(Boolean))]

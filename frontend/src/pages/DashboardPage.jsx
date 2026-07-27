@@ -429,7 +429,14 @@ function AdvertisementBanner({ advertisements = [] }) {
             className="absolute inset-0 h-full w-full object-cover"
           />
         ) : (
-          <img src={`${APP_BASE_URL}${item.image_url}`} alt={item.title} className="absolute inset-0 h-full w-full object-cover transition duration-700 group-hover:scale-[1.02]" />
+          <img
+            src={`${APP_BASE_URL}${item.image_url}`}
+            alt={item.title}
+            loading="eager"
+            decoding="async"
+            fetchPriority="high"
+            className="absolute inset-0 h-full w-full object-cover transition duration-700 group-hover:scale-[1.02]"
+          />
         )
       ) : null}
       <div className="absolute inset-0 " />
@@ -663,6 +670,9 @@ function UserDashboardShowcase({ products = [], notices = [], user }) {
                     <img
                       src={`${APP_BASE_URL}${slide.image_url}`}
                       alt={slide.article_code || slide.name}
+                      loading={index === featuredIndex ? "eager" : "lazy"}
+                      decoding="async"
+                      fetchPriority={index === featuredIndex ? "high" : "auto"}
                       className="h-full w-full object-contain"
                     />
                   ) : (
@@ -769,6 +779,8 @@ function UserDashboardShowcase({ products = [], notices = [], user }) {
                         <img
                           src={`${APP_BASE_URL}${slide.image_url}`}
                           alt={slide.article_code || slide.name}
+                          loading="lazy"
+                          decoding="async"
                           className="h-full w-full object-contain"
                         />
                       ) : (
@@ -819,7 +831,13 @@ function UserDashboardShowcase({ products = [], notices = [], user }) {
               >
                 <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-slate-100">
                   {item.image_url ? (
-                    <img src={`${APP_BASE_URL}${item.image_url}`} alt={item.article_code || item.name} className="h-full w-full object-cover transition group-hover:scale-105" />
+                    <img
+                      src={`${APP_BASE_URL}${item.image_url}`}
+                      alt={item.article_code || item.name}
+                      loading="lazy"
+                      decoding="async"
+                      className="h-full w-full object-cover transition group-hover:scale-105"
+                    />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center text-slate-400">
                       <PackageIcon size={22} />
@@ -951,44 +969,38 @@ export default function DashboardPage() {
   const canViewOnHold = canManageVisibility || user.role === "MEMBER";
 
   const load = useCallback(async () => {
-    const [
-      stock,
-      finishedGoods,
-      formulas,
-      production,
-      consumption,
-      orders,
-      availability,
-      permissions,
-      users,
-      advertisements,
-    ] = await Promise.all([
-      user.role !== "USER" ? api.getStockSummary(token) : Promise.resolve(null),
-      api.getFinishedGoods(token),
-      user.role === "ADMIN" ? api.getFormulas(token) : Promise.resolve({ data: [] }),
-      user.role !== "USER" ? api.getProductionHistory(token, { limit: 20, include_total: 0 }) : Promise.resolve({ data: [] }),
-      user.role !== "MEMBER" ? api.getConsumptionLogs(token, { limit: 20, include_total: 0 }) : Promise.resolve({ data: [] }),
-      user.role !== "MEMBER" ? api.getOrders(token, { limit: 100 }) : Promise.resolve({ data: [] }),
-      canManageVisibility || user.role === "MEMBER" || user.role === "USER"
-        ? api.getAvailability(token, { includeHidden: canManageVisibility || user.role === "MEMBER" })
-        : Promise.resolve({ data: [] }),
-      canManageVisibility ? api.getPermissions(token) : Promise.resolve({ data: [] }),
-      canManageVisibility ? api.getUsers(token) : Promise.resolve({ data: [] }),
-      user.role === "USER" ? api.getAdvertisements(token) : Promise.resolve({ data: [] }),
-    ]);
+    const requests = [
+      ["stock", user.role !== "USER" ? api.getStockSummary(token) : Promise.resolve(null)],
+      [
+        "finishedGoods",
+        user.role !== "USER"
+          ? api.getFinishedGoods(token)
+          : Promise.resolve({ data: [] }),
+      ],
+      ["production", user.role !== "USER" ? api.getProductionHistory(token, { limit: 20, include_total: 0 }) : Promise.resolve({ data: [] })],
+      ["orders", user.role !== "MEMBER" ? api.getOrders(token, { limit: 100, include_items: 0 }) : Promise.resolve({ data: [] })],
+      [
+        "availability",
+        canManageVisibility || user.role === "MEMBER" || user.role === "USER"
+          ? api.getAvailability(token, { includeHidden: canManageVisibility || user.role === "MEMBER" })
+          : Promise.resolve({ data: [] }),
+      ],
+      ["permissions", canManageVisibility ? api.getPermissions(token, { compact: 1 }) : Promise.resolve({ data: [] })],
+      ["users", canManageVisibility ? api.getUsers(token) : Promise.resolve({ data: [] })],
+      ["advertisements", user.role === "USER" ? api.getAdvertisements(token) : Promise.resolve({ data: [] })],
+    ];
 
-    setState({
-      stock,
-      finishedGoods: finishedGoods.data || [],
-      formulas:      formulas.data      || [],
-      production:    production.data    || [],
-      consumption:   consumption.data   || [],
-      orders:        orders.data        || [],
-      availability:  availability.data  || [],
-      permissions:   permissions.data   || [],
-      users: users.data || [],
-      advertisements: advertisements.data || [],
-    });
+    await Promise.allSettled(
+      requests.map(async ([key, request]) => {
+        try {
+          const result = await request;
+          const value = key === "stock" ? result : result?.data || [];
+          setState((current) => ({ ...current, [key]: value }));
+        } catch (error) {
+          console.error(`Dashboard ${key} load failed:`, error);
+        }
+      })
+    );
   }, [token, user.role, canManageVisibility]);
 
   useEffect(() => { load().catch(console.error); }, [load]);

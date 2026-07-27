@@ -243,7 +243,16 @@ export const api = {
   deleteRawMaterial: (id, token) =>
     apiRequest(`/raw-materials/${id}`, { method: "DELETE" }, token),
 
-  getFinishedGoods: (token) => apiRequest("/finished-goods", {}, token),
+  getFinishedGoods: (token, options = {}) => {
+    const query = buildQueryString(options);
+    return apiRequest(
+      `/finished-goods${query ? `?${query}` : ""}`,
+      {},
+      token
+    );
+  },
+  getFinishedGoodFilters: (token) =>
+    apiRequest("/finished-goods/filters", {}, token),
 
   createFinishedGood: (payload, token) =>
     apiRequest(
@@ -373,7 +382,10 @@ export const api = {
       token
     ),
 
-  getPermissions: (token) => apiRequest("/permissions", {}, token),
+  getPermissions: (token, options = {}) => {
+    const query = buildQueryString(options);
+    return apiRequest(`/permissions${query ? `?${query}` : ""}`, {}, token);
+  },
 
   getOrders: (token, options = {}) => {
     const query = buildQueryString(options);
@@ -521,6 +533,14 @@ deleteStockAdjustment: (id, token) =>
   },
 
   getAnalytics: (section, token) => apiRequest(`/analytics/${section}`, {}, token),
+  getProductIntelligence: (params, token) => {
+    const query = buildQueryString(params);
+    return apiRequest(
+      `/analytics/products${query ? `?${query}` : ""}`,
+      {},
+      token
+    );
+  },
   getProductSalesAnalytics: (id, token) =>
     apiRequest(`/analytics/sales/product/${id}`, {}, token),
   getDealerAnalytics: (params, token) => {

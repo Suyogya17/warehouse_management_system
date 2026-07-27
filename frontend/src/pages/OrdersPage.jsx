@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";  
 import Button from "../components/Button";
 import DataTable from "../components/DataTable";
-import { Field, SelectInput, TextInput } from "../components/Field";
+import { Field, SelectInput, TextAreaInput, TextInput } from "../components/Field";
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import StatCard from "../components/StatCard";
@@ -34,6 +34,21 @@ const statusTone = {
 };
 
 const PRINTABLE_DELIVERY_STATUSES = ["CONFIRMED", "PACKED", "DELIVERED"];
+const CANCELLATION_OPTIONS = [
+  { value: "DUPLICATE_ORDER", label: "Duplicate order" },
+  { value: "CUSTOMER_CHANGED_MIND", label: "Customer changed mind" },
+  {
+    value: "INCORRECT_PRODUCT_OR_QUANTITY",
+    label: "Incorrect product or quantity",
+  },
+  { value: "INSUFFICIENT_STOCK", label: "Insufficient stock" },
+  { value: "PRICING_ISSUE", label: "Pricing issue" },
+  { value: "DELIVERY_ISSUE", label: "Delivery issue" },
+  { value: "OTHER", label: "Other" },
+];
+const cancellationLabel = (value) =>
+  CANCELLATION_OPTIONS.find((option) => option.value === value)?.label ||
+  "Other";
 const ORDER_CORRECTION_CO_ADMINS = new Set([
   "suyogya shrestha",
   "suyogya shresth",
@@ -55,6 +70,14 @@ export default function OrdersPage() {
   const canManageOrders = hasRole(user?.role, ["ADMIN", "CO_ADMIN"]);
   const canCorrectOrders = canUseOrderCorrection(user);
   const [orders, setOrders] = useState([]);
+  const [orderPage, setOrderPage] = useState(1);
+  const [orderPagination, setOrderPagination] = useState({
+    page: 1,
+    per_page: 50,
+    total: 0,
+    total_pages: 1,
+  });
+  const [debouncedOrderSearch, setDebouncedOrderSearch] = useState("");
   const [availability, setAvailability] = useState([]);
   const [warehouseStock, setWarehouseStock] = useState([]);
   const [form, setForm] = useState(initialForm);
@@ -63,22 +86,65 @@ export default function OrdersPage() {
   const [correctionItems, setCorrectionItems] = useState([]);
   const [correctionReason, setCorrectionReason] = useState("");
   const [savingCorrection, setSavingCorrection] = useState(false);
+  const [cancelOrder, setCancelOrder] = useState(null);
+  const [cancellationCode, setCancellationCode] = useState("DUPLICATE_ORDER");
+  const [cancellationReason, setCancellationReason] = useState("");
+  const [duplicateOfOrderId, setDuplicateOfOrderId] = useState("");
+  const [savingCancellation, setSavingCancellation] = useState(false);
 
-  // ── single load function — fetches orders, availability, and warehouse stock ──
-  const load = useCallback(async () => {
-    const [ordersResult, availabilityResult, warehouseStockResult] = await Promise.all([
-      api.getOrders(token, { limit: 200 }),
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedOrderSearch(orderSearch.trim());
+      setOrderPage(1);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [orderSearch]);
+
+  const loadOrders = useCallback(async () => {
+    const result = await api.getOrders(token, {
+      page: orderPage,
+      per_page: 50,
+      search: debouncedOrderSearch,
+      status: statusFilter === "ALL" ? undefined : statusFilter,
+    });
+    setOrders(result.data || []);
+    setOrderPagination(
+      result.pagination || {
+        page: orderPage,
+        per_page: 50,
+        total: (result.data || []).length,
+        total_pages: 1,
+      }
+    );
+  }, [debouncedOrderSearch, orderPage, statusFilter, token]);
+
+  const loadReferenceData = useCallback(async () => {
+    const [availabilityResult, warehouseStockResult] = await Promise.all([
       api.getAvailability(token, { includeHidden: canManageOrders }),
       api.getWarehouseStock(token),
     ]);
-    setOrders(ordersResult.data || []);
     setAvailability(availabilityResult.data || []);
     setWarehouseStock(warehouseStockResult.data || []);
   }, [canManageOrders, token]);
 
+  const load = useCallback(
+    () => Promise.all([loadOrders(), loadReferenceData()]),
+    [loadOrders, loadReferenceData]
+  );
+
   useEffect(() => {
-    load().catch(console.error);
-  }, [load]);
+    loadOrders().catch(console.error);
+  }, [loadOrders]);
+
+  useEffect(() => {
+    loadReferenceData().catch(console.error);
+  }, [loadReferenceData]);
+
+  useEffect(() => {
+    if (orderPage > Number(orderPagination.total_pages || 1)) {
+      setOrderPage(Number(orderPagination.total_pages || 1));
+    }
+  }, [orderPage, orderPagination.total_pages]);
 
   useDataRefresh(load, "orders");
 
@@ -135,7 +201,33 @@ export default function OrdersPage() {
           qty_ordered: Number(item.qty_ordered),
         })),
       };
-      await api.createOrder(payload, token);
+      try {
+        await api.createOrder(payload, token);
+      } catch (error) {
+        if (
+          error.status !== 409 ||
+          error.data?.code !== "POTENTIAL_DUPLICATE_ORDER"
+        ) {
+          throw error;
+        }
+        const duplicate = error.data?.duplicates?.[0];
+        const confirmed = window.confirm(
+          [
+            "Possible duplicate order detected.",
+            duplicate
+              ? `Order #${duplicate.id} for ${duplicate.customer_name} already has the same products and quantities.`
+              : "A recent order already has the same customer, products and quantities.",
+            duplicate?.created_by_name
+              ? `Created by: ${duplicate.created_by_name}`
+              : null,
+            "Create another order anyway?",
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+        );
+        if (!confirmed) return;
+        await api.createOrder({ ...payload, confirm_duplicate: true }, token);
+      }
       setForm(initialForm);
       await load();
       announceDataRefresh("orders");
@@ -145,21 +237,52 @@ export default function OrdersPage() {
     }
   };
 
-  const changeStatus = async (orderId, status, cancellationReason = "") => {
+  const changeStatus = async (orderId, status, cancellation = {}) => {
     try {
       await api.updateOrderStatus(
         orderId,
         {
           status,
-          ...(status === "CANCELLED" ? { cancellation_reason: cancellationReason } : {}),
+          ...(status === "CANCELLED" ? cancellation : {}),
         },
         token
       );
       await load();
       announceDataRefresh("orders");
       showToast({ tone: "success", title: "Order updated", message: `Order marked ${status.toLowerCase()}.` });
+      return true;
     } catch (error) {
       showToast({ tone: "error", title: "Order update failed", message: error.message });
+      return false;
+    }
+  };
+
+  const openCancellation = (order) => {
+    setCancelOrder(order);
+    setCancellationCode("DUPLICATE_ORDER");
+    setCancellationReason("");
+    setDuplicateOfOrderId("");
+  };
+
+  const submitCancellation = async (event) => {
+    event.preventDefault();
+    if (!cancelOrder) return;
+
+    const reason =
+      cancellationReason.trim() || cancellationLabel(cancellationCode);
+    setSavingCancellation(true);
+    try {
+      const saved = await changeStatus(cancelOrder.id, "CANCELLED", {
+        cancellation_code: cancellationCode,
+        cancellation_reason: reason,
+        ...(cancellationCode === "DUPLICATE_ORDER" &&
+        Number(duplicateOfOrderId) > 0
+          ? { duplicate_of_order_id: Number(duplicateOfOrderId) }
+          : {}),
+      });
+      if (saved) setCancelOrder(null);
+    } finally {
+      setSavingCancellation(false);
     }
   };
 
@@ -253,16 +376,7 @@ export default function OrdersPage() {
     </div>
   );
 
-  const filteredOrders = orders.filter((row) => {
-    const term = orderSearch.toLowerCase();
-    const matchesSearch =
-      row.id?.toString().includes(term) ||
-      row.customer_name?.toLowerCase().includes(term) ||
-      row.status?.toLowerCase().includes(term) ||
-      row.created_by_name?.toLowerCase().includes(term);
-    const matchesStatus = statusFilter === "ALL" || row.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  const filteredOrders = orders;
 
   const filteredAvailability = useMemo(() => {
     return availability.filter((item) => {
@@ -826,7 +940,10 @@ export default function OrdersPage() {
           </div>
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setOrderPage(1);
+            }}
             className="rounded-xl border border-black bg-white px-4 py-2.5 text-sm shadow-sm focus:border-slate-400 focus:outline-none"
           >
             <option value="ALL">All Status</option>
@@ -874,7 +991,23 @@ export default function OrdersPage() {
               label: "Cancel Reason",
               width: "10%",
               render: (row) =>
-                row.status === "CANCELLED" ? row.cancellation_reason || "-" : "-",
+                row.status === "CANCELLED" ? (
+                  <div className="space-y-1">
+                    <strong>
+                      {cancellationLabel(row.cancellation_code)}
+                    </strong>
+                    <div className="text-xs text-slate-500">
+                      {row.cancellation_reason || "-"}
+                    </div>
+                    {row.duplicate_of_order_id ? (
+                      <div className="text-xs font-semibold text-indigo-600">
+                        Original: Order #{row.duplicate_of_order_id}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  "-"
+                ),
             },
             {
               key: "created_by_name",
@@ -962,22 +1095,7 @@ export default function OrdersPage() {
                               size="sm"
                               variant="danger"
                               className="h-auto min-h-9 whitespace-normal px-2 py-1.5 text-sm"
-                              onClick={() => {
-                                const reason = window.prompt(
-                                  "Why is this order being cancelled?"
-                                );
-                                if (reason === null) return;
-                                const trimmedReason = reason.trim();
-                                if (!trimmedReason) {
-                                  showToast({
-                                    tone: "error",
-                                    title: "Cancel reason required",
-                                    message: "Please enter why the order is being cancelled.",
-                                  });
-                                  return;
-                                }
-                                changeStatus(row.id, "CANCELLED", trimmedReason);
-                              }}
+                              onClick={() => openCancellation(row)}
                             >
                               Cancel
                             </Button>
@@ -1040,11 +1158,102 @@ export default function OrdersPage() {
               : { key: "order_edits_empty", label: "", width: "8%" },
           ]}
           rows={filteredOrders}
+          showToolbar={false}
           fitColumns
           wrapCells
           responsiveScroll
+          serverPagination={{
+            ...orderPagination,
+            onPageChange: setOrderPage,
+          }}
         />
       </SectionCard>
+
+      {cancelOrder ? (
+        <div
+          className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
+          onMouseDown={() => !savingCancellation && setCancelOrder(null)}
+        >
+          <form
+            onSubmit={submitCancellation}
+            onMouseDown={(event) => event.stopPropagation()}
+            className="w-full max-w-lg space-y-5 rounded-2xl bg-white p-6 shadow-2xl"
+          >
+            <div>
+              <h2 className="text-lg font-bold text-slate-950">
+                Cancel Order #{cancelOrder.id}
+              </h2>
+              <p className="text-sm text-slate-500">
+                Select the correct category so duplicate orders do not reduce
+                product or dealer performance.
+              </p>
+            </div>
+
+            <Field label="Cancellation category">
+              <SelectInput
+                value={cancellationCode}
+                onChange={(event) => {
+                  setCancellationCode(event.target.value);
+                  if (event.target.value !== "DUPLICATE_ORDER") {
+                    setDuplicateOfOrderId("");
+                  }
+                }}
+              >
+                {CANCELLATION_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </SelectInput>
+            </Field>
+
+            {cancellationCode === "DUPLICATE_ORDER" ? (
+              <Field
+                label="Original order number (optional)"
+                hint="Enter the order that should remain active. The duplicate order will link to it for audit history."
+              >
+                <TextInput
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={duplicateOfOrderId}
+                  onChange={(event) => setDuplicateOfOrderId(event.target.value)}
+                  placeholder="For example: 351"
+                />
+              </Field>
+            ) : null}
+
+            <Field
+              label="Additional note"
+              hint="Optional unless the category needs more explanation."
+            >
+              <TextAreaInput
+                value={cancellationReason}
+                onChange={(event) => setCancellationReason(event.target.value)}
+                placeholder="Explain what happened"
+              />
+            </Field>
+
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={savingCancellation}
+                onClick={() => setCancelOrder(null)}
+              >
+                Keep order
+              </Button>
+              <Button
+                type="submit"
+                variant="danger"
+                disabled={savingCancellation}
+              >
+                {savingCancellation ? "Cancelling..." : "Cancel order"}
+              </Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       {correctionOrder ? (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" onMouseDown={() => !savingCorrection && setCorrectionOrder(null)}>

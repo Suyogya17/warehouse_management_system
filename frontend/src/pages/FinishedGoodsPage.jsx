@@ -13,7 +13,7 @@ import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber, formatPrice } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
-import { getCommissionLabel, isCommissionProduct, matchesCommissionFilter } from "../utils/commission";
+import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
 import Select from "react-select";
 import * as XLSX from "xlsx";
 
@@ -77,19 +77,81 @@ export default function FinishedGoodsPage() {
   const [searchId, setSearchId] = useState("");
   const [seriesFilter, setSeriesFilter] = useState("");
   const [commissionFilter, setCommissionFilter] = useState("all");
-
-  const loadItems = useCallback(async () => {
-    const [goodsResult, materialsResult] = await Promise.all([
-      api.getFinishedGoods(token),
-      isAdmin ? api.getRawMaterials(token) : Promise.resolve({ data: [] }),
-    ]);
-    setItems(goodsResult.data || []);
-    setMaterials(materialsResult.data || []);
-  }, [isAdmin, token]);
+  const [seriesOptions, setSeriesOptions] = useState([]);
+  const [productPage, setProductPage] = useState(1);
+  const [productPagination, setProductPagination] = useState({
+    page: 1,
+    per_page: 50,
+    total: 0,
+    total_pages: 1,
+  });
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [debouncedSearchId, setDebouncedSearchId] = useState("");
 
   useEffect(() => {
-    loadItems().catch(console.error);
-  }, [loadItems]);
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setDebouncedSearchId(searchId.trim());
+      setProductPage(1);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [search, searchId]);
+
+  const loadProducts = useCallback(async () => {
+    const goodsResult = await api.getFinishedGoods(token, {
+      page: productPage,
+      per_page: 50,
+      search: debouncedSearch,
+      id: debouncedSearchId,
+      sole_code: seriesFilter || undefined,
+      commission:
+        commissionFilter === "all" ? undefined : commissionFilter,
+    });
+    setItems(goodsResult.data || []);
+    setProductPagination(
+      goodsResult.pagination || {
+        page: productPage,
+        per_page: 50,
+        total: (goodsResult.data || []).length,
+        total_pages: 1,
+      }
+    );
+  }, [
+    commissionFilter,
+    debouncedSearch,
+    debouncedSearchId,
+    productPage,
+    seriesFilter,
+    token,
+  ]);
+
+  const loadReferenceData = useCallback(async () => {
+    const [materialsResult, filtersResult] = await Promise.all([
+      isAdmin ? api.getRawMaterials(token) : Promise.resolve({ data: [] }),
+      api.getFinishedGoodFilters(token),
+    ]);
+    setMaterials(materialsResult.data || []);
+    setSeriesOptions(filtersResult.data?.series || []);
+  }, [isAdmin, token]);
+
+  const loadItems = useCallback(
+    () => Promise.all([loadProducts(), loadReferenceData()]),
+    [loadProducts, loadReferenceData]
+  );
+
+  useEffect(() => {
+    loadProducts().catch(console.error);
+  }, [loadProducts]);
+
+  useEffect(() => {
+    loadReferenceData().catch(console.error);
+  }, [loadReferenceData]);
+
+  useEffect(() => {
+    if (productPage > Number(productPagination.total_pages || 1)) {
+      setProductPage(Number(productPagination.total_pages || 1));
+    }
+  }, [productPage, productPagination.total_pages]);
 
   useDataRefresh(loadItems, "finished-goods");
 
@@ -245,31 +307,18 @@ export default function FinishedGoodsPage() {
     }));
   };
 
-  const filteredItems = items.filter((item) => {
-    if (!canViewHidden && !item.is_visible) return false;
-
-    if (seriesFilter && getSeriesName(item.sole_code) !== seriesFilter) return false;
-    if (!matchesCommissionFilter(item, commissionFilter)) return false;
-
-    const qId = searchId.trim().toLowerCase();
-    if (qId && !String(item.id || "").toLowerCase().includes(qId)) return false;
-
-    const q = search.trim().toLowerCase();
-    if (!q) return true;
-
-    return (
-      (item.name || "").toLowerCase().includes(q) ||
-      (item.article_code || "").toLowerCase().includes(q) ||
-      (item.sole_code || "").toLowerCase().includes(q)
-    );
-  });
-
+  const filteredItems = items;
   const seriesList = useMemo(
     () =>
-      [...new Set(items.map((item) => getSeriesName(item.sole_code)).filter(Boolean))].sort(
-        (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
-      ),
-    [items]
+      seriesOptions
+        .map((value) => ({ value, label: getSeriesName(value) }))
+        .sort((a, b) =>
+          a.label.localeCompare(b.label, undefined, {
+            numeric: true,
+            sensitivity: "base",
+          })
+        ),
+    [seriesOptions]
   );
 
   const isEmpty = filteredItems.length === 0;
@@ -654,19 +703,25 @@ export default function FinishedGoodsPage() {
           />
           <select
             value={seriesFilter}
-            onChange={(e) => setSeriesFilter(e.target.value)}
+            onChange={(e) => {
+              setSeriesFilter(e.target.value);
+              setProductPage(1);
+            }}
             className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100 md:w-44"
           >
             <option value="">All Series</option>
             {seriesList.map((series) => (
-              <option key={series} value={series}>
-                {series}
+              <option key={series.value} value={series.value}>
+                {series.label}
               </option>
             ))}
           </select>
           <select
             value={commissionFilter}
-            onChange={(e) => setCommissionFilter(e.target.value)}
+            onChange={(e) => {
+              setCommissionFilter(e.target.value);
+              setProductPage(1);
+            }}
             className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100 md:w-52"
           >
             <option value="all">All commission</option>
@@ -686,6 +741,8 @@ export default function FinishedGoodsPage() {
                   <img
                     src={`${APP_BASE_URL}${row.image_url}`}
                     alt={row.name}
+                    loading="lazy"
+                    decoding="async"
                     className="h-14 w-14 rounded-2xl object-cover"
                   />
                 ) : (
@@ -753,11 +810,15 @@ export default function FinishedGoodsPage() {
           ]}
           rows={filteredItems}
           showToolbar={false}
+          serverPagination={{
+            ...productPagination,
+            onPageChange: setProductPage,
+          }}
         />
 
           <div className="mt-3 flex justify-center px-2">
   <span className="text-sm text-slate-500">
-    Total pairs: <span className="font-medium text-slate-800">{formatNumber(totalPairs)}</span>
+    Pairs on this page: <span className="font-medium text-slate-800">{formatNumber(totalPairs)}</span>
   </span>
 </div>
 

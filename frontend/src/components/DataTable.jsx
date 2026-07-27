@@ -29,6 +29,7 @@ export default function DataTable({
   fitColumns = false,
   wrapCells = false,
   responsiveScroll = false,
+  serverPagination = null,
 }) {
   const alignmentClass = (column) => {
     if (column.align === "center") return "text-center";
@@ -42,6 +43,10 @@ export default function DataTable({
   const [searchKey, setSearchKey] = useState("all");
   const tableContainerRef = useRef(null);
   const rowsPerPage = 10;
+  const usesServerPagination = Boolean(serverPagination);
+  const effectiveCurrentPage = usesServerPagination
+    ? Number(serverPagination.page || 1)
+    : currentPage;
 
   useEffect(() => {
     const container = tableContainerRef.current;
@@ -59,8 +64,8 @@ export default function DataTable({
   }, [fitColumns]);
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, searchKey, rows]);
+    if (!usesServerPagination) setCurrentPage(1);
+  }, [searchTerm, searchKey, rows, usesServerPagination]);
 
   function getExportCellValue(row, column, rowIndex) {
     if (typeof column.exportValue === "function") {
@@ -96,11 +101,15 @@ export default function DataTable({
       })
     : rows;
 
-  const totalPages = Math.ceil(filteredData.length / rowsPerPage);
-  const paginatedRows = filteredData.slice(
-    (currentPage - 1) * rowsPerPage,
-    currentPage * rowsPerPage
-  );
+  const totalPages = usesServerPagination
+    ? Number(serverPagination.total_pages || 1)
+    : Math.ceil(filteredData.length / rowsPerPage);
+  const paginatedRows = usesServerPagination
+    ? filteredData
+    : filteredData.slice(
+        (effectiveCurrentPage - 1) * rowsPerPage,
+        effectiveCurrentPage * rowsPerPage
+      );
 
   const renderCell = (row, column, rowIndex) => {
     if (column.render) return column.render(row, rowIndex);
@@ -132,7 +141,7 @@ export default function DataTable({
   const getPageNumbers = () => {
     const pages = [];
     const maxVisible = 5;
-    let start = Math.max(1, currentPage - 2);
+    let start = Math.max(1, effectiveCurrentPage - 2);
     const end = Math.min(totalPages, start + maxVisible - 1);
     if (end - start < maxVisible - 1) start = Math.max(1, end - maxVisible + 1);
     if (start > 1) {
@@ -206,38 +215,9 @@ export default function DataTable({
 
       {paginatedRows.length ? (
         <>
-          <div className="divide-y divide-slate-100 md:hidden">
-            {paginatedRows.map((row, rowIndex) => (
-              <article
-                key={row.id || rowIndex}
-                className="space-y-1 px-3 py-4 odd:bg-white even:bg-slate-50/60"
-              >
-                {columns.map((column, columnIndex) => (
-                  <div
-                    key={column.key}
-                    className="grid grid-cols-[minmax(0,0.4fr)_minmax(0,0.6fr)] gap-3 rounded-lg px-1 py-1.5"
-                  >
-                    <p className="text-xs font-semibold uppercase leading-5 tracking-wide text-slate-500">
-                      {column.label}
-                    </p>
-                    <div
-                      className={`min-w-0 break-words text-right text-sm leading-5 ${
-                        columnIndex === 0
-                          ? "font-semibold text-slate-950"
-                          : "text-slate-700"
-                      }`}
-                    >
-                      {renderCell(row, column, rowIndex)}
-                    </div>
-                  </div>
-                ))}
-              </article>
-            ))}
-          </div>
-
           <div
             ref={tableContainerRef}
-            className={`touch-scroll hidden overflow-x-auto md:block ${
+            className={`touch-scroll block overflow-x-auto ${
               fitColumns && responsiveScroll ? "lg:overflow-x-visible" : ""
             }`}
           >
@@ -306,14 +286,43 @@ export default function DataTable({
 
       <div className="flex flex-col items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3 sm:flex-row">
         <div className="text-sm text-slate-500">
-          Showing {filteredData.length === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1}–
-          {Math.min(currentPage * rowsPerPage, filteredData.length)} of {filteredData.length}
+          Showing{" "}
+          {usesServerPagination
+            ? filteredData.length
+              ? (effectiveCurrentPage - 1) *
+                  Number(serverPagination.per_page || filteredData.length) +
+                1
+              : 0
+            : filteredData.length === 0
+              ? 0
+              : (effectiveCurrentPage - 1) * rowsPerPage + 1}
+          –
+          {usesServerPagination
+            ? Math.min(
+                effectiveCurrentPage *
+                  Number(serverPagination.per_page || filteredData.length),
+                Number(serverPagination.total || 0)
+              )
+            : Math.min(
+                effectiveCurrentPage * rowsPerPage,
+                filteredData.length
+              )}{" "}
+          of{" "}
+          {usesServerPagination
+            ? Number(serverPagination.total || 0)
+            : filteredData.length}
         </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
-            disabled={currentPage === 1}
+            onClick={() =>
+              usesServerPagination
+                ? serverPagination.onPageChange?.(
+                    Math.max(effectiveCurrentPage - 1, 1)
+                  )
+                : setCurrentPage((page) => Math.max(page - 1, 1))
+            }
+            disabled={effectiveCurrentPage === 1}
             className="rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50"
           >
             Prev
@@ -323,9 +332,13 @@ export default function DataTable({
               <button
                 type="button"
                 key={page}
-                onClick={() => setCurrentPage(page)}
+                onClick={() =>
+                  usesServerPagination
+                    ? serverPagination.onPageChange?.(page)
+                    : setCurrentPage(page)
+                }
                 className={`rounded-lg px-3 py-1.5 text-sm ${
-                  currentPage === page
+                  effectiveCurrentPage === page
                     ? "bg-indigo-600 text-white"
                     : "border text-slate-700 hover:bg-indigo-50"
                 }`}
@@ -340,8 +353,18 @@ export default function DataTable({
           )}
           <button
             type="button"
-            onClick={() => setCurrentPage((page) => Math.min(page + 1, totalPages))}
-            disabled={currentPage === totalPages || totalPages === 0}
+            onClick={() =>
+              usesServerPagination
+                ? serverPagination.onPageChange?.(
+                    Math.min(effectiveCurrentPage + 1, totalPages)
+                  )
+                : setCurrentPage((page) =>
+                    Math.min(page + 1, totalPages)
+                  )
+            }
+            disabled={
+              effectiveCurrentPage === totalPages || totalPages === 0
+            }
             className="rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50"
           >
             Next

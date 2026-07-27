@@ -148,15 +148,21 @@ function ProductCard({ variants = [], onAddToCart, onProductInterest, cartProduc
     if (!selectedImageUrl) return;
 
     const imageName = selectedVariant.article_code || selectedVariant.name || "product-image";
-    const fileName = `${imageName.replace(/[^\w-]+/g, "-")}.jpg`;
+    const safeImageName = imageName.replace(/[^\w-]+/g, "-");
 
     try {
       const response = await fetch(selectedImageUrl);
       const blob = await response.blob();
+      const extension =
+        blob.type === "image/webp"
+          ? "webp"
+          : blob.type === "image/png"
+            ? "png"
+            : "jpg";
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = objectUrl;
-      link.download = fileName;
+      link.download = `${safeImageName}.${extension}`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -433,6 +439,8 @@ function ProductCard({ variants = [], onAddToCart, onProductInterest, cartProduc
                     <img
                       src={`${APP_BASE_URL}${variant.image_url}`}
                       alt={variant.name}
+                      loading="lazy"
+                      decoding="async"
                       className="h-full w-full object-cover"
                     />
                   </button>

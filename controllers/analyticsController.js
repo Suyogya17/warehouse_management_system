@@ -1,5 +1,36 @@
 const { query } = require("../config/db");
 const { hasColumn, hasTable } = require("../utils/schemaSupport");
+const paginationUtils = require("../utils/pagination");
+const getPagePagination =
+  paginationUtils.getPagePagination ||
+  ((query = {}, { defaultPageSize = 50, maxPageSize = 200 } = {}) => {
+    const page = Math.max(1, Number.parseInt(query.page, 10) || 1);
+    const pageSize = Math.min(
+      maxPageSize,
+      Math.max(
+        1,
+        Number.parseInt(query.per_page ?? query.page_size, 10) ||
+          defaultPageSize
+      )
+    );
+    return {
+      enabled:
+        query.page !== undefined ||
+        query.per_page !== undefined ||
+        query.page_size !== undefined,
+      page,
+      pageSize,
+      offset: (page - 1) * pageSize,
+    };
+  });
+const getPaginationMeta =
+  paginationUtils.getPaginationMeta ||
+  (({ page, pageSize }, total) => ({
+    page,
+    per_page: pageSize,
+    total: Number(total || 0),
+    total_pages: Math.max(1, Math.ceil(Number(total || 0) / pageSize)),
+  }));
 
 const ACTIVE_ORDER_STATUSES = ["PENDING", "CONFIRMED", "PACKED"];
 
@@ -650,6 +681,10 @@ const getProduction = async (req, res, next) => {
 
 const getSales = async (req, res, next) => {
   try {
+    const supportsCancellationCode = await hasColumn(
+      "orders",
+      "cancellation_code"
+    );
     const [
       monthlyOrderTrend,
       dailyOrderTrend,
@@ -659,6 +694,7 @@ const getSales = async (req, res, next) => {
       fulfilledDeliveredOrders,
       productSalesOptions,
       seriesSales,
+      cancellationBreakdown,
     ] = await Promise.all([
       run(
         `SELECT DATE_FORMAT(o.created_at, '%Y-%m') AS month,
@@ -667,6 +703,7 @@ const getSales = async (req, res, next) => {
          FROM orders o
          LEFT JOIN order_items oi ON oi.order_id = o.id
          WHERE o.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)
+           AND o.status <> 'CANCELLED'
          GROUP BY DATE_FORMAT(o.created_at, '%Y-%m')
          ORDER BY month`
       ),
@@ -677,6 +714,7 @@ const getSales = async (req, res, next) => {
          FROM orders o
          LEFT JOIN order_items oi ON oi.order_id = o.id
          WHERE o.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+           AND o.status <> 'CANCELLED'
          GROUP BY DATE_FORMAT(o.created_at, '%Y-%m-%d')
          ORDER BY day`
       ),
@@ -756,6 +794,18 @@ const getSales = async (req, res, next) => {
          GROUP BY COALESCE(NULLIF(TRIM(fg.sole_code), ''), 'Unassigned')
          ORDER BY total_quantity DESC`
       ),
+      supportsCancellationCode
+        ? run(
+            `SELECT COALESCE(NULLIF(cancellation_code, ''), 'OTHER') AS cancellation_code,
+                    COUNT(DISTINCT o.id) AS order_count,
+                    COALESCE(SUM(oi.qty_ordered), 0) AS total_quantity
+             FROM orders o
+             LEFT JOIN order_items oi ON oi.order_id = o.id
+             WHERE o.status = 'CANCELLED'
+             GROUP BY COALESCE(NULLIF(cancellation_code, ''), 'OTHER')
+             ORDER BY total_quantity DESC`
+          )
+        : Promise.resolve([]),
     ]);
 
     return res.json({
@@ -769,6 +819,10 @@ const getSales = async (req, res, next) => {
         fulfilled_delivered_orders: mapNumeric(fulfilledDeliveredOrders, ["total_quantity"]),
         product_sales_options: mapNumeric(productSalesOptions, ["total_quantity", "order_count"]),
         series_sales: mapNumeric(seriesSales, ["total_quantity", "order_count", "product_count"]),
+        cancellation_breakdown: mapNumeric(cancellationBreakdown, [
+          "order_count",
+          "total_quantity",
+        ]),
       },
     });
   } catch (err) {
@@ -782,6 +836,16 @@ const getProductSales = async (req, res, next) => {
     if (!Number.isInteger(productId) || productId <= 0) {
       return res.status(400).json({ success: false, message: "Valid product id required" });
     }
+    const supportsCancellationCode = await hasColumn(
+      "orders",
+      "cancellation_code"
+    );
+    const genuineCancellationCondition = supportsCancellationCode
+      ? "o.status = 'CANCELLED' AND COALESCE(o.cancellation_code, 'OTHER') <> 'DUPLICATE_ORDER'"
+      : "o.status = 'CANCELLED'";
+    const duplicateCancellationCondition = supportsCancellationCode
+      ? "o.status = 'CANCELLED' AND o.cancellation_code = 'DUPLICATE_ORDER'"
+      : "FALSE";
 
     const [summaryRows, dailyTrend, statusSummary] = await Promise.all([
       run(
@@ -791,7 +855,8 @@ const getProductSales = async (req, res, next) => {
                 COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
                 COALESCE(SUM(CASE WHEN o.status = 'DELIVERED' THEN oi.qty_ordered ELSE 0 END), 0) AS delivered_quantity,
                 COALESCE(SUM(CASE WHEN o.status IN ('PENDING', 'CONFIRMED', 'PACKED') THEN oi.qty_ordered ELSE 0 END), 0) AS active_quantity,
-                COALESCE(SUM(CASE WHEN o.status = 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
+                COALESCE(SUM(CASE WHEN ${genuineCancellationCondition} THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
+                COALESCE(SUM(CASE WHEN ${duplicateCancellationCondition} THEN oi.qty_ordered ELSE 0 END), 0) AS duplicate_cancelled_quantity,
                 MAX(CASE WHEN o.status <> 'CANCELLED' THEN o.created_at END) AS last_order_at
          FROM finished_goods fg
          LEFT JOIN order_items oi ON oi.finished_good_id = fg.id
@@ -840,6 +905,7 @@ const getProductSales = async (req, res, next) => {
           "delivered_quantity",
           "active_quantity",
           "cancelled_quantity",
+          "duplicate_cancelled_quantity",
         ])[0],
         daily_trend: mapNumeric(dailyTrend, [
           "order_count",
@@ -856,10 +922,18 @@ const getProductSales = async (req, res, next) => {
 
 const getDealers = async (req, res, next) => {
   try {
-    const [supportsProductInterest, supportsOfferSnapshots] = await Promise.all([
+    const [
+      supportsProductInterest,
+      supportsOfferSnapshots,
+      supportsCancellationCode,
+    ] = await Promise.all([
       hasTable("product_interest_events"),
       hasColumn("order_items", "ordered_from_offer"),
+      hasColumn("orders", "cancellation_code"),
     ]);
+    const analyticsOrderStatus = supportsCancellationCode
+      ? "CASE WHEN o.status = 'CANCELLED' AND o.cancellation_code = 'DUPLICATE_ORDER' THEN 'DUPLICATE' ELSE o.status END"
+      : "o.status";
     const [
       topDealersByQuantity,
       topDealersByOrderCount,
@@ -868,8 +942,6 @@ const getDealers = async (req, res, next) => {
       dealerCustomerSummary,
       dealerOptions,
       offerDealerOptions,
-      accountProductInterest,
-      accountSearchTerms,
     ] = await Promise.all([
       run(
         `SELECT COALESCE(u.name, 'Unknown dealer') AS dealer_name,
@@ -894,19 +966,20 @@ const getDealers = async (req, res, next) => {
          FROM orders o
          LEFT JOIN order_items oi ON oi.order_id = o.id
          LEFT JOIN users u ON u.id = o.created_by
+         WHERE o.status <> 'CANCELLED'
          GROUP BY o.created_by, u.name, u.email
          ORDER BY order_count DESC, total_quantity DESC
          LIMIT 20`
       ),
       run(
         `SELECT COALESCE(u.name, 'Unknown dealer') AS dealer_name,
-                o.status,
+                ${analyticsOrderStatus} AS status,
                 COUNT(DISTINCT o.id) AS order_count,
                 COALESCE(SUM(oi.qty_ordered), 0) AS total_quantity
          FROM orders o
          LEFT JOIN order_items oi ON oi.order_id = o.id
          LEFT JOIN users u ON u.id = o.created_by
-         GROUP BY o.created_by, u.name, o.status
+         GROUP BY o.created_by, u.name, ${analyticsOrderStatus}
          ORDER BY dealer_name, order_count DESC`
       ),
       run(
@@ -918,6 +991,7 @@ const getDealers = async (req, res, next) => {
          LEFT JOIN order_items oi ON oi.order_id = o.id
          LEFT JOIN users u ON u.id = o.created_by
          WHERE o.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)
+           AND o.status <> 'CANCELLED'
          GROUP BY DATE_FORMAT(o.created_at, '%Y-%m'), o.created_by, u.name
          ORDER BY month, total_quantity DESC`
       ),
@@ -970,73 +1044,7 @@ const getDealers = async (req, res, next) => {
            ORDER BY dealer_name`
         )
         : Promise.resolve([]),
-      supportsProductInterest
-        ? run(
-          `SELECT u.id AS user_id, u.name AS account_name, u.email,
-                  fg.id AS finished_good_id, fg.article_code, fg.sole_code, fg.color, fg.size,
-                  interest.surface,
-                  interest.interest_count,
-                  interest.last_interested_at,
-                  COUNT(DISTINCT CASE WHEN oi.id IS NOT NULL THEN o.id END) AS converted_order_count,
-                  COALESCE(SUM(CASE WHEN oi.id IS NOT NULL THEN oi.qty_ordered ELSE 0 END), 0) AS converted_quantity
-           FROM (
-             SELECT user_id, finished_good_id, surface,
-                    COUNT(*) AS interest_count,
-                    MIN(created_at) AS first_interested_at,
-                    MAX(created_at) AS last_interested_at
-             FROM product_interest_events
-             WHERE event_type = 'PRODUCT_INTEREST'
-             GROUP BY user_id, finished_good_id, surface
-           ) interest
-           JOIN users u ON u.id = interest.user_id
-           JOIN finished_goods fg ON fg.id = interest.finished_good_id
-           LEFT JOIN orders o ON o.created_by = interest.user_id
-             AND o.status <> 'CANCELLED'
-             AND o.created_at >= interest.first_interested_at
-           LEFT JOIN order_items oi ON oi.order_id = o.id
-             AND oi.finished_good_id = interest.finished_good_id
-           GROUP BY u.id, u.name, u.email, fg.id, fg.article_code, fg.sole_code, fg.color, fg.size,
-                    interest.surface, interest.interest_count, interest.last_interested_at
-           ORDER BY interest.interest_count DESC, interest.last_interested_at DESC
-           LIMIT 100`
-        )
-        : Promise.resolve([]),
-      supportsProductInterest
-        ? run(
-          `SELECT u.id AS user_id, u.name AS account_name, u.email,
-                  pie.search_term, pie.surface,
-                  COUNT(*) AS search_count,
-                  MAX(pie.created_at) AS last_searched_at
-           FROM product_interest_events pie
-           JOIN users u ON u.id = pie.user_id
-           WHERE pie.event_type = 'SEARCH'
-           GROUP BY u.id, u.name, u.email, pie.search_term, pie.surface
-           ORDER BY search_count DESC, last_searched_at DESC
-           LIMIT 100`
-        )
-        : Promise.resolve([]),
     ]);
-    const normalizedAccountProductInterest = mapNumeric(accountProductInterest, [
-      "interest_count",
-      "converted_order_count",
-      "converted_quantity",
-    ]);
-    const conversionByUser = normalizedAccountProductInterest.reduce((acc, row) => {
-      const key = Number(row.user_id);
-      acc[key] = acc[key] || { interested_products: 0, converted_products: 0 };
-      acc[key].interested_products += 1;
-      if (row.converted_order_count > 0) acc[key].converted_products += 1;
-      return acc;
-    }, {});
-    const accountProductInterestWithConversion = normalizedAccountProductInterest.map((row) => {
-      const totals = conversionByUser[Number(row.user_id)] || {};
-      return {
-        ...row,
-        account_conversion_rate: Number(totals.interested_products || 0) > 0
-          ? (Number(totals.converted_products || 0) / Number(totals.interested_products)) * 100
-          : 0,
-      };
-    });
 
     return res.json({
       success: true,
@@ -1065,8 +1073,8 @@ const getDealers = async (req, res, next) => {
         ]),
         dealer_options: mapNumeric(dealerOptions, ["dealer_id", "customer_count", "order_count", "total_quantity"]),
         offer_dealer_options: mapNumeric(offerDealerOptions, ["dealer_id", "customer_count", "order_count", "total_quantity"]),
-        account_product_interest: accountProductInterestWithConversion,
-        account_search_terms: mapNumeric(accountSearchTerms, ["search_count"]),
+        account_product_interest: [],
+        account_search_terms: [],
         product_interest_tracking_ready: supportsProductInterest,
       },
     });
@@ -1079,12 +1087,29 @@ const getDealerDetail = async (req, res, next) => {
   try {
     const dealerId = Number(req.query.dealer_id);
     const offerOnly = String(req.query.mode || "").trim().toLowerCase() === "offers";
+    const productPagination = getPagePagination(req.query, {
+      defaultPageSize: 50,
+      maxPageSize: 100,
+    });
+    const productSearch = String(req.query.product_search || "")
+      .trim()
+      .toLowerCase();
+    const productStatus = String(req.query.product_status || "ALL")
+      .trim()
+      .toUpperCase();
     if (!Number.isInteger(dealerId) || dealerId <= 0) {
       return res.status(400).json({ success: false, message: "Valid dealer account required" });
     }
-    const [supportsOfferSnapshots, supportsOfferQuantitySnapshot] = await Promise.all([
+    const [
+      supportsOfferSnapshots,
+      supportsOfferQuantitySnapshot,
+      supportsProductInterest,
+      supportsCancellationCode,
+    ] = await Promise.all([
       hasColumn("order_items", "ordered_from_offer"),
       hasColumn("order_items", "offer_display_quantity"),
+      hasTable("product_interest_events"),
+      hasColumn("orders", "cancellation_code"),
     ]);
     if (offerOnly && !supportsOfferSnapshots) {
       return res.status(409).json({
@@ -1095,6 +1120,12 @@ const getDealerDetail = async (req, res, next) => {
 
     const dealerMatch = "o.created_by = ?";
     const dealerParams = [dealerId];
+    const genuineCancellationCondition = supportsCancellationCode
+      ? "o.status = 'CANCELLED' AND COALESCE(o.cancellation_code, 'OTHER') <> 'DUPLICATE_ORDER'"
+      : "o.status = 'CANCELLED'";
+    const duplicateCancellationCondition = supportsCancellationCode
+      ? "o.status = 'CANCELLED' AND o.cancellation_code = 'DUPLICATE_ORDER'"
+      : "FALSE";
     const offerItemCondition = offerOnly ? "AND COALESCE(oi.ordered_from_offer, 0) = 1" : "";
     const productUniverseCondition = offerOnly
       ? `AND (
@@ -1104,12 +1135,25 @@ const getDealerDetail = async (req, res, next) => {
         )`
       : "";
 
-    const [summaryRows, monthlyTrend, rawProducts, dealerRows, customerRows] = await Promise.all([
+    const interestSurfaceCondition = offerOnly
+      ? "AND surface IN ('OFFERS', 'OFFER_GALLERY')"
+      : "";
+    const [
+      summaryRows,
+      monthlyTrend,
+      rawProducts,
+      dealerRows,
+      customerRows,
+      accountProductInterest,
+      accountSearchTerms,
+    ] = await Promise.all([
       run(
         `SELECT COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
-                COUNT(DISTINCT CASE WHEN o.status = 'CANCELLED' THEN o.id END) AS cancelled_order_count,
+                COUNT(DISTINCT CASE WHEN ${genuineCancellationCondition} THEN o.id END) AS cancelled_order_count,
+                COUNT(DISTINCT CASE WHEN ${duplicateCancellationCondition} THEN o.id END) AS duplicate_order_count,
                 COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS total_quantity,
-                COALESCE(SUM(CASE WHEN o.status = 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
+                COALESCE(SUM(CASE WHEN ${genuineCancellationCondition} THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
+                COALESCE(SUM(CASE WHEN ${duplicateCancellationCondition} THEN oi.qty_ordered ELSE 0 END), 0) AS duplicate_cancelled_quantity,
                 MAX(CASE WHEN o.status <> 'CANCELLED' THEN o.created_at END) AS last_order_at
          FROM orders o
          LEFT JOIN order_items oi ON oi.order_id = o.id
@@ -1152,7 +1196,7 @@ const getDealerDetail = async (req, res, next) => {
            SELECT oi.finished_good_id,
                   COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS total_quantity,
                   COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
-                  COALESCE(SUM(CASE WHEN o.status = 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
+                  COALESCE(SUM(CASE WHEN ${genuineCancellationCondition} THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
                   MAX(CASE WHEN o.status <> 'CANCELLED' THEN o.created_at END) AS last_order_at,
                   ${supportsOfferSnapshots && supportsOfferQuantitySnapshot
                     ? "MAX(CASE WHEN COALESCE(oi.ordered_from_offer, 0) = 1 THEN oi.offer_display_quantity END)"
@@ -1190,7 +1234,8 @@ const getDealerDetail = async (req, res, next) => {
                 MAX(NULLIF(TRIM(o.customer_phone), '')) AS customer_phone,
                 COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
                 COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS total_quantity,
-                COALESCE(SUM(CASE WHEN o.status = 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
+                COALESCE(SUM(CASE WHEN ${genuineCancellationCondition} THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
+                COALESCE(SUM(CASE WHEN ${duplicateCancellationCondition} THEN oi.qty_ordered ELSE 0 END), 0) AS duplicate_cancelled_quantity,
                 MAX(CASE WHEN o.status <> 'CANCELLED' THEN o.created_at END) AS last_order_at
          FROM orders o
          LEFT JOIN order_items oi ON oi.order_id = o.id
@@ -1202,6 +1247,56 @@ const getDealerDetail = async (req, res, next) => {
          ORDER BY total_quantity DESC, customer_name`,
         dealerParams
       ),
+      supportsProductInterest
+        ? run(
+            `SELECT ? AS user_id,
+                    fg.id AS finished_good_id,
+                    fg.article_code, fg.sole_code, fg.color, fg.size,
+                    interest.surface,
+                    interest.interest_count,
+                    interest.last_interested_at,
+                    COUNT(DISTINCT CASE WHEN oi.id IS NOT NULL THEN o.id END) AS converted_order_count,
+                    COALESCE(SUM(CASE WHEN oi.id IS NOT NULL THEN oi.qty_ordered ELSE 0 END), 0) AS converted_quantity
+             FROM (
+               SELECT finished_good_id, surface,
+                      COUNT(*) AS interest_count,
+                      MIN(created_at) AS first_interested_at,
+                      MAX(created_at) AS last_interested_at
+               FROM product_interest_events
+               WHERE user_id = ?
+                 AND event_type = 'PRODUCT_INTEREST'
+                 ${interestSurfaceCondition}
+               GROUP BY finished_good_id, surface
+             ) interest
+             JOIN finished_goods fg ON fg.id = interest.finished_good_id
+             LEFT JOIN orders o ON o.created_by = ?
+               AND o.status <> 'CANCELLED'
+               AND o.created_at >= interest.first_interested_at
+             LEFT JOIN order_items oi ON oi.order_id = o.id
+               AND oi.finished_good_id = interest.finished_good_id
+             GROUP BY fg.id, fg.article_code, fg.sole_code, fg.color, fg.size,
+                      interest.surface, interest.interest_count, interest.last_interested_at
+             ORDER BY interest.interest_count DESC, interest.last_interested_at DESC
+             LIMIT 100`,
+            [dealerId, dealerId, dealerId]
+          )
+        : Promise.resolve([]),
+      supportsProductInterest
+        ? run(
+            `SELECT ? AS user_id,
+                    search_term, surface,
+                    COUNT(*) AS search_count,
+                    MAX(created_at) AS last_searched_at
+             FROM product_interest_events
+             WHERE user_id = ?
+               AND event_type = 'SEARCH'
+               ${interestSurfaceCondition}
+             GROUP BY search_term, surface
+             ORDER BY search_count DESC, last_searched_at DESC
+             LIMIT 100`,
+            [dealerId, dealerId]
+          )
+        : Promise.resolve([]),
     ]);
 
     if (!dealerRows.length) {
@@ -1284,13 +1379,48 @@ const getDealerDetail = async (req, res, next) => {
     const summary = mapNumeric(summaryRows, [
       "order_count",
       "cancelled_order_count",
+      "duplicate_order_count",
       "total_quantity",
       "cancelled_quantity",
+      "duplicate_cancelled_quantity",
     ])[0] || {};
     const totalAttempts = Number(summary.order_count || 0) + Number(summary.cancelled_order_count || 0);
     summary.cancellation_rate = totalAttempts
       ? (Number(summary.cancelled_order_count || 0) / totalAttempts) * 100
       : 0;
+    summary.total_cartons = products.reduce(
+      (sum, row) => sum + Number(row.ordered_cartons || 0),
+      0
+    );
+    const normalizedAccountProductInterest = mapNumeric(accountProductInterest, [
+      "interest_count",
+      "converted_order_count",
+      "converted_quantity",
+    ]);
+    const interestedProducts = normalizedAccountProductInterest.length;
+    const convertedProducts = normalizedAccountProductInterest.filter(
+      (row) => row.converted_order_count > 0
+    ).length;
+    const accountConversionRate = interestedProducts
+      ? (convertedProducts / interestedProducts) * 100
+      : 0;
+
+    const filteredProducts = products.filter((row) => {
+      const matchesStatus =
+        productStatus === "ALL" || row.status === productStatus;
+      const matchesSearch =
+        !productSearch ||
+        [row.article_code, row.sole_code, row.color, row.size]
+          .map((value) => String(value || "").toLowerCase())
+          .some((value) => value.includes(productSearch));
+      return matchesStatus && matchesSearch;
+    });
+    const paginatedProducts = productPagination.enabled
+      ? filteredProducts.slice(
+          productPagination.offset,
+          productPagination.offset + productPagination.pageSize
+        )
+      : filteredProducts;
 
     return res.json({
       success: true,
@@ -1300,14 +1430,38 @@ const getDealerDetail = async (req, res, next) => {
         offer_snapshot_supported: supportsOfferSnapshots,
         summary,
         monthly_trend: mapNumeric(monthlyTrend, ["order_count", "total_quantity"]),
-        products,
+        products: paginatedProducts,
+        product_pagination: productPagination.enabled
+          ? getPaginationMeta(productPagination, filteredProducts.length)
+          : null,
+        product_status_counts: products.reduce((counts, row) => {
+          counts[row.status] = Number(counts[row.status] || 0) + 1;
+          return counts;
+        }, {}),
         best_series: summarizeDimension("sole_code"),
         best_colors: summarizeDimension("color"),
         customers: mapNumeric(customerRows, [
           "order_count",
           "total_quantity",
           "cancelled_quantity",
+          "duplicate_cancelled_quantity",
         ]),
+        account_product_interest: normalizedAccountProductInterest.map(
+          (row) => ({
+            ...row,
+            account_name: dealerRows[0].name,
+            email: dealerRows[0].email,
+            account_conversion_rate: accountConversionRate,
+          })
+        ),
+        account_search_terms: mapNumeric(accountSearchTerms, ["search_count"]).map(
+          (row) => ({
+            ...row,
+            account_name: dealerRows[0].name,
+            email: dealerRows[0].email,
+          })
+        ),
+        product_interest_tracking_ready: supportsProductInterest,
         suggestions: products
           .filter((row) =>
             row.current_stock > 0 &&

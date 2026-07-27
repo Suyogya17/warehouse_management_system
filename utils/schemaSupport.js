@@ -8,21 +8,24 @@ const hasColumn = async (tableName, columnName) => {
     return cache.get(key);
   }
 
-  const result = await query(
+  const pendingCheck = query(
     `SELECT 1
      FROM information_schema.columns
      WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
      LIMIT 1`,
     [tableName, columnName]
-  );
+  )
+    .then((result) => result.length > 0)
+    .catch((error) => {
+      cache.delete(key);
+      throw error;
+    });
 
-  const exists = result.length > 0;
-  if (exists) {
-    cache.set(key, exists);
-  } else {
-    cache.delete(key);
-  }
-  return exists;
+  // Cache the in-flight promise as well as its result. Pages such as Gallery
+  // request normal and offer availability together; without this, both
+  // requests repeat every information_schema lookup.
+  cache.set(key, pendingCheck);
+  return pendingCheck;
 };
 
 const hasTable = async (tableName) => {
@@ -31,17 +34,21 @@ const hasTable = async (tableName) => {
     return cache.get(key);
   }
 
-  const result = await query(
+  const pendingCheck = query(
     `SELECT 1
      FROM information_schema.tables
      WHERE table_schema = DATABASE() AND table_name = ?
      LIMIT 1`,
     [tableName]
-  );
+  )
+    .then((result) => result.length > 0)
+    .catch((error) => {
+      cache.delete(key);
+      throw error;
+    });
 
-  const exists = result.length > 0;
-  cache.set(key, exists);
-  return exists;
+  cache.set(key, pendingCheck);
+  return pendingCheck;
 };
 
 module.exports = {

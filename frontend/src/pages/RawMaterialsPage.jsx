@@ -410,6 +410,8 @@ const remove = (id) => {
                   <img
                     src={`${APP_BASE_URL}${row.image_url}`}
                     alt={row.name}
+                    loading="lazy"
+                    decoding="async"
                     className="h-14 w-14 rounded-2xl object-cover"
                   />
                 ) : (

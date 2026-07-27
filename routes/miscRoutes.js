@@ -8,6 +8,7 @@ const { cacheResponse } = require('../middleware/cacheMiddleware');
 
 fgRouter.use(authenticate);
 fgRouter.get('/',       cacheResponse(15000), fgCtrl.getAll);
+fgRouter.get('/filters', cacheResponse(60000), fgCtrl.getFilters);
 fgRouter.put('/display-order', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDisplayOrder);
 fgRouter.put('/dashboard-featured', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDashboardFeatured);
 fgRouter.get('/:id',    cacheResponse(15000), fgCtrl.getOne);

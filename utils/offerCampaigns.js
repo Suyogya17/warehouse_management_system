@@ -1,10 +1,15 @@
 const { hasColumn, hasTable } = require('./schemaSupport');
 
-const hasOfferCampaignSchema = async () =>
-  (await hasTable('finished_good_offer_campaigns')) &&
-  (await hasTable('finished_good_offer_campaign_users')) &&
-  (await hasColumn('finished_goods', 'offer_campaign_id')) &&
-  (await hasColumn('order_items', 'offer_campaign_id'));
+const hasOfferCampaignSchema = async () => {
+  const checks = await Promise.all([
+    hasTable('finished_good_offer_campaigns'),
+    hasTable('finished_good_offer_campaign_users'),
+    hasColumn('finished_goods', 'offer_campaign_id'),
+    hasColumn('order_items', 'offer_campaign_id'),
+  ]);
+
+  return checks.every(Boolean);
+};
 
 const getOfferCampaignUsage = async (
   queryFn,

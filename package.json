@@ -4,7 +4,9 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "backfill:nepali-fiscal-year": "node scripts/backfill-nepali-fiscal-year.js"
+    "backfill:nepali-fiscal-year": "node scripts/backfill-nepali-fiscal-year.js",
+    "performance:explain": "node scripts/explain-performance.js",
+    "images:optimize": "node scripts/optimize-existing-images.js"
   },
   "dependencies": {
     "archiver": "^8.0.0",

@@ -211,18 +211,38 @@ export default function UserOrderPage() {
         return { finished_good_id: item.finished_good_id, qty_ordered: qtyOrdered };
       });
 
-      await api.createOrder(
-        {
-          customer_name: customerName.trim(),
-          customer_phone: customerPhone.trim() || "0000000000",
-          customer_address: customerAddress.trim(),
-          pan_number: panNumber.trim() || "000000000",
-          transport_name: transportName.trim() || "N/A",
-          notes: notes.trim(),
-          items,
-        },
-        token
-      );
+      const payload = {
+        customer_name: customerName.trim(),
+        customer_phone: customerPhone.trim() || "0000000000",
+        customer_address: customerAddress.trim(),
+        pan_number: panNumber.trim() || "000000000",
+        transport_name: transportName.trim() || "N/A",
+        notes: notes.trim(),
+        items,
+      };
+
+      try {
+        await api.createOrder(payload, token);
+      } catch (err) {
+        if (
+          err.status !== 409 ||
+          err.data?.code !== "POTENTIAL_DUPLICATE_ORDER"
+        ) {
+          throw err;
+        }
+        const duplicate = err.data?.duplicates?.[0];
+        const confirmed = window.confirm(
+          [
+            "Possible duplicate order detected.",
+            duplicate
+              ? `Order #${duplicate.id} for ${duplicate.customer_name} already contains the same products and quantities.`
+              : "A recent order already contains the same customer, products and quantities.",
+            "Place another order only if the repeat order is intentional.",
+          ].join("\n\n")
+        );
+        if (!confirmed) return;
+        await api.createOrder({ ...payload, confirm_duplicate: true }, token);
+      }
 
       showToast({ title: "Order placed", message: "Your order was placed successfully!", tone: "success" });
 
@@ -355,7 +375,13 @@ export default function UserOrderPage() {
                     
                     <div className="w-20 h-20 bg-slate-100 rounded-lg overflow-hidden flex-shrink-0">
                       {item.product.image_url ? (
-                        <img src={`${APP_BASE_URL}${item.product.image_url}`} alt={item.product.name} className="w-full h-full object-cover" />
+                        <img
+                          src={`${APP_BASE_URL}${item.product.image_url}`}
+                          alt={item.product.name}
+                          loading="lazy"
+                          decoding="async"
+                          className="w-full h-full object-cover"
+                        />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-slate-400">
                           <Package size={28} />

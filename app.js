@@ -5,6 +5,7 @@ const express = require("express");
 const path = require("path");
 const db = require("./config/db");
 const { clearCache } = require("./middleware/cacheMiddleware");
+const { requestPerformance } = require("./middleware/requestPerformance");
 
 const authRoutes = require("./routes/authRoutes");
 const stockRoutes = require("./routes/stockRoute");
@@ -28,6 +29,7 @@ const app = express();
 // Compress JSON and static responses. Product, order, and analytics payloads can
 // be large, so this substantially reduces transfer time on slower connections.
 app.use(compression());
+app.use(requestPerformance);
 
 /* ─────────────────────────────
    BODY PARSER
@@ -59,7 +61,14 @@ const corsOptions = {
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
-  exposedHeaders: ["Content-Disposition", "X-Catalogue-Cache"],
+  exposedHeaders: [
+    "Content-Disposition",
+    "X-Catalogue-Cache",
+    "X-Cache",
+    "X-Request-Id",
+    "X-Response-Time",
+    "Server-Timing",
+  ],
   optionsSuccessStatus: 200
 };
 
@@ -97,7 +106,19 @@ app.get("/api/health", (req, res) => {
 /* ─────────────────────────────
    ROUTES
 ──────────────────────────── */
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "uploads"), {
+    etag: true,
+    lastModified: true,
+    maxAge: "1y",
+    immutable: true,
+    setHeaders: (res) => {
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    },
+  })
+);
 
 app.use("/api/auth", authRoutes);
 app.use("/api/stock", stockRoutes);
@@ -131,9 +152,20 @@ app.get("/", (req, res) => {
 ──────────────────────────── */
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(500).json({
+  const databaseUnavailableCodes = new Set([
+    "ETIMEDOUT",
+    "ECONNREFUSED",
+    "PROTOCOL_SEQUENCE_TIMEOUT",
+    "PROTOCOL_CONNECTION_LOST",
+    "ER_CON_COUNT_ERROR",
+  ]);
+  const databaseUnavailable = databaseUnavailableCodes.has(err.code);
+
+  res.status(databaseUnavailable ? 503 : err.statusCode || 500).json({
     success: false,
-    message: err.message,
+    message: databaseUnavailable
+      ? "The database is temporarily unavailable. Please try again shortly."
+      : err.message || "Internal server error",
   }); 
 });
 

@@ -149,6 +149,7 @@ export default function ArticleCatalogCard({
             <img
               src={`${APP_BASE_URL}${previewProduct.image_url}`}
               alt={previewProduct.name}
+              decoding="async"
               className="max-h-[88vh] max-w-full rounded-2xl bg-white object-contain"
             />
             <button

@@ -125,9 +125,11 @@ const readLegacyNotifications = (userId) => {
       .filter((item) => item?.title && item?.message)
       .map((item) => {
         const fingerprint = `${item.title}|${item.message}|${item.createdAt || ""}`;
+        const uniqueKey = item.unique_key || `legacy:${hashText(fingerprint)}`;
 
         return {
-          unique_key: item.unique_key || `legacy:${hashText(fingerprint)}`,
+          id: item.id || uniqueKey,
+          unique_key: uniqueKey,
           title: item.title,
           message: item.message,
           tone: item.tone || "info",
@@ -195,7 +197,7 @@ export default function AppShell() {
 
     api
       .getNotifications(token)
-      .then(async (result) => {
+      .then((result) => {
         const serverNotifications = result.data || [];
         const legacyNotifications = readLegacyNotifications(user.id);
 
@@ -204,22 +206,19 @@ export default function AppShell() {
           return;
         }
 
-        const serverKeys = new Set(serverNotifications.map((item) => item.unique_key));
-        const legacyToUpload = legacyNotifications.filter((item) => !serverKeys.has(item.unique_key));
-
-        if (!legacyToUpload.length) {
-          if (!cancelled) setNotifications(serverNotifications);
-          return;
-        }
-
-        const migrated = await Promise.all(
-          legacyToUpload.map((item) =>
-            api.createNotification(item, token).then((response) => response.data).catch(() => item)
-          )
-        );
-
-        const merged = [...migrated, ...serverNotifications]
-          .filter(Boolean)
+        // Legacy notifications are already stored in this browser. Display
+        // them alongside server notifications instead of POSTing every old
+        // item during each application load. The old migration generated
+        // hundreds of requests and competed with the dashboard's data calls.
+        const seenKeys = new Set();
+        const merged = [...serverNotifications, ...legacyNotifications]
+          .filter((item) => {
+            if (!item) return false;
+            const key = item.unique_key || item.id;
+            if (seenKeys.has(key)) return false;
+            seenKeys.add(key);
+            return true;
+          })
           .slice(0, 50);
 
         if (!cancelled) setNotifications(merged);

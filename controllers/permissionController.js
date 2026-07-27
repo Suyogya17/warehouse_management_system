@@ -143,6 +143,17 @@ const getUserProducts = async (req, res, next) => {
 // ─── GET ALL PERMISSIONS (for admin UI) ──────────────────────────────────────
 const getAllPermissions = async (req, res, next) => {
   try {
+    const compact = req.query.compact === '1';
+    if (compact) {
+      const result = await query(
+        `SELECT id, user_id, finished_good_id, can_view
+         FROM user_product_permissions
+         ORDER BY id`
+      );
+
+      return res.json({ success: true, data: result.rows });
+    }
+
     const supportsImage = await hasColumn('finished_goods', 'image_url');
     const supportsVisibility = await hasColumn('finished_goods', 'is_visible');
     const result = await query(

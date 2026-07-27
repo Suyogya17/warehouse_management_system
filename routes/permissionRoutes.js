@@ -2,6 +2,7 @@ const router = require('express').Router();
 const ctrl = require('../controllers/permissionController');
 const { authenticate, authorize, authorizeAdminOrPagePermission } = require('../middleware/authMiddleware');
 const { PRODUCT_VISIBILITY_PAGE_KEY } = require('../utils/userPagePermissions');
+const { cacheResponse } = require('../middleware/cacheMiddleware');
 
 router.use(authenticate);
 
@@ -15,6 +16,11 @@ router.post('/revoke', authorizeAdminOrPagePermission(PRODUCT_VISIBILITY_PAGE_KE
 router.get('/user/:user_id', authorizeAdminOrPagePermission(PRODUCT_VISIBILITY_PAGE_KEY, 'can_view'), ctrl.getUserProducts);
 
 // GET  /api/permissions          - Get all permissions (ADMIN only)
-router.get('/', authorizeAdminOrPagePermission(PRODUCT_VISIBILITY_PAGE_KEY, 'can_view'), ctrl.getAllPermissions);
+router.get(
+  '/',
+  authorizeAdminOrPagePermission(PRODUCT_VISIBILITY_PAGE_KEY, 'can_view'),
+  cacheResponse(15000),
+  ctrl.getAllPermissions
+);
 
 module.exports = router;

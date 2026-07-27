@@ -51,11 +51,28 @@ const getReservedByProduct = async (productIds = []) => {
 
 const loadAvailabilityForRequest = async (req, options = {}) => {
   const offerView = options.offerView ?? req.query.offer_view === '1';
-  const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
-  const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
-  const supportsOfferEnabled = await hasColumn('finished_goods', 'offer_enabled');
-  const supportsIsDeleted = await hasColumn('finished_goods', 'is_deleted');
-  const supportsIsVisible = await hasColumn('finished_goods', 'is_visible');
+  const [
+    supportsDisplayOrder,
+    supportsDisplayQuantity,
+    supportsOfferEnabled,
+    supportsIsDeleted,
+    supportsIsVisible,
+    supportsOfferAudience,
+    supportsOfferUsers,
+    supportsOfferCampaigns,
+  ] = await Promise.all([
+    hasColumn('finished_goods', 'display_order'),
+    hasColumn('finished_goods', 'display_quantity'),
+    hasColumn('finished_goods', 'offer_enabled'),
+    hasColumn('finished_goods', 'is_deleted'),
+    hasColumn('finished_goods', 'is_visible'),
+    hasColumn('finished_goods', 'offer_all_users'),
+    hasTable('finished_good_offer_users'),
+    hasOfferCampaignSchema(),
+  ]);
+  const supportsOfferUserQuantity = supportsOfferUsers
+    ? await hasColumn('finished_good_offer_users', 'display_quantity')
+    : false;
   const includeHidden =
     req.query.include_hidden === '1' &&
     ['ADMIN', 'CO_ADMIN', 'MEMBER'].includes(req.user.role);
@@ -108,52 +125,42 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     : ' ORDER BY article_code, color, id';
 
   const products = await query(sql, params);
-  const supportsOfferAudience = await hasColumn(
-    'finished_goods',
-    'offer_all_users'
-  );
-  const supportsOfferUsers = await hasTable('finished_good_offer_users');
-  const supportsOfferUserQuantity = supportsOfferUsers
-    ? await hasColumn('finished_good_offer_users', 'display_quantity')
-    : false;
-  const supportsOfferCampaigns = await hasOfferCampaignSchema();
-  let offerUserTargets = new Map();
-
-  if (
+  const productIds = products.rows.map((product) => product.id);
+  const shouldLoadOfferTargets =
     usesCustomerOfferAudience &&
     supportsOfferAudience &&
     supportsOfferUsers &&
-    products.rows.length
-  ) {
-    const ids = products.rows.map((product) => Number(product.id));
-    const audienceRows = await query(
-      `SELECT finished_good_id${
-        supportsOfferUserQuantity ? ', display_quantity' : ''
-      } FROM finished_good_offer_users
-       WHERE user_id = ? AND finished_good_id IN (${ids
-         .map(() => '?')
-         .join(',')})`,
-      [availabilityUserId, ...ids]
-    );
-    offerUserTargets = new Map(
-      audienceRows.rows.map((row) => [
-        Number(row.finished_good_id),
-        supportsOfferUserQuantity
-          ? { display_quantity: Number(row.display_quantity || DEFAULT_DISPLAY_QUANTITY) }
-          : { display_quantity: DEFAULT_DISPLAY_QUANTITY },
-      ])
-    );
-  }
+    products.rows.length > 0;
 
-  const productIds = products.rows.map((product) => product.id);
-  const reserved = await getReservedByProduct(productIds);
-  const campaignUsage =
+  const [audienceRows, reserved, campaignUsage] = await Promise.all([
+    shouldLoadOfferTargets
+      ? query(
+          `SELECT finished_good_id${
+            supportsOfferUserQuantity ? ', display_quantity' : ''
+          } FROM finished_good_offer_users
+           WHERE user_id = ? AND finished_good_id IN (${productIds
+             .map(() => '?')
+             .join(',')})`,
+          [availabilityUserId, ...productIds]
+        )
+      : Promise.resolve({ rows: [] }),
+    getReservedByProduct(productIds),
     usesCustomerOfferAudience && supportsOfferCampaigns
-      ? await getOfferCampaignUsage(query, {
+      ? getOfferCampaignUsage(query, {
           campaignIds: products.rows.map((product) => product.offer_campaign_id),
           userId: availabilityUserId,
         })
-      : new Map();
+      : Promise.resolve(new Map()),
+  ]);
+
+  const offerUserTargets = new Map(
+    audienceRows.rows.map((row) => [
+      Number(row.finished_good_id),
+      supportsOfferUserQuantity
+        ? { display_quantity: Number(row.display_quantity || DEFAULT_DISPLAY_QUANTITY) }
+        : { display_quantity: DEFAULT_DISPLAY_QUANTITY },
+    ])
+  );
 
   return products.rows
     .map((product) => {

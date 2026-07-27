@@ -3,6 +3,37 @@ const auditLog = require('../utils/auditLog');
 const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields, getNepaliFiscalMeta } = require('../utils/nepaliFiscalYear');
 const { clearCache } = require('../middleware/cacheMiddleware');
+const paginationUtils = require('../utils/pagination');
+const getPagePagination =
+  paginationUtils.getPagePagination ||
+  ((query = {}, { defaultPageSize = 50, maxPageSize = 200 } = {}) => {
+    const page = Math.max(1, Number.parseInt(query.page, 10) || 1);
+    const pageSize = Math.min(
+      maxPageSize,
+      Math.max(
+        1,
+        Number.parseInt(query.per_page ?? query.page_size, 10) ||
+          defaultPageSize
+      )
+    );
+    return {
+      enabled:
+        query.page !== undefined ||
+        query.per_page !== undefined ||
+        query.page_size !== undefined,
+      page,
+      pageSize,
+      offset: (page - 1) * pageSize,
+    };
+  });
+const getPaginationMeta =
+  paginationUtils.getPaginationMeta ||
+  (({ page, pageSize }, total) => ({
+    page,
+    per_page: pageSize,
+    total: Number(total || 0),
+    total_pages: Math.max(1, Math.ceil(Number(total || 0) / pageSize)),
+  }));
 const { loadAvailabilityForRequest } = require('../utils/catalogueAvailability');
 const {
   hasOfferCampaignSchema,
@@ -11,6 +42,19 @@ const {
 
 const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'PACKED'];
 const ALL_STATUSES = [...ACTIVE_RESERVATION_STATUSES, 'DELIVERED', 'CANCELLED'];
+const CANCELLATION_CODES = new Set([
+  'DUPLICATE_ORDER',
+  'CUSTOMER_CHANGED_MIND',
+  'INCORRECT_PRODUCT_OR_QUANTITY',
+  'INSUFFICIENT_STOCK',
+  'PRICING_ISSUE',
+  'DELIVERY_ISSUE',
+  'OTHER',
+]);
+const DUPLICATE_ORDER_WINDOW_HOURS = Math.max(
+  1,
+  Math.min(168, Number.parseInt(process.env.DUPLICATE_ORDER_WINDOW_HOURS, 10) || 72)
+);
 const DEFAULT_DISPLAY_QUANTITY = 450;
 const FISCAL_DELIVERY_NOTE_START_YEAR = 2083;
 const ORDER_CORRECTION_CO_ADMINS = new Set([
@@ -61,6 +105,104 @@ const normalizeItems = (items = []) =>
       qty_ordered: Number(item.qty_ordered),
     }))
     .filter((item) => item.finished_good_id > 0 && item.qty_ordered > 0);
+
+const normalizeCustomerName = (value) =>
+  String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+const normalizeCustomerPhone = (value) =>
+  String(value || '').replace(/\D/g, '');
+
+const isMeaningfulPhone = (value) => {
+  const phone = normalizeCustomerPhone(value);
+  return phone.length >= 7 && !/^0+$/.test(phone);
+};
+
+const getOrderItemSignature = (items = []) => {
+  const totals = new Map();
+  items.forEach((item) => {
+    const productId = Number(item.finished_good_id);
+    const quantity = Number(item.qty_ordered);
+    if (productId > 0 && quantity > 0) {
+      totals.set(productId, (totals.get(productId) || 0) + quantity);
+    }
+  });
+
+  return [...totals.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([productId, quantity]) => `${productId}:${quantity}`)
+    .join('|');
+};
+
+const findRecentExactDuplicateOrders = async (
+  client,
+  { createdBy, customerName, customerPhone, items }
+) => {
+  const cutoff = new Date(
+    Date.now() - DUPLICATE_ORDER_WINDOW_HOURS * 60 * 60 * 1000
+  );
+  const candidateResult = await client.query(
+    `SELECT o.id, o.customer_name, o.customer_phone, o.status, o.created_at,
+            u.name AS created_by_name
+     FROM orders o
+     LEFT JOIN users u ON u.id = o.created_by
+     WHERE o.status <> 'CANCELLED'
+       AND o.created_at >= ?
+       AND (
+         o.created_by = ?
+         OR LOWER(TRIM(o.customer_name)) = ?
+       )
+     ORDER BY o.created_at DESC
+     LIMIT 50`,
+    [cutoff, createdBy, normalizeCustomerName(customerName)]
+  );
+
+  const normalizedName = normalizeCustomerName(customerName);
+  const normalizedPhone = normalizeCustomerPhone(customerPhone);
+  const matchingCustomers = candidateResult.rows.filter((candidate) => {
+    const sameName =
+      normalizeCustomerName(candidate.customer_name) === normalizedName;
+    const samePhone =
+      isMeaningfulPhone(normalizedPhone) &&
+      normalizeCustomerPhone(candidate.customer_phone) === normalizedPhone;
+    return sameName || samePhone;
+  });
+
+  if (!matchingCustomers.length) return [];
+
+  const { clause, params } = buildInClause(
+    matchingCustomers.map((candidate) => candidate.id)
+  );
+  const itemResult = await client.query(
+    `SELECT order_id, finished_good_id, qty_ordered
+     FROM order_items
+     WHERE order_id IN ${clause}
+     ORDER BY order_id, finished_good_id`,
+    params
+  );
+  const itemsByOrder = new Map();
+  itemResult.rows.forEach((item) => {
+    const orderId = Number(item.order_id);
+    const rows = itemsByOrder.get(orderId) || [];
+    rows.push(item);
+    itemsByOrder.set(orderId, rows);
+  });
+
+  const requestedSignature = getOrderItemSignature(items);
+  return matchingCustomers
+    .filter(
+      (candidate) =>
+        getOrderItemSignature(itemsByOrder.get(Number(candidate.id)) || []) ===
+        requestedSignature
+    )
+    .slice(0, 3)
+    .map((candidate) => ({
+      id: Number(candidate.id),
+      customer_name: candidate.customer_name,
+      status: candidate.status,
+      created_at: candidate.created_at,
+      created_by_name: candidate.created_by_name || null,
+    }));
+};
 
 const isActiveOfferProduct = (product = {}) =>
   Number(product.offer_enabled) === 1 &&
@@ -235,18 +377,96 @@ const allocateWarehouseStockForDelivery = async (client, item, userId) => {
 // ─── GET ALL ORDERS ───────────────────────────────
 const getAll = async (req, res, next) => {
   try {
+    const [supportsCancellationCode, supportsDuplicateOrderLink] =
+      await Promise.all([
+        hasColumn('orders', 'cancellation_code'),
+        hasColumn('orders', 'duplicate_of_order_id'),
+      ]);
     const params = [];
-    let where = '';
-    const limit = Math.min(Math.max(Number(req.query.limit || 0), 0), 200);
-    const limitClause = limit ? 'LIMIT ?' : '';
+    const conditions = [];
+    const pagination = getPagePagination(req.query, {
+      defaultPageSize: 50,
+      maxPageSize: 200,
+    });
+    const legacyLimit = Math.min(
+      Math.max(Number(req.query.limit || 0), 0),
+      500
+    );
+    const includeItems = req.query.include_items !== '0';
 
     if (req.user.role === 'USER') {
-      where = 'WHERE o.created_by = ?';
+      conditions.push('o.created_by = ?');
       params.push(req.user.id);
     }
 
-    const orders = await query(
-      `SELECT o.*, 
+    const requestedStatus = String(req.query.status || '').trim().toUpperCase();
+    if (ALL_STATUSES.includes(requestedStatus)) {
+      conditions.push('o.status = ?');
+      params.push(requestedStatus);
+    }
+
+    const search = String(req.query.search || '').trim();
+    if (search) {
+      const likeSearch = `%${search}%`;
+      conditions.push(`(
+        CAST(o.id AS CHAR) = ?
+        OR o.customer_name LIKE ?
+        OR o.customer_phone LIKE ?
+        OR o.delivery_note_number LIKE ?
+        OR o.status LIKE ?
+        OR EXISTS (
+          SELECT 1
+          FROM users search_user
+          WHERE search_user.id = o.created_by
+            AND search_user.name LIKE ?
+        )
+      )`);
+      params.push(
+        search,
+        likeSearch,
+        likeSearch,
+        likeSearch,
+        likeSearch,
+        likeSearch
+      );
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const limitClause = pagination.enabled
+      ? 'LIMIT ? OFFSET ?'
+      : legacyLimit
+        ? 'LIMIT ?'
+        : '';
+    const limitParams = pagination.enabled
+      ? [pagination.pageSize, pagination.offset]
+      : legacyLimit
+        ? [legacyLimit]
+        : [];
+
+    const [orders, countResult] = await Promise.all([
+      query(
+      `SELECT o.id,
+              o.customer_name,
+              o.customer_phone,
+              o.customer_address,
+              o.pan_number,
+              o.transport_name,
+              o.status,
+              o.notes,
+              o.cancellation_reason,
+              ${supportsCancellationCode ? 'o.cancellation_code' : 'NULL AS cancellation_code'},
+              ${supportsDuplicateOrderLink ? 'o.duplicate_of_order_id' : 'NULL AS duplicate_of_order_id'},
+              o.created_by,
+              o.created_at,
+              o.updated_at,
+              o.stock_deducted,
+              o.delivery_note_number,
+              o.confirmed_by,
+              o.confirmed_at,
+              o.packed_by,
+              o.packed_at,
+              o.delivered_by,
+              o.delivered_at,
               u_created.name AS created_by_name,
               u_confirmed.name AS confirmed_by_name,
               u_packed.name AS packed_by_name,
@@ -259,16 +479,29 @@ const getAll = async (req, res, next) => {
        ${where}
        ORDER BY o.created_at DESC
        ${limitClause}`,
-      limit ? [...params, limit] : params
-    );
+        [...params, ...limitParams]
+      ),
+      pagination.enabled
+        ? query(
+            `SELECT COUNT(*) AS total
+             FROM orders o
+             ${where}`,
+            params
+          )
+        : Promise.resolve(null),
+    ]);
 
     const orderIds = orders.rows.map((o) => o.id);
     let items = [];
 
-    if (orderIds.length) {
+    if (includeItems && orderIds.length) {
       const { clause, params: orderParams } = buildInClause(orderIds);
       const itemResult = await query(
-        `SELECT oi.*, fg.name AS product_name,
+        `SELECT oi.id,
+                oi.order_id,
+                oi.finished_good_id,
+                oi.qty_ordered,
+                fg.name AS product_name,
                 fg.article_code, fg.color, fg.size,
                 fg.unit, fg.quantity AS physical_stock,
                 fg.display_quantity,
@@ -282,7 +515,7 @@ const getAll = async (req, res, next) => {
       items = itemResult.rows;
     }
 
-    if (items.length) {
+    if (includeItems && items.length) {
       const itemIds = items.map((item) => item.id);
       const { clause, params: itemParams } = buildInClause(itemIds);
       const allocationResult = await query(
@@ -316,6 +549,14 @@ const getAll = async (req, res, next) => {
     return res.json({
       success: true,
       data: orders.rows.map((o) => ({ ...o, items: grouped[o.id] || [] })),
+      ...(pagination.enabled
+        ? {
+            pagination: getPaginationMeta(
+              pagination,
+              countResult?.rows?.[0]?.total
+            ),
+          }
+        : {}),
     });
   } catch (err) {
     next(err);
@@ -398,6 +639,29 @@ const create = async (req, res, next) => {
         success: false,
         message: 'Customer name + items required',
       });
+    }
+
+    const duplicateConfirmed =
+      req.body.confirm_duplicate === true ||
+      String(req.body.confirm_duplicate || '').toLowerCase() === 'true';
+    if (!duplicateConfirmed) {
+      const duplicates = await findRecentExactDuplicateOrders(client, {
+        createdBy: req.user.id,
+        customerName: customer_name,
+        customerPhone: customer_phone,
+        items,
+      });
+      if (duplicates.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          code: 'POTENTIAL_DUPLICATE_ORDER',
+          message:
+            'A matching recent order already exists. Confirm only if this repeat order is intentional.',
+          duplicate_window_hours: DUPLICATE_ORDER_WINDOW_HOURS,
+          duplicates,
+        });
+      }
     }
 
     const productIds = [...new Set(items.map((i) => i.finished_good_id))];
@@ -903,12 +1167,23 @@ const updateStatus = async (req, res, next) => {
     }
 
     const cancellationReason = String(req.body.cancellation_reason || '').trim();
+    const cancellationCode = String(
+      req.body.cancellation_code || 'OTHER'
+    ).trim().toUpperCase();
+    const duplicateOfOrderId = Number(req.body.duplicate_of_order_id || 0);
 
     if (status === 'CANCELLED' && !cancellationReason) {
       await client.query('ROLLBACK');
       return res.status(400).json({
         success: false,
         message: 'Cancellation reason is required',
+      });
+    }
+    if (status === 'CANCELLED' && !CANCELLATION_CODES.has(cancellationCode)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Select a valid cancellation category',
       });
     }
 
@@ -965,6 +1240,42 @@ const updateStatus = async (req, res, next) => {
     if (status === 'CANCELLED') {
       updateFields.push('cancellation_reason = ?');
       updateParams.push(cancellationReason);
+      const [supportsCancellationCode, supportsDuplicateOrderLink] =
+        await Promise.all([
+          hasColumn('orders', 'cancellation_code'),
+          hasColumn('orders', 'duplicate_of_order_id'),
+        ]);
+      if (supportsCancellationCode) {
+        updateFields.push('cancellation_code = ?');
+        updateParams.push(cancellationCode);
+      }
+      if (
+        supportsDuplicateOrderLink &&
+        cancellationCode === 'DUPLICATE_ORDER' &&
+        Number.isInteger(duplicateOfOrderId) &&
+        duplicateOfOrderId > 0
+      ) {
+        if (duplicateOfOrderId === Number(order.id)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'A duplicate order cannot reference itself',
+          });
+        }
+        const originalOrder = await client.query(
+          'SELECT id FROM orders WHERE id = ? LIMIT 1',
+          [duplicateOfOrderId]
+        );
+        if (!originalOrder.rows.length) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'The original order number was not found',
+          });
+        }
+        updateFields.push('duplicate_of_order_id = ?');
+        updateParams.push(duplicateOfOrderId);
+      }
     }
 
     // Deduct physical stock on delivery
@@ -1053,6 +1364,11 @@ const updateStatus = async (req, res, next) => {
         previous_status: order.status,
         status,
         cancellation_reason: status === 'CANCELLED' ? cancellationReason : undefined,
+        cancellation_code: status === 'CANCELLED' ? cancellationCode : undefined,
+        duplicate_of_order_id:
+          status === 'CANCELLED' && duplicateOfOrderId > 0
+            ? duplicateOfOrderId
+            : undefined,
         delivery_note_number: order.delivery_note_number,
       },
     });

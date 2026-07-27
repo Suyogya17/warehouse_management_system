@@ -3,6 +3,37 @@ const auditLog = require('../utils/auditLog');
 const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 const { clearCache } = require('../middleware/cacheMiddleware');
+const paginationUtils = require('../utils/pagination');
+const getPagePagination =
+  paginationUtils.getPagePagination ||
+  ((query = {}, { defaultPageSize = 50, maxPageSize = 200 } = {}) => {
+    const page = Math.max(1, Number.parseInt(query.page, 10) || 1);
+    const pageSize = Math.min(
+      maxPageSize,
+      Math.max(
+        1,
+        Number.parseInt(query.per_page ?? query.page_size, 10) ||
+          defaultPageSize
+      )
+    );
+    return {
+      enabled:
+        query.page !== undefined ||
+        query.per_page !== undefined ||
+        query.page_size !== undefined,
+      page,
+      pageSize,
+      offset: (page - 1) * pageSize,
+    };
+  });
+const getPaginationMeta =
+  paginationUtils.getPaginationMeta ||
+  (({ page, pageSize }, total) => ({
+    page,
+    per_page: pageSize,
+    total: Number(total || 0),
+    total_pages: Math.max(1, Math.ceil(Number(total || 0) / pageSize)),
+  }));
 const { hasOfferCampaignSchema } = require('../utils/offerCampaigns');
 
 const DEFAULT_DISPLAY_QUANTITY = 450;
@@ -41,6 +72,14 @@ const getFinishedGoodsOrderClause = async (alias = '') => {
 const getAll = async (req, res, next) => {
   try {
     const { article_code } = req.query;
+    const search = String(req.query.search || '').trim();
+    const productId = String(req.query.id || '').trim();
+    const soleCode = String(req.query.sole_code || '').trim();
+    const commission = String(req.query.commission || '').trim().toLowerCase();
+    const pagination = getPagePagination(req.query, {
+      defaultPageSize: 50,
+      maxPageSize: 200,
+    });
     const userId = req.user.id;
     const userRole = req.user.role;
 
@@ -54,8 +93,29 @@ const getAll = async (req, res, next) => {
         sql += ` AND article_code LIKE ?`;
         params.push(`%${article_code}%`);
       }
+      if (productId) {
+        sql += ` AND CAST(id AS CHAR) LIKE ?`;
+        params.push(`%${productId}%`);
+      }
+      if (soleCode) {
+        sql += ` AND sole_code = ?`;
+        params.push(soleCode);
+      }
+      if (commission === 'commission' || commission === 'non_commission') {
+        sql += ` AND is_commission = ?`;
+        params.push(commission === 'commission' ? 1 : 0);
+      }
 
-      sql += ` ${await getFinishedGoodsOrderClause()}`;
+      if (search) {
+        sql += ` AND (
+          name LIKE ?
+          OR article_code LIKE ?
+          OR sole_code LIKE ?
+          OR color LIKE ?
+        )`;
+        const pattern = `%${search}%`;
+        params.push(pattern, pattern, pattern, pattern);
+      }
 
     } else if (userRole === 'USER' || userRole === 'ELDER') {
       sql = `
@@ -81,14 +141,53 @@ const getAll = async (req, res, next) => {
         sql += ` AND fg.article_code LIKE ?`;
         params.push(`%${article_code}%`);
       }
+      if (productId) {
+        sql += ` AND CAST(fg.id AS CHAR) LIKE ?`;
+        params.push(`%${productId}%`);
+      }
+      if (soleCode) {
+        sql += ` AND fg.sole_code = ?`;
+        params.push(soleCode);
+      }
+      if (commission === 'commission' || commission === 'non_commission') {
+        sql += ` AND fg.is_commission = ?`;
+        params.push(commission === 'commission' ? 1 : 0);
+      }
 
-      sql += ` ${await getFinishedGoodsOrderClause('fg')}`;
+      if (search) {
+        sql += ` AND (
+          fg.name LIKE ?
+          OR fg.article_code LIKE ?
+          OR fg.sole_code LIKE ?
+          OR fg.color LIKE ?
+        )`;
+        const pattern = `%${search}%`;
+        params.push(pattern, pattern, pattern, pattern);
+      }
 
     } else {
       return res.json({ success: true, count: 0, data: [] });
     }
 
-    let rows = await query(sql, params);
+    const countSql = `SELECT COUNT(*) AS total FROM (${sql}) filtered_products`;
+    const orderClause = await getFinishedGoodsOrderClause(
+      userRole === 'USER' || userRole === 'ELDER' ? 'fg' : ''
+    );
+    const paginatedSql = `${sql} ${orderClause}${
+      pagination.enabled ? ' LIMIT ? OFFSET ?' : ''
+    }`;
+    const [rowResult, countResult] = await Promise.all([
+      query(
+        paginatedSql,
+        pagination.enabled
+          ? [...params, pagination.pageSize, pagination.offset]
+          : params
+      ),
+      pagination.enabled
+        ? query(countSql, params)
+        : Promise.resolve(null),
+    ]);
+    let rows = rowResult.rows || rowResult;
 
     const supportsOfferAudience = await hasColumn('finished_goods', 'offer_all_users');
     const supportsOfferUsers = await hasTable('finished_good_offer_users');
@@ -178,9 +277,58 @@ const getAll = async (req, res, next) => {
     return res.json({
       success: true,
       count: rows.length,
-      data: rows
+      data: rows,
+      ...(pagination.enabled
+        ? {
+            pagination: getPaginationMeta(
+              pagination,
+              countResult?.rows?.[0]?.total
+            ),
+          }
+        : {}),
     });
 
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getFilters = async (req, res, next) => {
+  try {
+    const userRole = String(req.user?.role || '').toUpperCase();
+    const userId = Number(req.user?.id);
+    let sql = '';
+    let params = [];
+
+    if (['ADMIN', 'CO_ADMIN', 'MEMBER'].includes(userRole)) {
+      sql = `SELECT DISTINCT sole_code
+             FROM finished_goods
+             WHERE is_deleted = 0
+               AND NULLIF(TRIM(sole_code), '') IS NOT NULL
+             ORDER BY sole_code`;
+    } else if (['USER', 'ELDER'].includes(userRole)) {
+      sql = `SELECT DISTINCT fg.sole_code
+             FROM finished_goods fg
+             JOIN user_product_permissions upp
+               ON upp.finished_good_id = fg.id
+              AND upp.user_id = ?
+              AND upp.can_view = 1
+             WHERE fg.is_deleted = 0
+               AND fg.is_visible = 1
+               AND NULLIF(TRIM(fg.sole_code), '') IS NOT NULL
+             ORDER BY fg.sole_code`;
+      params = [userId];
+    } else {
+      return res.json({ success: true, data: { series: [] } });
+    }
+
+    const rows = await query(sql, params);
+    return res.json({
+      success: true,
+      data: {
+        series: rows.map((row) => row.sole_code).filter(Boolean),
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -1049,6 +1197,7 @@ const setOffer = async (req, res, next) => {
 
 module.exports = {
   getAll,
+  getFilters,
   getOne,
   create,
   update,

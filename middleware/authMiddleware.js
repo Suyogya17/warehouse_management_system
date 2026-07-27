@@ -2,6 +2,38 @@ const jwt = require('jsonwebtoken');
 const { query } = require('../config/db');
 const { hasUserPagePermission } = require('../utils/userPagePermissions');
 
+const AUTH_USER_CACHE_TTL_MS = Math.max(
+  1000,
+  Number(process.env.AUTH_USER_CACHE_TTL_MS || 30000)
+);
+const authenticatedUserCache = new Map();
+
+const getAuthenticatedUser = async (userId) => {
+  const key = Number(userId);
+  const cached = authenticatedUserCache.get(key);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.user;
+  }
+
+  const result = await query(
+    'SELECT id, name, email, role FROM users WHERE id = ?',
+    [key]
+  );
+  const user = result[0] || null;
+
+  if (user) {
+    authenticatedUserCache.set(key, {
+      user,
+      expiresAt: Date.now() + AUTH_USER_CACHE_TTL_MS,
+    });
+  } else {
+    authenticatedUserCache.delete(key);
+  }
+
+  return user;
+};
+
 const authenticate = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
@@ -13,29 +45,33 @@ const authenticate = async (req, res, next) => {
   }
 
   const token = authHeader.split(' ')[1];
+  let decoded;
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (err) {
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid token',
+    });
+  }
 
-    const result = await query(
-      'SELECT id, name, email, role FROM users WHERE id = ?',
-      [decoded.id]
-    );
+  try {
+    const user = await getAuthenticatedUser(decoded.id);
 
-    if (!result.length) {
+    if (!user) {
       return res.status(401).json({
         success: false,
         message: 'User not found',
       });
     }
 
-    req.user = result[0];
-    next();
+    req.user = user;
+    return next();
   } catch (err) {
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid token',
-    });
+    // A database outage is not an invalid JWT. Pass it to the application
+    // error handler so the client receives a temporary-service response.
+    return next(err);
   }
 };
 

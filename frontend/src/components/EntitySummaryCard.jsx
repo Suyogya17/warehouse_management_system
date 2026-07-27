@@ -4,7 +4,13 @@ export default function EntitySummaryCard({ title, subtitle, imageUrl, metrics =
       <div className="grid gap-4 lg:grid-cols-[120px_1fr]">
         <div className="overflow-hidden rounded-2xl border border-indigo-100 bg-white">
           {imageUrl ? (
-            <img src={imageUrl} alt={title} className="h-[120px] w-full object-cover" />
+            <img
+              src={imageUrl}
+              alt={title}
+              loading="lazy"
+              decoding="async"
+              className="h-[120px] w-full object-cover"
+            />
           ) : (
             <div className="flex h-[120px] items-center justify-center text-sm text-slate-500">
               No image

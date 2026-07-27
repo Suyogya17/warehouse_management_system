@@ -192,6 +192,8 @@ export default function OnHoldPage() {
           <img
             src={`${APP_BASE_URL}${row.image_url}`}
             alt={row.name}
+            loading="lazy"
+            decoding="async"
             className="h-12 w-12 rounded-lg border border-slate-200 object-cover"
           />
         ) : (

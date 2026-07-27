@@ -1,82 +1,98 @@
+const fs = require("fs");
+const path = require("path");
 const multer = require("multer");
+const sharp = require("sharp");
+
+const uploadsDirectory = path.join(__dirname, "..", "uploads");
+fs.mkdirSync(uploadsDirectory, { recursive: true });
+
+const safeBaseName = (fileName = "upload") =>
+  path
+    .basename(fileName, path.extname(fileName))
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "upload";
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
+  destination: (_req, _file, callback) => {
+    callback(null, uploadsDirectory);
   },
-
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
+  filename: (_req, file, callback) => {
+    const extension = path.extname(file.originalname).toLowerCase();
+    callback(
+      null,
+      `${Date.now()}-${safeBaseName(file.originalname)}${extension}`
+    );
   },
 });
 
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    const isImage = String(file.mimetype || "").startsWith("image/");
+    const isVideo = String(file.mimetype || "").startsWith("video/");
+    callback(
+      isImage || isVideo
+        ? null
+        : new Error("Only image or video uploads are supported."),
+      isImage || isVideo
+    );
+  },
+});
 
-const uploadMiddleware = (fieldName) => {
-  return upload.single(fieldName);
+const optimizeUploadedImage = async (file) => {
+  if (!file || !String(file.mimetype || "").startsWith("image/")) return file;
+
+  const optimizedFilename = `${path.basename(
+    file.filename,
+    path.extname(file.filename)
+  )}.webp`;
+  const optimizedPath = path.join(uploadsDirectory, optimizedFilename);
+
+  try {
+    await sharp(file.path)
+      .rotate()
+      .resize({
+        width: 1200,
+        height: 1200,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .webp({ quality: 78, effort: 4, smartSubsample: true })
+      .toFile(optimizedPath);
+
+    if (optimizedPath !== file.path) {
+      await fs.promises.unlink(file.path).catch(() => {});
+    }
+
+    const stats = await fs.promises.stat(optimizedPath);
+    return {
+      ...file,
+      filename: optimizedFilename,
+      path: optimizedPath,
+      destination: uploadsDirectory,
+      mimetype: "image/webp",
+      size: stats.size,
+    };
+  } catch (error) {
+    await fs.promises.unlink(optimizedPath).catch(() => {});
+    throw new Error(`Image optimization failed: ${error.message}`);
+  }
 };
 
-module.exports = { uploadMiddleware };
+const uploadMiddleware = (fieldName) => (req, res, next) => {
+  upload.single(fieldName)(req, res, async (uploadError) => {
+    if (uploadError) return next(uploadError);
+    if (!req.file) return next();
 
-// const multer = require("multer");
-// const path = require("path");
-// const sharp = require("sharp");
-// const fs = require("fs");
+    try {
+      req.file = await optimizeUploadedImage(req.file);
+      return next();
+    } catch (error) {
+      return next(error);
+    }
+  });
+};
 
-// const maxSize = 2* 1024 * 1024; // 2MB raw upload limit (sharp will compress it down)
-
-// const storage = multer.diskStorage({
-//   destination: (req, file, cb) => {
-//     cb(null, "uploads/");
-//   },
-//   filename: (req, file, cb) => {
-//     cb(null, Date.now() + path.extname(file.originalname));
-//   },
-// });
-
-// const imageFileFilter = (req, file, cb) => {
-//   if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/)) {
-//     return cb(new Error("File format not supported."), false);
-//   }
-//   cb(null, true);
-// };
-
-// const uploadMiddleware = multer({
-//   storage,
-//   fileFilter: imageFileFilter,
-//   limits: { fileSize: maxSize },
-// });
-
-// // ─── COMPRESS AFTER UPLOAD ────────────────────────
-// // Use this as a second middleware after uploadMiddleware.single(...)
-// // It resizes to max 800px wide and compresses to ~80% quality JPEG.
-// // The original oversized file is deleted and replaced with the compressed one.
-
-// const compressImage = async (req, res, next) => {
-//   if (!req.file) return next();
-
-//   const filePath = req.file.path;
-//   const compressedPath = filePath + "_compressed.jpg";
-
-//   try {
-//     await sharp(filePath)
-//       .resize(800, 800, { fit: "inside", withoutEnlargement: true })
-//       .jpeg({ quality: 80 })
-//       .toFile(compressedPath);
-
-//     // Replace original with compressed
-//     fs.unlinkSync(filePath);
-//     fs.renameSync(compressedPath, filePath);
-
-//     // Update mimetype so the rest of the app knows it's a jpeg
-//     req.file.mimetype = "image/jpeg";
-
-//     next();
-//   } catch (err) {
-//     next(err);
-//   }
-// };
-
-// module.exports = uploadMiddleware;
-// module.exports.uploadMiddleware = uploadMiddleware;
-// module.exports.compressImage = compressImage;
+module.exports = { uploadMiddleware, optimizeUploadedImage };

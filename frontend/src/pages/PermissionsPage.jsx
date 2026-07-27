@@ -806,6 +806,8 @@ export default function PermissionsPage() {
                           <img
                             src={`${APP_BASE_URL}${product.image_url}`}
                             alt={product.name}
+                            loading="lazy"
+                            decoding="async"
                             className="h-12 w-12 rounded-lg border object-cover"
                           />
                         ) : (
@@ -987,6 +989,8 @@ export default function PermissionsPage() {
                                     <img
                                       src={`${APP_BASE_URL}${product.image_url}`}
                                       alt={product.name}
+                                      loading="lazy"
+                                      decoding="async"
                                       className="h-16 w-16 shrink-0 rounded-xl border object-cover"
                                     />
                                   ) : (
