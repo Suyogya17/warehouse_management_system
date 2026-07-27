@@ -37,6 +37,7 @@ export default function GalleryPage() {
   const role = String(user?.role || "").toUpperCase();
   const canOrder = role === "USER";
   const canBrowseOffers = role !== "MEMBER";
+  const canViewAllProducts = role === "ADMIN" || role === "CO_ADMIN";
 
   const [regularProducts, setRegularProducts] = useState([]);
   const [offerProducts, setOfferProducts] = useState([]);
@@ -57,6 +58,21 @@ export default function GalleryPage() {
     setRegularLoading(true);
     setOfferLoading(canBrowseOffers);
 
+    if (canViewAllProducts) {
+      try {
+        const result = await api.getAvailability(token, { include_hidden: 1 });
+        const allProducts = result.data || [];
+        setRegularProducts(allProducts.filter((product) => !isActiveOffer(product)));
+        setOfferProducts(allProducts.filter(isActiveOffer));
+      } catch (error) {
+        console.error("Admin gallery products load failed:", error);
+      } finally {
+        setRegularLoading(false);
+        setOfferLoading(false);
+      }
+      return;
+    }
+
     const regularRequest = api
       .getAvailability(token)
       .then((result) => {
@@ -76,7 +92,7 @@ export default function GalleryPage() {
       : Promise.resolve();
 
     await Promise.allSettled([regularRequest, offerRequest]);
-  }, [canBrowseOffers, token]);
+  }, [canBrowseOffers, canViewAllProducts, token]);
 
   useEffect(() => {
     load().catch(console.error);
@@ -244,6 +260,7 @@ export default function GalleryPage() {
           series,
           search,
           stock,
+          include_hidden: canViewAllProducts ? 1 : undefined,
         },
         token
       );
