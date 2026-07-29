@@ -26,14 +26,15 @@ export const formatPrice = (value, currency = "NPR") => {
 };
 
 export const convertPriceForUser = (value, user = {}) => {
-  const amount = Number(value || 0);
+  if (value === null || value === undefined || value === "") return null;
+  const amount = Number(value);
   const currency = String(user?.currency_code || "NPR").trim().toUpperCase();
-  const defaultRates = { NPR: 1, INR: 1.6 };
-  const exchangeRate = Number(user?.exchange_rate || defaultRates[currency] || 1);
 
   if (!Number.isFinite(amount)) return null;
-  if (!Number.isFinite(exchangeRate) || exchangeRate <= 0) return amount;
+  if (currency === "INR") return amount;
 
+  const exchangeRate = Number(user?.exchange_rate || 1);
+  if (!Number.isFinite(exchangeRate) || exchangeRate <= 0) return amount;
   return amount / exchangeRate;
 };
 
@@ -43,6 +44,25 @@ export const formatUserPrice = (value, user = {}) => {
 
   return amount === null ? "-" : formatPrice(amount, currency);
 };
+
+export const getProductPriceForUser = (product = {}, user = {}) => {
+  const currency = String(user?.currency_code || "NPR").trim().toUpperCase();
+
+  if (currency === "INR") {
+    const indiaPrice = product?.india_price;
+    if (indiaPrice === null || indiaPrice === undefined || indiaPrice === "") {
+      return null;
+    }
+    const amount = Number(indiaPrice);
+    return Number.isFinite(amount) ? amount : null;
+  }
+
+  const amount = Number(product?.price);
+  return Number.isFinite(amount) ? amount : null;
+};
+
+export const formatProductPriceForUser = (product = {}, user = {}) =>
+  formatUserPrice(getProductPriceForUser(product, user), user);
 
 export const formatEnglishDate = (value, options = {}) => {
   const date = normalizeDate(value);

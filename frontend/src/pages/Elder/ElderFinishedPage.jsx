@@ -19,7 +19,7 @@ import { useProductInterestTracking } from "../../hooks/useProductInterestTracki
 
 import { api, APP_BASE_URL } from "../../services/api";
 import { getCustomerVisibleStock, getRoundedCartons } from "../../utils/displayStock";
-import { formatNumber, formatUserPrice } from "../../utils/format";
+import { formatNumber, formatProductPriceForUser } from "../../utils/format";
 import { getCommissionLabel, isCommissionProduct, matchesCommissionFilter } from "../../utils/commission";
 import {
   sortProductGroupsByDisplayOrder,
@@ -199,7 +199,7 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds, user }) {
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500">Price</span>
             <span className="text-sm font-bold text-emerald-700">
-              {formatUserPrice(selectedVariant.price, user)}
+              {formatProductPriceForUser(selectedVariant, user)}
             </span>
           </div>
           <div className="flex items-center justify-between">

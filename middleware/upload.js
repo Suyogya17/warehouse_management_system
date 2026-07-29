@@ -44,11 +44,16 @@ const upload = multer({
 const optimizeUploadedImage = async (file) => {
   if (!file || !String(file.mimetype || "").startsWith("image/")) return file;
 
-  const optimizedFilename = `${path.basename(
+  const filenameBase = path.basename(
     file.filename,
     path.extname(file.filename)
-  )}.webp`;
+  );
+  const optimizedFilename = `${filenameBase}.webp`;
   const optimizedPath = path.join(uploadsDirectory, optimizedFilename);
+  const temporaryPath = path.join(
+    uploadsDirectory,
+    `.${filenameBase}-${process.pid}-${Date.now()}.tmp.webp`
+  );
 
   try {
     await sharp(file.path)
@@ -60,9 +65,15 @@ const optimizeUploadedImage = async (file) => {
         withoutEnlargement: true,
       })
       .webp({ quality: 78, effort: 4, smartSubsample: true })
-      .toFile(optimizedPath);
+      .toFile(temporaryPath);
 
-    if (optimizedPath !== file.path) {
+    // The original upload may already be WebP, making its final optimized
+    // path identical to its input path. Sharp cannot read and write the same
+    // file, so always render to a temporary file and replace it only after
+    // processing has completed.
+    await fs.promises.rename(temporaryPath, optimizedPath);
+
+    if (path.resolve(optimizedPath) !== path.resolve(file.path)) {
       await fs.promises.unlink(file.path).catch(() => {});
     }
 
@@ -76,7 +87,7 @@ const optimizeUploadedImage = async (file) => {
       size: stats.size,
     };
   } catch (error) {
-    await fs.promises.unlink(optimizedPath).catch(() => {});
+    await fs.promises.unlink(temporaryPath).catch(() => {});
     throw new Error(`Image optimization failed: ${error.message}`);
   }
 };

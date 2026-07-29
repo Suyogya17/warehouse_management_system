@@ -75,6 +75,7 @@ export default function ProductDisplayPage() {
   const [permissions, setPermissions] = useState([]);
   const [displayInputs, setDisplayInputs] = useState({});
   const [priceInputs, setPriceInputs] = useState({});
+  const [indiaPriceInputs, setIndiaPriceInputs] = useState({});
   const [savingDisplayId, setSavingDisplayId] = useState(null);
   const [savingPriceId, setSavingPriceId] = useState(null);
   const [savingUserProductKey, setSavingUserProductKey] = useState("");
@@ -126,6 +127,16 @@ export default function ProductDisplayPage() {
       const next = {};
       items.forEach((item) => {
         next[item.id] = current[item.id] ?? String(item.price ?? 0);
+      });
+      return next;
+    });
+  }, [items]);
+
+  useEffect(() => {
+    setIndiaPriceInputs((current) => {
+      const next = {};
+      items.forEach((item) => {
+        next[item.id] = current[item.id] ?? String(item.india_price ?? "");
       });
       return next;
     });
@@ -663,27 +674,46 @@ export default function ProductDisplayPage() {
 
   const savePrice = async (item) => {
     const price = Number(priceInputs[item.id]);
+    const indiaPriceInput = indiaPriceInputs[item.id] ?? "";
+    const indiaPrice = indiaPriceInput === "" ? null : Number(indiaPriceInput);
 
     if (!Number.isFinite(price) || price < 0) {
-      showToast({ tone: "error", title: "Invalid price", message: "Enter 0 or a positive amount." });
+      showToast({ tone: "error", title: "Invalid Nepal price", message: "Enter 0 or a positive amount." });
+      return;
+    }
+    if (indiaPrice !== null && (!Number.isFinite(indiaPrice) || indiaPrice < 0)) {
+      showToast({ tone: "error", title: "Invalid India price", message: "Enter an empty value, 0, or a positive amount." });
       return;
     }
 
     try {
       setSavingPriceId(item.id);
-      const result = await api.updateFinishedGoodPrice(item.id, price, token);
+      const result = await api.updateFinishedGoodPrice(
+        item.id,
+        { price, india_price: indiaPrice },
+        token
+      );
       const savedPrice = Number(result.data?.price ?? price);
+      const savedIndiaPrice = result.data?.india_price ?? indiaPrice;
       setItems((current) =>
         current.map((product) =>
-          Number(product.id) === Number(item.id) ? { ...product, price: savedPrice } : product
+          Number(product.id) === Number(item.id)
+            ? { ...product, price: savedPrice, india_price: savedIndiaPrice }
+            : product
         )
       );
       setPriceInputs((current) => ({ ...current, [item.id]: String(savedPrice) }));
+      setIndiaPriceInputs((current) => ({
+        ...current,
+        [item.id]: savedIndiaPrice === null ? "" : String(savedIndiaPrice),
+      }));
       announceDataRefresh("finished-goods");
       showToast({
         tone: "success",
-        title: "Price updated",
-        message: `${item.article_code || item.name} is now ${formatPrice(savedPrice)}.`,
+        title: "Prices updated",
+        message: `${item.article_code || item.name}: ${formatPrice(savedPrice)} / ${
+          savedIndiaPrice === null ? "India price not set" : formatPrice(savedIndiaPrice, "INR")
+        }.`,
       });
     } catch (error) {
       showToast({ tone: "error", title: "Price update failed", message: error.data?.message || error.message });
@@ -1092,6 +1122,16 @@ export default function ProductDisplayPage() {
                         const savedPrice = Number(item.price || 0);
                         const priceInput = priceInputs[item.id] ?? String(savedPrice);
                         const priceChanged = Number(priceInput) !== savedPrice;
+                        const savedIndiaPrice =
+                          item.india_price === null || item.india_price === undefined
+                            ? null
+                            : Number(item.india_price);
+                        const indiaPriceInput =
+                          indiaPriceInputs[item.id] ??
+                          (savedIndiaPrice === null ? "" : String(savedIndiaPrice));
+                        const parsedIndiaPrice =
+                          indiaPriceInput === "" ? null : Number(indiaPriceInput);
+                        const indiaPriceChanged = parsedIndiaPrice !== savedIndiaPrice;
                         const visibleUsers = item.is_visible
                           ? visibleUsersByProduct.get(Number(item.id)) || []
                           : [];
@@ -1166,26 +1206,42 @@ export default function ProductDisplayPage() {
                             </div>
 
                             <div>
-                              <label className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                                Price (NPR)
-                              </label>
-                              <div className="mt-1 flex flex-wrap items-center gap-2">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  value={priceInput}
-                                  onChange={(event) =>
-                                    setPriceInputs((current) => ({ ...current, [item.id]: event.target.value }))
-                                  }
-                                  className="h-10 w-28 rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                                />
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <label className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                                  Nepal (NPR)
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={priceInput}
+                                    onChange={(event) =>
+                                      setPriceInputs((current) => ({ ...current, [item.id]: event.target.value }))
+                                    }
+                                    className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-semibold normal-case text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                                  />
+                                </label>
+                                <label className="text-xs font-semibold uppercase tracking-wide text-orange-700">
+                                  India (INR)
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={indiaPriceInput}
+                                    placeholder="Not set"
+                                    onChange={(event) =>
+                                      setIndiaPriceInputs((current) => ({ ...current, [item.id]: event.target.value }))
+                                    }
+                                    className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-semibold normal-case text-slate-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
+                                  />
+                                </label>
+                              </div>
+                              <div className="mt-2">
                                 <Button
                                   type="button"
-                                  variant={priceChanged ? "primary" : "secondary"}
+                                  variant={priceChanged || indiaPriceChanged ? "primary" : "secondary"}
                                   size="sm"
                                   icon="check"
-                                  disabled={!priceChanged || savingPriceId === item.id}
+                                  disabled={(!priceChanged && !indiaPriceChanged) || savingPriceId === item.id}
                                   onClick={() => savePrice(item)}
                                 >
                                   {savingPriceId === item.id ? "Saving" : "Save"}

@@ -283,18 +283,26 @@ export default function UsersPage() {
             </SelectInput>
           </Field>
 
-          <Field label="Exchange rate" hint="NPR per 1 selected currency. INR should be 1.6.">
-            <TextInput
-              type="number"
-              min="0.000001"
-              step="0.000001"
-              value={form.exchange_rate}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, exchange_rate: event.target.value }))
-              }
-              required
-            />
-          </Field>
+          {form.currency_code === "INR" ? (
+            <Field label="India pricing">
+              <div className="flex h-11 items-center rounded-xl border border-orange-200 bg-orange-50 px-3.5 text-sm font-medium text-orange-800">
+                Enter INR prices separately on each product.
+              </div>
+            </Field>
+          ) : (
+            <Field label="Exchange rate" hint="NPR per 1 selected currency.">
+              <TextInput
+                type="number"
+                min="0.000001"
+                step="0.000001"
+                value={form.exchange_rate}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, exchange_rate: event.target.value }))
+                }
+                required
+              />
+            </Field>
+          )}
 
           <div className="flex items-center gap-3 md:col-span-2 xl:col-span-4">
             <Button type="submit" icon="plus">
@@ -324,7 +332,14 @@ export default function UsersPage() {
                 "-",
             },
             { key: "currency_code", label: "Currency" },
-            { key: "exchange_rate", label: "Exchange rate" },
+            {
+              key: "exchange_rate",
+              label: "Pricing method",
+              render: (row) =>
+                row.currency_code === "INR"
+                  ? "Per-product India price"
+                  : `NPR ÷ ${row.exchange_rate || 1}`,
+            },
             { key: "created_at", label: "Created", type: "date" },
             {
               key: "actions",

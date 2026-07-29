@@ -231,7 +231,13 @@ const totalAvailableCartons = filteredAvailability.reduce((sum, item) => sum + g
                   </div>
                 ),
               },
-              { key: "size", label: "Size" },
+              {
+                key: "size",
+                label: "Size",
+                render: (row) => (
+                  <span className="whitespace-nowrap">{row.size || "-"}</span>
+                ),
+              },
               { key: "color", label: "Color" },
               {
                 key: "physical_stock",

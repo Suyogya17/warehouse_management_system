@@ -18,6 +18,10 @@ const countryNames = {
   NP: "Nepal",
 };
 
+const isActiveOffer = (product) =>
+  Number(product.offer_enabled) === 1 &&
+  (!product.offer_ends_at || new Date(product.offer_ends_at).getTime() >= Date.now());
+
 const getCountryLabel = (countryCode) => {
   const code = String(countryCode || "NP").toUpperCase();
   return countryNames[code] || code;
@@ -498,6 +502,108 @@ export default function PermissionsPage() {
     XLSX.writeFile(workbook, `country-on-hold-${scope}-${today}.xlsx`);
   };
 
+  const exportIndiaShownProducts = () => {
+    const indiaUsers = getUsersForCountry("IN");
+    const userRows = [];
+
+    const productRows = products
+      .filter((product) => !isActiveOffer(product))
+      .map((product) => {
+        const shownUsers = indiaUsers.filter((indiaUser) =>
+          hasAccess(indiaUser.id, product.id)
+        );
+
+        if (!shownUsers.length) return null;
+
+        const savedNprPrice = Number(product.price || 0);
+        const savedIndiaPrice =
+          product.india_price === null || product.india_price === undefined
+            ? null
+            : Number(product.india_price);
+
+        shownUsers.forEach((indiaUser) => {
+          userRows.push({
+            User: indiaUser.name || "",
+            Email: indiaUser.email || "",
+            Role: indiaUser.role || "",
+            "Product ID": product.id,
+            Product: product.name || "",
+            Article: product.article_code || "",
+            Series: product.sole_code || "",
+            Color: product.color || "",
+            Size: product.size || "",
+            "Saved Price (NPR)": savedNprPrice,
+            "India Price (INR)": savedIndiaPrice ?? "Not set",
+          });
+        });
+
+        return {
+          "Product ID": product.id,
+          Product: product.name || "",
+          Article: product.article_code || "",
+          Series: product.sole_code || "",
+          Color: product.color || "",
+          Size: product.size || "",
+          Stock: Number(product.quantity || 0),
+          Unit: product.unit || "pairs",
+          "Saved Price (NPR)": savedNprPrice,
+          "India Price (INR)": savedIndiaPrice ?? "Not set",
+          "Shown User Count": shownUsers.length,
+          "Shown To": shownUsers
+            .map((indiaUser) => indiaUser.name || indiaUser.email)
+            .join(", "),
+        };
+      })
+      .filter(Boolean);
+
+    if (!productRows.length) {
+      showToast({
+        tone: "error",
+        title: "Nothing to export",
+        message: "No normal catalogue products are currently shown to India users.",
+      });
+      return;
+    }
+
+    const workbook = XLSX.utils.book_new();
+    const productWorksheet = XLSX.utils.json_to_sheet(productRows);
+    productWorksheet["!cols"] = [
+      { wch: 12 },
+      { wch: 32 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 10 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 45 },
+    ];
+    XLSX.utils.book_append_sheet(workbook, productWorksheet, "India Products");
+
+    const accessWorksheet = XLSX.utils.json_to_sheet(userRows);
+    accessWorksheet["!cols"] = [
+      { wch: 24 },
+      { wch: 32 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 30 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 12 },
+      { wch: 18 },
+      { wch: 26 },
+      { wch: 22 },
+    ];
+    XLSX.utils.book_append_sheet(workbook, accessWorksheet, "India User Access");
+
+    const today = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(workbook, `india-shown-products-${today}.xlsx`);
+  };
+
   const getPageNumbers = (currentPage, totalPages) => {
     const pages = [];
     const maxVisible = 5;
@@ -593,6 +699,16 @@ export default function PermissionsPage() {
         description="Select users and products, then choose whether those products should be shown or hidden."
         icon="permission"
       />
+
+      <div className="flex justify-end">
+        <Button
+          variant="secondary"
+          icon="download"
+          onClick={exportIndiaShownProducts}
+        >
+          Export India shown products
+        </Button>
+      </div>
 
       <div className="grid gap-3 md:grid-cols-2">
         {countryOptions.map((countryCode) => {

@@ -57,7 +57,7 @@ const executeTimedQuery = async (executor, sql, params = []) => {
     );
     const durationMs =
       Number(process.hrtime.bigint() - startedAt) / 1_000_000;
-
+    
     if (LOG_ALL_QUERIES || durationMs >= SLOW_QUERY_MS) {
       const log = {
         type: durationMs >= SLOW_QUERY_MS ? "slow_query" : "query",

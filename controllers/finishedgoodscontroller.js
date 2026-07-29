@@ -82,6 +82,10 @@ const getAll = async (req, res, next) => {
     });
     const userId = req.user.id;
     const userRole = req.user.role;
+    const supportsPercentageAllocations = await hasColumn(
+      'user_product_permissions',
+      'allocation_quantity'
+    );
 
     let sql = '';
     let params = [];
@@ -133,6 +137,14 @@ const getAll = async (req, res, next) => {
               AND deny.user_id = ?
               AND deny.can_view = 0
           )
+          ${supportsPercentageAllocations ? `AND (
+            NOT EXISTS (
+              SELECT 1 FROM user_product_permissions allocated
+              WHERE allocated.finished_good_id = fg.id
+                AND allocated.allocation_quantity IS NOT NULL
+            )
+            OR upp.allocation_quantity IS NOT NULL
+          )` : ''}
       `;
 
       params.push(userId, userId);
@@ -339,6 +351,10 @@ const getOne = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const userRole = req.user.role;
+    const supportsPercentageAllocations = await hasColumn(
+      'user_product_permissions',
+      'allocation_quantity'
+    );
 
     let sql;
     let params = [req.params.id];
@@ -362,6 +378,14 @@ const getOne = async (req, res, next) => {
               AND deny.user_id = ?
               AND deny.can_view = 0
           )
+          ${supportsPercentageAllocations ? `AND (
+            NOT EXISTS (
+              SELECT 1 FROM user_product_permissions allocated
+              WHERE allocated.finished_good_id = fg.id
+                AND allocated.allocation_quantity IS NOT NULL
+            )
+            OR upp.allocation_quantity IS NOT NULL
+          )` : ''}
       `;
       params.push(userId, userId);
     }
@@ -394,6 +418,7 @@ const create = async (req, res, next) => {
       unit,
       quantity,
       price,
+      india_price,
       is_commission,
       min_quantity,
       inner_box_per_pair,
@@ -405,6 +430,24 @@ const create = async (req, res, next) => {
     const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
     const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
     const supportsCommissionFlag = await hasColumn('finished_goods', 'is_commission');
+    const supportsIndiaPrice = await hasColumn('finished_goods', 'india_price');
+    const parsedIndiaPrice =
+      india_price === undefined || india_price === null || india_price === ''
+        ? null
+        : Number(india_price);
+
+    if (parsedIndiaPrice !== null && (!Number.isFinite(parsedIndiaPrice) || parsedIndiaPrice < 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'India price must be empty, 0, or more.',
+      });
+    }
+    if (parsedIndiaPrice !== null && !supportsIndiaPrice) {
+      return res.status(400).json({
+        success: false,
+        message: 'India pricing requires sql/add-finished-good-india-price.sql.',
+      });
+    }
     let nextDisplayOrder = null;
 
     if (supportsDisplayOrder) {
@@ -460,6 +503,11 @@ const create = async (req, res, next) => {
       baseValues.push(normalizeCommissionFlag(is_commission));
     }
 
+    if (supportsIndiaPrice) {
+      baseColumns.push('india_price');
+      baseValues.push(parsedIndiaPrice);
+    }
+
     const { columns, values } = await appendFiscalInsertFields('finished_goods', baseColumns, baseValues);
     const sql = `
       INSERT INTO finished_goods (${columns.join(', ')})
@@ -508,12 +556,25 @@ const update = async (req, res, next) => {
       size,
       unit,
       price,
+      india_price,
       is_commission,
       min_quantity,
       inner_box_per_pair,           
       inner_boxes_per_outer_box
     } = req.body;
     const supportsCommissionFlag = await hasColumn('finished_goods', 'is_commission');
+    const supportsIndiaPrice = await hasColumn('finished_goods', 'india_price');
+    if (
+      india_price !== undefined &&
+      india_price !== null &&
+      india_price !== '' &&
+      !supportsIndiaPrice
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'India pricing requires sql/add-finished-good-india-price.sql.',
+      });
+    }
 
     const existingRows = await query(
       'SELECT id, name, article_code, color, size, unit FROM finished_goods WHERE id = ? AND is_deleted = 0',
@@ -566,6 +627,21 @@ const update = async (req, res, next) => {
     if (supportsCommissionFlag) {
       sql += `, is_commission = ?`;
       params.push(normalizeCommissionFlag(is_commission));
+    }
+
+    if (supportsIndiaPrice) {
+      const parsedIndiaPrice =
+        india_price === undefined || india_price === null || india_price === ''
+          ? null
+          : Number(india_price);
+      if (parsedIndiaPrice !== null && (!Number.isFinite(parsedIndiaPrice) || parsedIndiaPrice < 0)) {
+        return res.status(400).json({
+          success: false,
+          message: 'India price must be empty, 0, or more.',
+        });
+      }
+      sql += `, india_price = ?`;
+      params.push(parsedIndiaPrice);
     }
 
     if (image_url) {
@@ -807,28 +883,76 @@ const resetDisplayQuantities = async (req, res, next) => {
 // ─── PRICE ─────────────────────────────────────────────────────────────────
 const setPrice = async (req, res, next) => {
   try {
-    const price = Number(req.body.price);
+    const hasNprPrice = req.body.price !== undefined;
+    const hasIndiaPrice = req.body.india_price !== undefined;
+    const price = hasNprPrice ? Number(req.body.price) : null;
+    const indiaPrice =
+      hasIndiaPrice && req.body.india_price !== null && req.body.india_price !== ''
+        ? Number(req.body.india_price)
+        : null;
 
-    if (!Number.isFinite(price) || price < 0) {
+    if (!hasNprPrice && !hasIndiaPrice) {
       return res.status(400).json({
         success: false,
-        message: 'Price must be 0 or more.',
+        message: 'At least one price is required.',
       });
     }
 
-    const savedPrice = Math.round(price * 100) / 100;
+    if (hasNprPrice && (!Number.isFinite(price) || price < 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nepal price must be 0 or more.',
+      });
+    }
+
+    if (indiaPrice !== null && (!Number.isFinite(indiaPrice) || indiaPrice < 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'India price must be empty, 0, or more.',
+      });
+    }
+
+    const supportsIndiaPrice = await hasColumn('finished_goods', 'india_price');
+    if (hasIndiaPrice && !supportsIndiaPrice) {
+      return res.status(400).json({
+        success: false,
+        message: 'India pricing requires sql/add-finished-good-india-price.sql.',
+      });
+    }
+
+    const savedPrice = hasNprPrice ? Math.round(price * 100) / 100 : null;
+    const savedIndiaPrice =
+      indiaPrice === null ? null : Math.round(indiaPrice * 100) / 100;
+    const updates = [];
+    const params = [];
+
+    if (hasNprPrice) {
+      updates.push('price = ?');
+      params.push(savedPrice);
+    }
+    if (hasIndiaPrice) {
+      updates.push('india_price = ?');
+      params.push(savedIndiaPrice);
+    }
+    params.push(req.params.id);
+
     const result = await query(
-      `UPDATE finished_goods SET price = ? WHERE id = ? AND is_deleted = 0`,
-      [savedPrice, req.params.id]
+      `UPDATE finished_goods SET ${updates.join(', ')} WHERE id = ? AND is_deleted = 0`,
+      params
     );
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: 'Product not found' });
     }
 
+    clearCache();
     return res.json({
       success: true,
-      data: { id: Number(req.params.id), price: savedPrice },
+      data: {
+        id: Number(req.params.id),
+        ...(hasNprPrice ? { price: savedPrice } : {}),
+        ...(hasIndiaPrice ? { india_price: savedIndiaPrice } : {}),
+      },
     });
   } catch (err) {
     next(err);

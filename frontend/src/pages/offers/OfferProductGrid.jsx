@@ -5,7 +5,12 @@ import EmptyState from "../../components/EmptyState";
 import ProductImageGallery from "../../components/ProductImageGallery";
 import { APP_BASE_URL } from "../../services/api";
 import { getCustomerVisibleStock, getRoundedCartons } from "../../utils/displayStock";
-import { formatNumber, formatUserPrice } from "../../utils/format";
+import {
+  formatNumber,
+  formatPrice,
+  formatUserPrice,
+  getProductPriceForUser,
+} from "../../utils/format";
 import {
   OFFER_PRODUCTS_PER_PAGE,
   getOfferGroupKey,
@@ -35,7 +40,9 @@ function OfferProductCard({ variants, canManage, canOrder, viewer, onEdit, onRem
   const audienceSummary = Number(selected.offer_all_users) === 1
     ? "All users"
     : `${targetQuantities.length} selected user(s)${targetQuantities.length ? ` · ${targetQuantities.map(formatNumber).join(", ")} pairs` : ""}`;
-  const customerOfferPrice = Number(selected.price || 0) > 0 ? Number(selected.price) + 50 : null;
+  const customerBasePrice = getProductPriceForUser(selected, viewer);
+  const customerOfferPrice =
+    Number(customerBasePrice) > 0 ? Number(customerBasePrice) + 50 : null;
   return (
     <article className={`group flex flex-col overflow-hidden rounded-2xl border bg-white transition-all duration-300 hover:shadow-xl ${active ? "border-amber-300" : "border-slate-200"}`}>
       <div className="relative aspect-[5/3] overflow-hidden bg-slate-100">
@@ -74,7 +81,7 @@ function OfferProductCard({ variants, canManage, canOrder, viewer, onEdit, onRem
           <div><p className="text-[10px] font-semibold uppercase text-slate-400">Qty stock</p><p className="text-sm font-bold text-indigo-700">{formatNumber(availableQty)} {selected.unit || "pairs"}</p></div>
           <div><p className="text-[10px] font-semibold uppercase text-slate-400">CTN stock</p><p className="text-sm font-bold text-amber-600">{formatNumber(cartons)} CTN</p></div>
         </div>
-        {canManage && <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 px-3 py-2"><div><p className="text-[10px] font-semibold uppercase text-slate-500">Original price</p><p className="text-base font-bold text-slate-800">{Number(selected.price || 0) > 0 ? formatUserPrice(selected.price, viewer) : "-"}</p></div><div className="border-l border-slate-200 pl-3"><p className="text-[10px] font-semibold uppercase text-emerald-600">Offer price</p><p className="text-base font-bold text-emerald-800">{customerOfferPrice !== null ? formatUserPrice(customerOfferPrice, viewer) : "-"}</p></div></div>}
+        {canManage && <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 px-3 py-2"><div><p className="text-[10px] font-semibold uppercase text-slate-500">Original price</p><p className="text-base font-bold text-slate-800">{Number(selected.price || 0) > 0 ? formatPrice(selected.price, "NPR") : "-"}</p></div><div className="border-l border-slate-200 pl-3"><p className="text-[10px] font-semibold uppercase text-emerald-600">Offer price</p><p className="text-base font-bold text-emerald-800">{Number(selected.price || 0) > 0 ? formatPrice(Number(selected.price) + 50, "NPR") : "-"}</p></div></div>}
         {!canManage && customerOfferPrice !== null && <div className="flex items-center justify-between rounded-xl bg-emerald-50 px-3 py-2"><span className="text-xs font-semibold uppercase text-emerald-600">Offer price</span><span className="text-base font-bold text-emerald-800">{formatUserPrice(customerOfferPrice, viewer)}</span></div>}
         {canManage && <div className="mt-auto flex gap-2"><Button type="button" onClick={() => onEdit(selected)}>{active ? "Edit offer" : "Add offer"}</Button>{active && <Button type="button" variant="secondary" onClick={() => onRemove(selected)}>Remove</Button>}</div>}
         {!canManage && canOrder && (() => {

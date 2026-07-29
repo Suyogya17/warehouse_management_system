@@ -296,10 +296,17 @@ export const api = {
       token
     ),
 
-  updateFinishedGoodPrice: (id, price, token) =>
+  updateFinishedGoodPrice: (id, prices, token) =>
     apiRequest(
       `/finished-goods/${id}/price`,
-      { method: "PUT", body: JSON.stringify({ price }) },
+      {
+        method: "PUT",
+        body: JSON.stringify(
+          typeof prices === "object" && prices !== null
+            ? prices
+            : { price: prices }
+        ),
+      },
       token
     ),
 
@@ -386,6 +393,14 @@ export const api = {
     const query = buildQueryString(options);
     return apiRequest(`/permissions${query ? `?${query}` : ""}`, {}, token);
   },
+  getProductPercentageAllocations: (token) =>
+    apiRequest("/permissions/percentage-allocations", {}, token),
+  saveProductPercentageAllocations: (id, targets, token) =>
+    apiRequest(
+      `/permissions/percentage-allocations/${id}`,
+      { method: "PUT", body: JSON.stringify({ targets }) },
+      token
+    ),
 
   getOrders: (token, options = {}) => {
     const query = buildQueryString(options);

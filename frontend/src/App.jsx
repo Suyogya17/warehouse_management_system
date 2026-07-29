@@ -35,6 +35,7 @@ const OnHoldPage = lazy(() => import("./pages/OnHoldPage"));
 const SummaryPage = lazy(() => import("./pages/SummaryPage"));
 const ProductLedgerPage = lazy(() => import("./pages/ProductLedgerPage"));
 const ProductDisplayPage = lazy(() => import("./pages/ProductDisplayPage"));
+const ProductPercentagePage = lazy(() => import("./pages/ProductPercentagePage"));
 const AdvertisementsPage = lazy(() => import("./pages/AdvertisementsPage"));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage"));
 const ActivityLogPage = lazy(() => import("./pages/ActivityLogPage"));
@@ -274,6 +275,15 @@ export default function App() {
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               {withSuspense(<ProductDisplayPage />)}
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="product-percentages"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              {withSuspense(<ProductPercentagePage />)}
             </ProtectedRoute>
           }
         />

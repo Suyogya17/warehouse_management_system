@@ -10,7 +10,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
-import { formatNumber, formatUserPrice } from "../utils/format";
+import { formatNumber, formatProductPriceForUser } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
 import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
 import { getRoundedCartons } from "../utils/displayStock";
@@ -164,7 +164,7 @@ function ProductCard({
        <div className=" rounded-xl p-2 space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-emerald-700">Price</span>
-            <span className="text-sm font-bold text-emerald-700">{formatUserPrice(selectedVariant.price, user)}</span>
+            <span className="text-sm font-bold text-emerald-700">{formatProductPriceForUser(selectedVariant, user)}</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-indigo-900">Available pairs: </span>
@@ -749,7 +749,7 @@ function UserDashboardShowcase({ products = [], notices = [], user }) {
               </div>
               <div className="rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
                 <p className="text-slate-500">Price</p>
-                <p className="mt-1 font-bold text-emerald-700">{featured ? formatUserPrice(featured.price, user) : "-"}</p>
+                <p className="mt-1 font-bold text-emerald-700">{featured ? formatProductPriceForUser(featured, user) : "-"}</p>
               </div>
               <div className="rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
                 <p className="text-slate-500">Color</p>
@@ -847,7 +847,7 @@ function UserDashboardShowcase({ products = [], notices = [], user }) {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-black text-slate-950">{item.article_code || item.name}</p>
                   <p className="mt-1 truncate text-xs text-slate-500">{item.color || "Color"} · {item.size || "Size"}</p>
-                  <p className="mt-1 text-xs font-bold text-emerald-700">{formatUserPrice(item.price, user)}</p>
+                  <p className="mt-1 text-xs font-bold text-emerald-700">{formatProductPriceForUser(item, user)}</p>
                 </div>
                 <ArrowRight size={16} className="text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-indigo-600" />
               </Link>

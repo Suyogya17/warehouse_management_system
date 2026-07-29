@@ -60,6 +60,8 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     supportsOfferAudience,
     supportsOfferUsers,
     supportsOfferCampaigns,
+    supportsPercentageAllocations,
+    supportsOfferOrderSnapshots,
   ] = await Promise.all([
     hasColumn('finished_goods', 'display_order'),
     hasColumn('finished_goods', 'display_quantity'),
@@ -69,6 +71,8 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     hasColumn('finished_goods', 'offer_all_users'),
     hasTable('finished_good_offer_users'),
     hasOfferCampaignSchema(),
+    hasColumn('user_product_permissions', 'allocation_quantity'),
+    hasColumn('order_items', 'ordered_from_offer'),
   ]);
   const supportsOfferUserQuantity = supportsOfferUsers
     ? await hasColumn('finished_good_offer_users', 'display_quantity')
@@ -117,7 +121,23 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
         AND upp.user_id = ?
         AND upp.can_view = 0
     )`;
+    if (supportsPercentageAllocations) {
+      sql += ` AND (
+        NOT EXISTS (
+          SELECT 1 FROM user_product_permissions allocated
+          WHERE allocated.finished_good_id = finished_goods.id
+            AND allocated.allocation_quantity IS NOT NULL
+        )
+        OR EXISTS (
+          SELECT 1 FROM user_product_permissions own_allocation
+          WHERE own_allocation.finished_good_id = finished_goods.id
+            AND own_allocation.user_id = ?
+            AND own_allocation.allocation_quantity IS NOT NULL
+        )
+      )`;
+    }
     params.push(availabilityUserId, availabilityUserId);
+    if (supportsPercentageAllocations) params.push(availabilityUserId);
   }
 
   sql += supportsDisplayOrder
@@ -132,7 +152,13 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     supportsOfferUsers &&
     products.rows.length > 0;
 
-  const [audienceRows, reserved, campaignUsage] = await Promise.all([
+  const shouldLoadPercentageAllocation =
+    supportsPercentageAllocations &&
+    !isOfferView &&
+    ['USER', 'MEMBER', 'ELDER'].includes(req.user.role) &&
+    products.rows.length > 0;
+  const [audienceRows, reserved, campaignUsage, percentageAllocationRows] =
+    await Promise.all([
     shouldLoadOfferTargets
       ? query(
           `SELECT finished_good_id${
@@ -151,6 +177,30 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
           userId: availabilityUserId,
         })
       : Promise.resolve(new Map()),
+    shouldLoadPercentageAllocation
+      ? query(
+          `SELECT upp.finished_good_id,
+                  upp.allocation_percentage,
+                  upp.allocation_quantity,
+                  upp.allocation_started_at,
+                  COALESCE(SUM(oi.qty_ordered), 0) AS used_quantity
+           FROM user_product_permissions upp
+           LEFT JOIN orders o
+             ON o.created_by = upp.user_id
+            AND o.status <> 'CANCELLED'
+            AND o.created_at >= upp.allocation_started_at
+           LEFT JOIN order_items oi
+             ON oi.order_id = o.id
+            AND oi.finished_good_id = upp.finished_good_id
+            ${supportsOfferOrderSnapshots ? 'AND COALESCE(oi.ordered_from_offer, 0) = 0' : ''}
+           WHERE upp.user_id = ?
+             AND upp.allocation_quantity IS NOT NULL
+             AND upp.finished_good_id IN (${productIds.map(() => '?').join(',')})
+           GROUP BY upp.finished_good_id, upp.allocation_percentage,
+                    upp.allocation_quantity, upp.allocation_started_at`,
+          [availabilityUserId, ...productIds]
+        )
+      : Promise.resolve({ rows: [] }),
   ]);
 
   const offerUserTargets = new Map(
@@ -160,6 +210,22 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
         ? { display_quantity: Number(row.display_quantity || DEFAULT_DISPLAY_QUANTITY) }
         : { display_quantity: DEFAULT_DISPLAY_QUANTITY },
     ])
+  );
+  const percentageAllocations = new Map(
+    percentageAllocationRows.rows.map((row) => {
+      const assignedQuantity = Number(row.allocation_quantity || 0);
+      const usedQuantity = Number(row.used_quantity || 0);
+      return [
+        Number(row.finished_good_id),
+        {
+          percentage: Number(row.allocation_percentage || 0),
+          assigned_quantity: assignedQuantity,
+          used_quantity: usedQuantity,
+          remaining_quantity: Math.max(0, assignedQuantity - usedQuantity),
+          started_at: row.allocation_started_at,
+        },
+      ];
+    })
   );
 
   return products.rows
@@ -188,12 +254,20 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
       const offerQuantityLimit = hasPersonalOffer
         ? userOfferQuantity
         : display_quantity;
+      const percentageAllocation = percentageAllocations.get(
+        Number(product.id)
+      );
       const offerRemainingQuantity =
         usesCustomerOfferAudience && offerIsActive
           ? Math.max(0, offerQuantityLimit - campaignUsedQuantity)
           : offerQuantityLimit;
+      const normalRemainingQuantity = percentageAllocation
+        ? percentageAllocation.remaining_quantity
+        : display_quantity;
       const display_stock = Math.min(
-        offerRemainingQuantity,
+        offerIsActive && usesCustomerOfferAudience
+          ? offerRemainingQuantity
+          : normalRemainingQuantity,
         available_qty
       );
       const canSeeOffer =
@@ -229,6 +303,14 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
         available_qty,
         display_stock,
         display_quantity,
+        allocation_percentage: percentageAllocation?.percentage ?? null,
+        allocation_quantity:
+          percentageAllocation?.assigned_quantity ?? null,
+        allocation_used_quantity:
+          percentageAllocation?.used_quantity ?? 0,
+        allocation_remaining_quantity:
+          percentageAllocation?.remaining_quantity ?? null,
+        allocation_started_at: percentageAllocation?.started_at ?? null,
       };
     })
     .filter(Boolean);

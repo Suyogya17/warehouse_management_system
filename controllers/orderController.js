@@ -678,6 +678,10 @@ const create = async (req, res, next) => {
       : false;
     const supportsOfferOrderSnapshots = await hasColumn('order_items', 'ordered_from_offer');
     const supportsOfferCampaigns = await hasOfferCampaignSchema();
+    const supportsPercentageAllocations = await hasColumn(
+      'user_product_permissions',
+      'allocation_quantity'
+    );
 
     let productSql = `
       SELECT id, name, article_code, sole_code, color, quantity, price, inner_boxes_per_outer_box${supportsDisplayQuantity ? ', display_quantity' : ''}${supportsOfferAudience ? ', offer_enabled, offer_label, offer_ends_at, offer_all_users' : ''}${supportsOfferCampaigns ? ', offer_campaign_id' : ''}
@@ -699,7 +703,19 @@ const create = async (req, res, next) => {
         WHERE upp.finished_good_id = finished_goods.id
           AND upp.user_id = ?
           AND upp.can_view = 0
-      )`;
+      )${supportsPercentageAllocations ? ` AND (
+        NOT EXISTS (
+          SELECT 1 FROM user_product_permissions allocated
+          WHERE allocated.finished_good_id = finished_goods.id
+            AND allocated.allocation_quantity IS NOT NULL
+        )
+        OR EXISTS (
+          SELECT 1 FROM user_product_permissions own_allocation
+          WHERE own_allocation.finished_good_id = finished_goods.id
+            AND own_allocation.user_id = ?
+            AND own_allocation.allocation_quantity IS NOT NULL
+        )
+      )` : ''}`;
       if (supportsOfferAudience && supportsOfferUsers) {
         productSql += ` AND ((${normalPermissionSql}) OR (
           offer_enabled = 1
@@ -709,10 +725,19 @@ const create = async (req, res, next) => {
             WHERE fgo.finished_good_id = finished_goods.id AND fgo.user_id = ?
           ))
         ))`;
-        productParams.push(req.user.id, req.user.id, req.user.id);
+        productParams.push(
+          req.user.id,
+          req.user.id,
+          ...(supportsPercentageAllocations ? [req.user.id] : []),
+          req.user.id
+        );
       } else {
         productSql += ` AND (${normalPermissionSql})`;
-        productParams.push(req.user.id, req.user.id);
+        productParams.push(
+          req.user.id,
+          req.user.id,
+          ...(supportsPercentageAllocations ? [req.user.id] : [])
+        );
       }
     } else if (['MEMBER', 'ELDER'].includes(req.user.role)) {
       productSql += ` AND EXISTS (
@@ -752,6 +777,49 @@ const create = async (req, res, next) => {
         display_quantity: Number(row.display_quantity),
         display_percentage: supportsOfferUserPercentage && row.display_percentage !== null ? Number(row.display_percentage) : null,
       }]));
+    }
+
+    let userPercentageAllocations = new Map();
+    if (req.user.role === 'USER' && supportsPercentageAllocations) {
+      const allocationRows = await client.query(
+        `SELECT upp.finished_good_id,
+                upp.allocation_quantity,
+                upp.allocation_percentage,
+                upp.allocation_started_at,
+                COALESCE(SUM(oi.qty_ordered), 0) AS used_quantity
+         FROM user_product_permissions upp
+         LEFT JOIN orders o
+           ON o.created_by = upp.user_id
+          AND o.status <> 'CANCELLED'
+          AND o.created_at >= upp.allocation_started_at
+         LEFT JOIN order_items oi
+           ON oi.order_id = o.id
+          AND oi.finished_good_id = upp.finished_good_id
+          ${supportsOfferOrderSnapshots ? 'AND COALESCE(oi.ordered_from_offer, 0) = 0' : ''}
+         WHERE upp.user_id = ?
+           AND upp.allocation_quantity IS NOT NULL
+           AND upp.finished_good_id IN ${clause}
+         GROUP BY upp.finished_good_id, upp.allocation_quantity,
+                  upp.allocation_percentage, upp.allocation_started_at`,
+        [req.user.id, ...params]
+      );
+      userPercentageAllocations = new Map(
+        allocationRows.rows.map((row) => {
+          const assignedQuantity = Number(row.allocation_quantity || 0);
+          const usedQuantity = Number(row.used_quantity || 0);
+          return [
+            Number(row.finished_good_id),
+            {
+              assigned_quantity: assignedQuantity,
+              used_quantity: usedQuantity,
+              remaining_quantity: Math.max(
+                0,
+                assignedQuantity - usedQuantity
+              ),
+            },
+          ];
+        })
+      );
     }
 
     const reserved = await getReservedByProduct(
@@ -813,13 +881,18 @@ const create = async (req, res, next) => {
         : DEFAULT_DISPLAY_QUANTITY;
       const userOfferTarget = userOfferTargets.get(Number(id));
       const offerIsActive = isActiveOfferProduct(p);
+      const percentageAllocation = userPercentageAllocations.get(Number(id));
       const effectiveDisplayQuantity =
         req.user.role === 'USER' &&
         offerIsActive &&
         Number(p.offer_all_users) !== 1 &&
         userOfferTarget != null
           ? userOfferTarget.display_quantity
-          : displayQuantity;
+          : req.user.role === 'USER' &&
+              !offerIsActive &&
+              percentageAllocation
+            ? percentageAllocation.remaining_quantity
+            : displayQuantity;
       const usedOfferQuantity =
         req.user.role === 'USER' && offerIsActive
           ? Number(campaignUsage.get(Number(p.offer_campaign_id)) || 0)

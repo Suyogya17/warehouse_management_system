@@ -25,6 +25,7 @@ const initialForm = {
   size: "",
   unit: "pairs",
   price: 0,
+  india_price: "",
   is_commission: false,
   min_quantity: 5,
   inner_box_per_pair: 1,
@@ -40,6 +41,7 @@ const buildFormData = (values, editingId) => {
   formData.append("color", values.color);
   formData.append("unit", values.unit);
   formData.append("price", Number(values.price || 0));
+  formData.append("india_price", values.india_price === "" ? "" : Number(values.india_price));
   formData.append("is_commission", values.is_commission ? 1 : 0);
   formData.append("min_quantity", Number(values.min_quantity));
   formData.append("size", values.size || "");
@@ -226,6 +228,7 @@ export default function FinishedGoodsPage() {
       size: item.size || "",
       unit: item.unit || "pairs",
       price: Number(item.price || 0),
+      india_price: item.india_price ?? "",
       is_commission: Number(item.is_commission || 0) === 1,
       min_quantity: item.min_quantity || 5,
       inner_box_per_pair: item.inner_box_per_pair || 1,
@@ -571,6 +574,19 @@ export default function FinishedGoodsPage() {
               />
             </Field>
 
+            <Field label="India Price (INR)">
+              <TextInput
+                type="number"
+                min={0}
+                step="0.01"
+                value={form.india_price}
+                placeholder="Enter India price"
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, india_price: event.target.value }))
+                }
+              />
+            </Field>
+
             <Field label="Commission type">
               <button
                 type="button"
@@ -759,6 +775,13 @@ export default function FinishedGoodsPage() {
             { key: "quantity", label: "Stock", render: (row) => `${formatNumber(row.quantity)} ${row.unit}` },
             ...(isAdmin ? [{ key: "min_quantity", label: "Min Qty" }] : []),
             ...(isAdmin ? [{ key: "price", label: "Price (NPR)", render: (row) => formatPrice(row.price) }] : []),
+            ...(isAdmin ? [{
+              key: "india_price",
+              label: "India Price (INR)",
+              render: (row) => row.india_price === null || row.india_price === undefined
+                ? "Not set"
+                : formatPrice(row.india_price, "INR"),
+            }] : []),
             ...(isAdmin
               ? [{
                   key: "is_commission",

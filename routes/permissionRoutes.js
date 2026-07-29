@@ -6,6 +6,17 @@ const { cacheResponse } = require('../middleware/cacheMiddleware');
 
 router.use(authenticate);
 
+router.get(
+  '/percentage-allocations',
+  authorize('ADMIN', 'CO_ADMIN'),
+  ctrl.getPercentageAllocations
+);
+router.put(
+  '/percentage-allocations/:finished_good_id',
+  authorize('ADMIN', 'CO_ADMIN'),
+  ctrl.savePercentageAllocations
+);
+
 // POST /api/permissions/grant    - Grant product access to a user (ADMIN only)
 router.post('/grant', authorizeAdminOrPagePermission(PRODUCT_VISIBILITY_PAGE_KEY, 'can_edit'), ctrl.grantAccess);
 
