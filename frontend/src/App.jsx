@@ -32,6 +32,7 @@ const MemberFinishedPage = lazy(() => import("./pages/Member/MemberFinishedGoodP
 const MemberStockPage = lazy(() => import("./pages/Member/MemberStockPage"));
 const MemberOrderPage = lazy(() => import("./pages/Member/MemberOrderPage"));
 const OnHoldPage = lazy(() => import("./pages/OnHoldPage"));
+const OutOfStockPage = lazy(() => import("./pages/OutOfStockPage"));
 const SummaryPage = lazy(() => import("./pages/SummaryPage"));
 const ProductLedgerPage = lazy(() => import("./pages/ProductLedgerPage"));
 const ProductDisplayPage = lazy(() => import("./pages/ProductDisplayPage"));
@@ -302,6 +303,15 @@ export default function App() {
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               {withSuspense(<OnHoldPage />)}
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="out-of-stock"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              {withSuspense(<OutOfStockPage />)}
             </ProtectedRoute>
           }
         />

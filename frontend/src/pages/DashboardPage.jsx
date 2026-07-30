@@ -955,12 +955,9 @@ export default function DashboardPage() {
   const [seriesFilter, setSeriesFilter] = useState("");
   const [onHoldSearch, setOnHoldSearch] = useState("");
   const [onHoldSeriesFilter, setOnHoldSeriesFilter] = useState("");
-  const [outOfStockSearch, setOutOfStockSearch] = useState("");
-  const [outOfStockSeriesFilter, setOutOfStockSeriesFilter] = useState("");
   const [selectedHoldCountry, setSelectedHoldCountry] = useState("NP");
   const [currentPage, setCurrentPage]   = useState(1);
   const [onHoldPage, setOnHoldPage]     = useState(1);
-  const [outOfStockPage, setOutOfStockPage] = useState(1);
   const PRODUCTS_PER_PAGE = 12;
 
   const isAdmin = user.role === "ADMIN" || user.role === "CO_ADMIN";
@@ -1468,54 +1465,6 @@ export default function DashboardPage() {
     stockFilter,
   ]);
 
-  const outOfStockProducts = useMemo(() => {
-    const normalizedSearch = outOfStockSearch.trim().toLowerCase();
-    return groupedProducts
-      .map((variants) =>
-        variants.filter((item) => {
-          const matchesSearch =
-            !normalizedSearch ||
-            (item.name || "").toLowerCase().includes(normalizedSearch) ||
-            (item.article_code || "").toLowerCase().includes(normalizedSearch) ||
-            (item.sole_code || "").toLowerCase().includes(normalizedSearch) ||
-            (item.color || "").toLowerCase().includes(normalizedSearch);
-          const matchesSeries =
-            !outOfStockSeriesFilter ||
-            getSeriesName(item.sole_code) === outOfStockSeriesFilter;
-          return getDashboardAvailableQty(item) <= 0 && matchesSearch && matchesSeries;
-        })
-      )
-      .map((variants) => [...variants].sort(sortByDisplayOrder))
-      .filter((variants) => variants.length > 0)
-      .sort((a, b) => {
-        const orderDiff = getGroupDisplayOrder(a) - getGroupDisplayOrder(b);
-        if (orderDiff !== 0) return orderDiff;
-        return String(a[0]?.article_code || a[0]?.name || "").localeCompare(
-          String(b[0]?.article_code || b[0]?.name || ""),
-          undefined,
-          { numeric: true, sensitivity: "base" }
-        );
-      });
-  }, [
-    getDashboardAvailableQty,
-    groupedProducts,
-    outOfStockSearch,
-    outOfStockSeriesFilter,
-  ]);
-
-  const outOfStockSeriesList = useMemo(
-    () =>
-      [
-        ...new Set(
-          state.availability
-            .filter((item) => getDashboardAvailableQty(item) <= 0)
-            .map((item) => getSeriesName(item.sole_code))
-            .filter(Boolean)
-        ),
-      ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })),
-    [getDashboardAvailableQty, state.availability]
-  );
-
   const countryHoldTotal = countryHoldGroups.reduce(
     (sum, group) => sum + group.products.length,
     0
@@ -1537,7 +1486,6 @@ export default function DashboardPage() {
     setOnHoldSeriesFilter("");
     setOnHoldPage(1);
   }, [selectedHoldCountry]);
-  useEffect(() => { setOutOfStockPage(1); }, [outOfStockSearch, outOfStockSeriesFilter]);
   useEffect(() => {
     if (!countryHoldGroups.length) return;
     if (!countryHoldGroups.some((group) => group.countryCode === selectedHoldCountry)) {
@@ -1547,13 +1495,8 @@ export default function DashboardPage() {
 
   const totalPages        = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE);
   const onHoldTotal       = Math.ceil(onHoldProducts.length / PRODUCTS_PER_PAGE);
-  const outOfStockTotal   = Math.ceil(outOfStockProducts.length / PRODUCTS_PER_PAGE);
   const paginatedProducts = filteredProducts.slice((currentPage - 1) * PRODUCTS_PER_PAGE, currentPage * PRODUCTS_PER_PAGE);
   const paginatedOnHold   = onHoldProducts.slice((onHoldPage - 1) * PRODUCTS_PER_PAGE, onHoldPage * PRODUCTS_PER_PAGE);
-  const paginatedOutOfStock = outOfStockProducts.slice(
-    (outOfStockPage - 1) * PRODUCTS_PER_PAGE,
-    outOfStockPage * PRODUCTS_PER_PAGE
-  );
   const advertisementsAboveStatus = state.advertisements.filter(
     (advertisement) => advertisementPlacement(advertisement) === "ABOVE_STATUS"
   );
@@ -1608,7 +1551,7 @@ export default function DashboardPage() {
 
       {/* STAT CARDS */}
       {user.role !== "USER" && (
-        <div className={`grid gap-4 md:grid-cols-2 ${isAdmin ? "xl:grid-cols-6" : "xl:grid-cols-5"}`}>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <>
             <StatCard label="Raw Material Stock"            value={formatNumber(rawTotal)}      tone="calm"    icon="materials" />
             <StatCard label="Finished Goods Stock In Pairs" value={formatNumber(finishedTotal)} tone="calm"    icon="finishedGoods" />
@@ -1623,14 +1566,6 @@ export default function DashboardPage() {
                 value={formatNumber(canManageVisibility ? countryHoldTotal : onHoldProducts.length)}
                 tone="alert"
                 icon="hidden"
-              />
-            )}
-            {isAdmin && (
-              <StatCard
-                label="Out of Stock Products"
-                value={formatNumber(outOfStockProducts.length)}
-                tone="alert"
-                icon="finishedGoods"
               />
             )}
           </>
@@ -1704,85 +1639,6 @@ export default function DashboardPage() {
             <div className="text-center py-16 text-slate-400 text-sm">No products found.</div>
           )}
         </div>
-      )}
-
-      {/* OUT OF STOCK GRID */}
-      {isAdmin && (
-        <section className="space-y-4 rounded-2xl border border-red-200 bg-red-50/40 p-4 sm:p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="flex items-center gap-2 text-lg font-bold text-slate-800">
-                <PackageIcon size={19} className="text-red-500" />
-                Out of Stock
-                <span className="text-base font-normal text-slate-400">
-                  ({outOfStockProducts.length})
-                </span>
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                These products are kept separate from both displayed and on-hold products.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <input
-                type="text"
-                placeholder="Search out of stock…"
-                value={outOfStockSearch}
-                onChange={(event) => setOutOfStockSearch(event.target.value)}
-                className="min-w-0 flex-1 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm focus:border-transparent focus:ring-2 focus:ring-red-300 sm:min-w-56"
-              />
-              <select
-                value={outOfStockSeriesFilter}
-                onChange={(event) => setOutOfStockSeriesFilter(event.target.value)}
-                className="rounded-xl border border-red-200 bg-white px-3 py-2 text-sm focus:border-transparent focus:ring-2 focus:ring-red-300"
-              >
-                <option value="">All Series</option>
-                {outOfStockSeriesList.map((series) => (
-                  <option key={series} value={series}>{series}</option>
-                ))}
-              </select>
-              {(outOfStockSearch || outOfStockSeriesFilter) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOutOfStockSearch("");
-                    setOutOfStockSeriesFilter("");
-                  }}
-                  className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-red-100"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-          </div>
-
-          {paginatedOutOfStock.length ? (
-            <>
-              <div className="grid grid-cols-2 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                {paginatedOutOfStock.map((variants) => (
-                  <ProductCard
-                    key={`out-${variants.map((variant) => variant.id).join("-")}`}
-                    variants={variants}
-                    canManageVisibility={canManageVisibility}
-                    onShowForCountry={showProductForCountries}
-                    onHideForCountry={hideProductForCountries}
-                    user={user}
-                  />
-                ))}
-              </div>
-              <PaginationBar
-                total={outOfStockTotal}
-                current={outOfStockPage}
-                setPage={setOutOfStockPage}
-              />
-            </>
-          ) : (
-            <div className="rounded-xl border border-dashed border-red-200 bg-white py-10 text-center text-sm text-slate-400">
-              {outOfStockSearch || outOfStockSeriesFilter
-                ? "No out-of-stock products match these filters."
-                : "No products are currently out of stock."}
-            </div>
-          )}
-        </section>
       )}
 
       {/* ON HOLD GRID */}

@@ -7,21 +7,16 @@
 
   const CACHE_ROOT = path.join(__dirname, '..', '.catalogue-cache');
   const UPLOAD_ROOT = path.join(__dirname, '..', 'uploads');
-  const CACHE_VERSION = 5;
+  const CACHE_VERSION = 8;
   const STANDARD_IMAGE_OPTIONS = { width: 520, quality: 58 };
   const HIGH_IMAGE_OPTIONS = { width: 1200, quality: 88 };
   const ACTIVE_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-  const TILES_PER_PAGE = 6;
   const CONTENT_TOP = 34;
-  const CONTENT_BOTTOM = 796;
+  const CONTENT_BOTTOM = 798;
   const ARTICLE_HEADER_HEIGHT = 48;
   const ARTICLE_TILE_GAP = 14;
-  const ARTICLE_GAP = 18;
-  const TILE_WIDTH = 253.5;
-  const TILE_HEIGHT = 226;
-  const TILE_COLUMN_STEP = 269.5;
-  const TILE_ROW_GAP = 11;
-  const TILE_ROW_STEP = TILE_HEIGHT + TILE_ROW_GAP;
+  const TILE_GAP = 11;
+  const CONTENT_WIDTH = 523;
   const activeGenerations = new Map();
 
   const getSeriesName = (soleCode = '') =>
@@ -45,12 +40,6 @@
           0
       )
     );
-
-  const getCartons = (pairs, pairsPerCarton) => {
-    const cartonSize = Number(pairsPerCarton || 0);
-    if (!cartonSize) return 0;
-    return Math.ceil(Number(pairs || 0) / cartonSize);
-  };
 
   const safeName = (value, fallback = 'catalogue') => {
     const clean = String(value || '')
@@ -188,40 +177,27 @@
     }
   };
 
-  const drawArticleHeader = (
-    doc,
-    group,
-    y,
-    continuation = false,
-    x = 36,
-    width = 523
-  ) => {
-    const compact = width < 400;
-    const articleX = x + (compact ? 12 : 16);
-    const articleWidth = compact ? 94 : 250;
-    const seriesX = compact ? x + 108 : x + 274;
-    const seriesWidth = compact ? width - 120 : 230;
-
-    doc.roundedRect(x, y, width, ARTICLE_HEADER_HEIGHT, 8).fill('#020617');
+  const drawArticleHeader = (doc, group, y, continuation = false) => {
+    doc.roundedRect(36, y, 523, ARTICLE_HEADER_HEIGHT, 8).fill('#020617');
     doc
       .fillColor('#ffffff')
       .font('Helvetica-Bold')
-      .fontSize(compact ? 15 : 18)
-      .text(group.article, articleX, y + (compact ? 16 : 14), {
-        width: articleWidth,
+      .fontSize(18)
+      .text(group.article, 52, y + 14, {
+        width: 250,
         ellipsis: true,
       });
     doc
       .fillColor('#cbd5e1')
       .font('Helvetica')
-      .fontSize(compact ? 9 : 12)
+      .fontSize(12)
       .text(
         `${group.series ? `${group.series} Series` : 'Product Series'}${
           continuation ? ' - continued' : ''
         }`,
-        seriesX,
-        y + (compact ? 19 : 17),
-        { width: seriesWidth, align: 'right', ellipsis: true }
+        310,
+        y + 17,
+        { width: 230, align: 'right', ellipsis: true }
       );
   };
 
@@ -236,34 +212,53 @@
     imageCache
   ) => {
     const pairs = getVisiblePairs(product);
-    const cartons = getCartons(pairs, product.inner_boxes_per_outer_box);
     const color = String(product.color || 'Standard color');
+    const size = String(product.size || '').trim();
+    const variantLabel = size ? `${color} - Size ${size}` : color;
+    const compact = width < 240 || height < 205;
+    const tilePadding = compact ? 7 : 10;
+    const headerHeight = compact ? 27 : 35;
 
     doc.roundedRect(x, y, width, height, 8).lineWidth(0.8).strokeColor('#cbd5e1').stroke();
     doc
       .fillColor('#0f172a')
       .font('Helvetica-Bold')
-      .fontSize(11)
-      .text(color, x + 11, y + 11, { width: width - 82, ellipsis: true });
+      .fontSize(compact ? 8 : 12)
+      .text(variantLabel, x + tilePadding, y + (compact ? 8 : 10), {
+        width: width - (compact ? 65 : 92),
+        ellipsis: true,
+      });
 
     const statusText = pairs > 0 ? 'IN STOCK' : 'OUT';
-    const statusWidth = pairs > 0 ? 47 : 27;
+    const statusWidth = pairs > 0 ? (compact ? 39 : 47) : compact ? 23 : 27;
+    const statusHeight = compact ? 13 : 16;
     doc
-      .roundedRect(x + width - statusWidth - 10, y + 9, statusWidth, 16, 8)
+      .roundedRect(
+        x + width - statusWidth - tilePadding,
+        y + (compact ? 7 : 9),
+        statusWidth,
+        statusHeight,
+        statusHeight / 2
+      )
       .fill(pairs > 0 ? '#d1fae5' : '#fee2e2');
     doc
       .fillColor(pairs > 0 ? '#047857' : '#b91c1c')
       .font('Helvetica-Bold')
-      .fontSize(7)
-      .text(statusText, x + width - statusWidth - 10, y + 14, {
-        width: statusWidth,
-        align: 'center',
-      });
+      .fontSize(compact ? 5.5 : 7)
+      .text(
+        statusText,
+        x + width - statusWidth - tilePadding,
+        y + (compact ? 10.5 : 14),
+        {
+          width: statusWidth,
+          align: 'center',
+        }
+      );
 
-    const imageX = x + 10;
-    const imageY = y + 34;
-    const imageWidth = width - 20;
-    const imageHeight = height - 66;
+    const imageX = x + tilePadding;
+    const imageY = y + headerHeight;
+    const imageWidth = width - tilePadding * 2;
+    const imageHeight = height - headerHeight - tilePadding;
     doc.roundedRect(imageX, imageY, imageWidth, imageHeight, 6).fill('#f1f5f9');
 
     const image = await loadCatalogueImage(product, quality, imageCache);
@@ -284,18 +279,27 @@
         });
     }
 
-    doc
-      .fillColor('#64748b')
-      .font('Helvetica-Bold')
-      .fontSize(9)
-      .text(
-        `${cartons.toLocaleString('en-US')} CTN - ${pairs.toLocaleString(
-          'en-US'
-        )} pairs`,
-        x + 11,
-        y + height - 22,
-        { width: width - 22 }
-      );
+  };
+
+  const getArticleGrid = (variantCount) => {
+    const count = Math.max(1, Number(variantCount || 1));
+    let columns = 1;
+
+    if (count > 3 && count <= 6) columns = 2;
+    else if (count > 6 && count <= 12) columns = 3;
+    else if (count > 12) columns = Math.ceil(Math.sqrt(count));
+
+    const rows = Math.ceil(count / columns);
+    const availableHeight =
+      CONTENT_BOTTOM -
+      (CONTENT_TOP + ARTICLE_HEADER_HEIGHT + ARTICLE_TILE_GAP);
+
+    return {
+      columns,
+      rows,
+      tileWidth: (CONTENT_WIDTH - (columns - 1) * TILE_GAP) / columns,
+      tileHeight: (availableHeight - (rows - 1) * TILE_GAP) / rows,
+    };
   };
 
   const addCoverPage = (doc, options, groups, generatedAt) => {
@@ -387,112 +391,29 @@
 
     addCoverPage(doc, options, groups, generatedAt);
 
-    let pageStarted = false;
-    let cursorY = CONTENT_TOP;
-    const startContentPage = () => {
+    for (const group of groups) {
       doc.addPage();
       doc.rect(0, 0, doc.page.width, doc.page.height).fill('#ffffff');
-      pageStarted = true;
-      cursorY = CONTENT_TOP;
-    };
+      drawArticleHeader(doc, group, CONTENT_TOP);
 
-    const getAvailableRows = () => {
-      const availableHeight = CONTENT_BOTTOM - cursorY;
-      return Math.min(
-        TILES_PER_PAGE / 2,
-        Math.floor(
-          (availableHeight -
-            ARTICLE_HEADER_HEIGHT -
-            ARTICLE_TILE_GAP +
-            TILE_ROW_GAP) /
-            TILE_ROW_STEP
-        )
-      );
-    };
+      const grid = getArticleGrid(group.variants.length);
+      const tileStartY =
+        CONTENT_TOP + ARTICLE_HEADER_HEIGHT + ARTICLE_TILE_GAP;
 
-    for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
-      const group = groups[groupIndex];
+      for (let index = 0; index < group.variants.length; index += 1) {
+        const column = index % grid.columns;
+        const row = Math.floor(index / grid.columns);
 
-      if (group.variants.length === 1) {
-        if (!pageStarted) startContentPage();
-        if (getAvailableRows() < 1) startContentPage();
-
-        const nextGroup = groups[groupIndex + 1];
-        const pairedGroup =
-          nextGroup?.variants?.length === 1 ? nextGroup : null;
-        const singleGroups = pairedGroup ? [group, pairedGroup] : [group];
-        const tileStartY =
-          cursorY + ARTICLE_HEADER_HEIGHT + ARTICLE_TILE_GAP;
-
-        for (let index = 0; index < singleGroups.length; index += 1) {
-          const singleGroup = singleGroups[index];
-          const x = 36 + index * TILE_COLUMN_STEP;
-          drawArticleHeader(
-            doc,
-            singleGroup,
-            cursorY,
-            false,
-            x,
-            TILE_WIDTH
-          );
-          await drawVariantTile(
-            doc,
-            singleGroup.variants[0],
-            x,
-            tileStartY,
-            TILE_WIDTH,
-            TILE_HEIGHT,
-            options.quality,
-            sharedImageCache
-          );
-        }
-
-        cursorY =
-          tileStartY + TILE_HEIGHT + ARTICLE_GAP;
-        if (pairedGroup) groupIndex += 1;
-        continue;
-      }
-
-      let start = 0;
-      while (start < group.variants.length) {
-        if (!pageStarted) startContentPage();
-
-        const availableRows = getAvailableRows();
-
-        if (availableRows < 1) {
-          startContentPage();
-          continue;
-        }
-
-        const chunk = group.variants.slice(start, start + availableRows * 2);
-        drawArticleHeader(doc, group, cursorY, start > 0);
-
-        const tileStartY =
-          cursorY + ARTICLE_HEADER_HEIGHT + ARTICLE_TILE_GAP;
-        for (let index = 0; index < chunk.length; index += 1) {
-          const column = index % 2;
-          const row = Math.floor(index / 2);
-          await drawVariantTile(
-            doc,
-            chunk[index],
-            36 + column * TILE_COLUMN_STEP,
-            tileStartY + row * TILE_ROW_STEP,
-            TILE_WIDTH,
-            TILE_HEIGHT,
-            options.quality,
-            sharedImageCache
-          );
-        }
-
-        const rowsUsed = Math.ceil(chunk.length / 2);
-        cursorY =
-          tileStartY +
-          rowsUsed * TILE_HEIGHT +
-          Math.max(0, rowsUsed - 1) * TILE_ROW_GAP +
-          ARTICLE_GAP;
-        start += chunk.length;
-
-        if (start < group.variants.length) startContentPage();
+        await drawVariantTile(
+          doc,
+          group.variants[index],
+          36 + column * (grid.tileWidth + TILE_GAP),
+          tileStartY + row * (grid.tileHeight + TILE_GAP),
+          grid.tileWidth,
+          grid.tileHeight,
+          options.quality,
+          sharedImageCache
+        );
       }
     }
 
