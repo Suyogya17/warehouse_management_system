@@ -23,10 +23,21 @@ const normalizeExchangeRate = (exchangeRate, currencyCode = 'NPR') => {
   return DEFAULT_EXCHANGE_RATES[String(currencyCode || 'NPR').toUpperCase()] || 1;
 };
 
+const normalizeRegularPriceMarkup = (value) => {
+  const markup = Number(value);
+  if (!Number.isFinite(markup) || markup < 0) return 0;
+  return Number(markup.toFixed(2));
+};
+
 const getUserSelectColumns = async () => {
-  const supportsExchangeRate = await hasColumn('users', 'exchange_rate');
+  const [supportsExchangeRate, supportsRegularPriceMarkup] = await Promise.all([
+    hasColumn('users', 'exchange_rate'),
+    hasColumn('users', 'regular_price_markup'),
+  ]);
   return `id, name, email, role, country_code, currency_code${
     supportsExchangeRate ? ', exchange_rate' : ''
+  }${
+    supportsRegularPriceMarkup ? ', regular_price_markup' : ''
   }, created_at`;
 };
 
@@ -52,6 +63,9 @@ const buildUserPayload = async (user) => {
     country_code: user.country_code,
     currency_code: user.currency_code,
     exchange_rate: normalizeExchangeRate(user.exchange_rate, user.currency_code),
+    regular_price_markup: normalizeRegularPriceMarkup(
+      user.regular_price_markup
+    ),
     page_permissions: mapPagePermissions(pagePermissions),
   };
 };
@@ -59,9 +73,21 @@ const buildUserPayload = async (user) => {
 // ─── REGISTER ────────────────────────────────────────────────────────────────
 const register = async (req, res, next) => {
   try {
-    const { name, email, password, role = 'USER', country_code, currency_code, exchange_rate } = req.body;
+    const {
+      name,
+      email,
+      password,
+      role = 'USER',
+      country_code,
+      currency_code,
+      exchange_rate,
+      regular_price_markup,
+    } = req.body;
     const locale = normalizeLocale(country_code, currency_code);
-    const supportsExchangeRate = await hasColumn('users', 'exchange_rate');
+    const [supportsExchangeRate, supportsRegularPriceMarkup] = await Promise.all([
+      hasColumn('users', 'exchange_rate'),
+      hasColumn('users', 'regular_price_markup'),
+    ]);
 
     const exists = await query(
       'SELECT id FROM users WHERE email = ?',
@@ -82,6 +108,14 @@ const register = async (req, res, next) => {
     if (supportsExchangeRate) {
       userColumns.push('exchange_rate');
       userValues.push(normalizeExchangeRate(exchange_rate, locale.currencyCode));
+    }
+    if (supportsRegularPriceMarkup) {
+      userColumns.push('regular_price_markup');
+      userValues.push(
+        role.toUpperCase() === 'USER' && locale.currencyCode === 'NPR'
+          ? normalizeRegularPriceMarkup(regular_price_markup)
+          : 0
+      );
     }
 
     const userInsert = await appendFiscalInsertFields(
@@ -105,6 +139,12 @@ const register = async (req, res, next) => {
       country_code: locale.countryCode,
       currency_code: locale.currencyCode,
       exchange_rate: supportsExchangeRate ? normalizeExchangeRate(exchange_rate, locale.currencyCode) : 1,
+      regular_price_markup:
+        supportsRegularPriceMarkup &&
+        role.toUpperCase() === 'USER' &&
+        locale.currencyCode === 'NPR'
+          ? normalizeRegularPriceMarkup(regular_price_markup)
+          : 0,
     });
 
     await auditLog({
@@ -212,9 +252,21 @@ const listUsers = async (req, res, next) => {
 // ─── UPDATE USER ─────────────────────────────────────────────────────────────
 const updateUser = async (req, res, next) => {
   try {
-    const { name, email, password, role, country_code, currency_code, exchange_rate } = req.body;
+    const {
+      name,
+      email,
+      password,
+      role,
+      country_code,
+      currency_code,
+      exchange_rate,
+      regular_price_markup,
+    } = req.body;
     const userId = req.params.id;
-    const supportsExchangeRate = await hasColumn('users', 'exchange_rate');
+    const [supportsExchangeRate, supportsRegularPriceMarkup] = await Promise.all([
+      hasColumn('users', 'exchange_rate'),
+      hasColumn('users', 'regular_price_markup'),
+    ]);
     const locale = normalizeLocale(country_code, currency_code);
     const updateFields = [
       'name = COALESCE(?, name)',
@@ -251,6 +303,19 @@ const updateUser = async (req, res, next) => {
     if (supportsExchangeRate) {
       updateFields.push('exchange_rate = COALESCE(?, exchange_rate)');
       updateParams.push(exchange_rate ? normalizeExchangeRate(exchange_rate, locale.currencyCode) : null);
+    }
+    if (supportsRegularPriceMarkup) {
+      updateFields.push(
+        'regular_price_markup = COALESCE(?, regular_price_markup)'
+      );
+      updateParams.push(
+        regular_price_markup === undefined
+          ? null
+          : role?.toUpperCase() === 'USER' &&
+              (!currency_code || locale.currencyCode === 'NPR')
+            ? normalizeRegularPriceMarkup(regular_price_markup)
+            : 0
+      );
     }
 
     await query(

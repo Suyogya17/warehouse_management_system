@@ -136,7 +136,17 @@ export default function GalleryPage() {
     const query = search.trim().toLowerCase();
     return [...groups.values()]
       .map((variants) => [...variants].sort(sortProductsByDisplayOrder))
+      .map((variants) => {
+        if (stock === "IN_STOCK") {
+          return variants.filter((variant) => getCustomerVisibleStock(variant) > 0);
+        }
+        if (stock === "OUT_OF_STOCK") {
+          return variants.filter((variant) => getCustomerVisibleStock(variant) <= 0);
+        }
+        return variants;
+      })
       .filter((variants) => {
+        if (!variants.length) return false;
         const matchesSeries =
           !series || variants.some((variant) => getSeriesName(variant.sole_code) === series);
         const matchesSearch =
@@ -145,14 +155,7 @@ export default function GalleryPage() {
             [variant.article_code, variant.name, variant.sole_code, variant.color]
               .some((value) => String(value || "").toLowerCase().includes(query))
           );
-        const availableValues = variants.map(getCustomerVisibleStock);
-        const matchesStock =
-          stock === "ALL"
-            ? true
-            : stock === "IN_STOCK"
-            ? availableValues.some((quantity) => quantity > 0)
-            : availableValues.every((quantity) => quantity <= 0);
-        return matchesSeries && matchesSearch && matchesStock;
+        return matchesSeries && matchesSearch;
       })
       .sort(sortProductGroupsByDisplayOrder);
   }, [search, series, sourceProducts, stock]);
@@ -376,15 +379,31 @@ export default function GalleryPage() {
             placeholder="Search article, color or series..."
             className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
           />
-          <select
-            value={stock}
-            onChange={(event) => setStock(event.target.value)}
-            className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+          <div
+            className="grid grid-cols-3 rounded-xl border border-slate-200 bg-white p-1"
+            role="group"
+            aria-label="Filter gallery articles by stock"
           >
-            <option value="ALL">All stock</option>
-            <option value="IN_STOCK">In-stock articles</option>
-            <option value="OUT_OF_STOCK">Out-of-stock articles</option>
-          </select>
+            {[
+              ["ALL", "All articles"],
+              ["IN_STOCK", "In stock only"],
+              ["OUT_OF_STOCK", "Out of stock"],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={stock === value}
+                onClick={() => setStock(value)}
+                className={`min-h-9 rounded-lg px-2 text-xs font-bold transition sm:text-sm ${
+                  stock === value
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {loading ? (

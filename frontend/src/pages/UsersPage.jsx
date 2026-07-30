@@ -9,6 +9,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
+import { formatPrice } from "../utils/format";
 import { PRODUCT_VISIBILITY_PAGE_KEY } from "../utils/pagePermissions";
 
 const initialForm = {
@@ -19,6 +20,7 @@ const initialForm = {
   country_code: "NP",
   currency_code: "NPR",
   exchange_rate: 1,
+  regular_price_markup: 0,
 };
 
 const countries = [
@@ -113,6 +115,7 @@ export default function UsersPage() {
       country_code: row.country_code || "NP",
       currency_code: row.currency_code || "NPR",
       exchange_rate: Number(row.exchange_rate || defaultExchangeRates[row.currency_code] || 1),
+      regular_price_markup: Number(row.regular_price_markup || 0),
     });
     setShowPassword(false);
   };
@@ -232,7 +235,16 @@ export default function UsersPage() {
           <Field label="Role">
             <SelectInput
               value={form.role}
-              onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  role: event.target.value,
+                  regular_price_markup:
+                    event.target.value === "USER"
+                      ? current.regular_price_markup
+                      : 0,
+                }))
+              }
             >
               <option value="ADMIN">ADMIN</option>
               <option value="CO_ADMIN">CO_ADMIN</option>
@@ -304,6 +316,26 @@ export default function UsersPage() {
             </Field>
           )}
 
+          {form.role === "USER" && form.currency_code === "NPR" ? (
+            <Field
+              label="Regular product markup (NPR)"
+              hint="Added to normal products only. Offer products are excluded."
+            >
+              <TextInput
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.regular_price_markup}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    regular_price_markup: event.target.value,
+                  }))
+                }
+              />
+            </Field>
+          ) : null}
+
           <div className="flex items-center gap-3 md:col-span-2 xl:col-span-4">
             <Button type="submit" icon="plus">
               {editingId ? "Save changes" : "Create account"}
@@ -339,6 +371,16 @@ export default function UsersPage() {
                 row.currency_code === "INR"
                   ? "Per-product India price"
                   : `NPR ÷ ${row.exchange_rate || 1}`,
+            },
+            {
+              key: "regular_price_markup",
+              label: "Regular markup",
+              render: (row) =>
+                row.role === "USER" &&
+                row.currency_code === "NPR" &&
+                Number(row.regular_price_markup || 0) > 0
+                  ? `+${formatPrice(row.regular_price_markup, "NPR")}`
+                  : "-",
             },
             { key: "created_at", label: "Created", type: "date" },
             {

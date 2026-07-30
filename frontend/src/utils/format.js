@@ -47,6 +47,11 @@ export const formatUserPrice = (value, user = {}) => {
 
 export const getProductPriceForUser = (product = {}, user = {}) => {
   const currency = String(user?.currency_code || "NPR").trim().toUpperCase();
+  const role = String(user?.role || "").trim().toUpperCase();
+  const activeOffer =
+    Number(product?.offer_enabled || 0) === 1 &&
+    (!product?.offer_ends_at ||
+      new Date(product.offer_ends_at).getTime() >= Date.now());
 
   if (currency === "INR") {
     const indiaPrice = product?.india_price;
@@ -58,7 +63,18 @@ export const getProductPriceForUser = (product = {}, user = {}) => {
   }
 
   const amount = Number(product?.price);
-  return Number.isFinite(amount) ? amount : null;
+  if (!Number.isFinite(amount)) return null;
+  if (amount <= 0) return amount;
+
+  const regularMarkup =
+    role === "USER" && currency === "NPR" && !activeOffer
+      ? Number(user?.regular_price_markup || 0)
+      : 0;
+
+  return (
+    amount +
+    (Number.isFinite(regularMarkup) && regularMarkup > 0 ? regularMarkup : 0)
+  );
 };
 
 export const formatProductPriceForUser = (product = {}, user = {}) =>

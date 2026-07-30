@@ -25,6 +25,8 @@ export default function ProductPercentagePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
+  const [allocationFilter, setAllocationFilter] = useState("all");
+  const [seriesFilter, setSeriesFilter] = useState("");
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState(null);
   const [selectedUserIds, setSelectedUserIds] = useState([]);
@@ -72,8 +74,19 @@ export default function ProductPercentagePage() {
 
   const filteredProducts = useMemo(() => {
     const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    if (!terms.length) return products;
     return products.filter((product) => {
+      const hasAllocation = (
+        allocationsByProduct.get(Number(product.id)) || []
+      ).length > 0;
+      if (allocationFilter === "allocated" && !hasAllocation) return false;
+      if (allocationFilter === "unallocated" && hasAllocation) return false;
+      if (
+        seriesFilter &&
+        String(product.sole_code || "").trim() !== seriesFilter
+      ) {
+        return false;
+      }
+      if (!terms.length) return true;
       const text = [
         product.id,
         product.name,
@@ -87,7 +100,42 @@ export default function ProductPercentagePage() {
         .toLowerCase();
       return terms.every((term) => text.includes(term));
     });
-  }, [products, search]);
+  }, [
+    allocationFilter,
+    allocationsByProduct,
+    products,
+    search,
+    seriesFilter,
+  ]);
+
+  const seriesOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          products
+            .map((product) => String(product.sole_code || "").trim())
+            .filter(Boolean)
+        ),
+      ].sort((left, right) =>
+        left.localeCompare(right, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        })
+      ),
+    [products]
+  );
+
+  const allocationCounts = useMemo(() => {
+    const allocated = products.filter(
+      (product) =>
+        (allocationsByProduct.get(Number(product.id)) || []).length > 0
+    ).length;
+    return {
+      all: products.length,
+      allocated,
+      unallocated: Math.max(0, products.length - allocated),
+    };
+  }, [allocationsByProduct, products]);
 
   const pageCount = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
   const pageProducts = filteredProducts.slice(
@@ -97,7 +145,7 @@ export default function ProductPercentagePage() {
 
   useEffect(() => {
     setPage(1);
-  }, [search]);
+  }, [allocationFilter, search, seriesFilter]);
 
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
@@ -202,13 +250,56 @@ export default function ProductPercentagePage() {
         subtitle="An allocated product is visible only to its selected users. Their orders reduce their personal balance."
         icon="finishedGoods"
         actions={
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search product, article, series or color…"
-            className="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 sm:w-80"
-          />
+          <div className="grid w-full gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(260px,1fr)_190px_180px_auto]">
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search product, article, series or color…"
+              className="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            />
+            <select
+              value={allocationFilter}
+              onChange={(event) => setAllocationFilter(event.target.value)}
+              className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            >
+              <option value="all">
+                All products ({formatNumber(allocationCounts.all)})
+              </option>
+              <option value="allocated">
+                Percentage divided ({formatNumber(allocationCounts.allocated)})
+              </option>
+              <option value="unallocated">
+                Not divided ({formatNumber(allocationCounts.unallocated)})
+              </option>
+            </select>
+            <select
+              value={seriesFilter}
+              onChange={(event) => setSeriesFilter(event.target.value)}
+              className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            >
+              <option value="">All series</option>
+              {seriesOptions.map((series) => (
+                <option key={series} value={series}>
+                  {series}
+                </option>
+              ))}
+            </select>
+            {search || allocationFilter !== "all" || seriesFilter ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setSearch("");
+                  setAllocationFilter("all");
+                  setSeriesFilter("");
+                }}
+              >
+                Clear
+              </Button>
+            ) : null}
+          </div>
         }
       >
         {loading ? (

@@ -377,10 +377,17 @@ const allocateWarehouseStockForDelivery = async (client, item, userId) => {
 // ─── GET ALL ORDERS ───────────────────────────────
 const getAll = async (req, res, next) => {
   try {
-    const [supportsCancellationCode, supportsDuplicateOrderLink] =
+    const [
+      supportsCancellationCode,
+      supportsDuplicateOrderLink,
+      supportsUnitPriceSnapshot,
+      supportsPriceCurrencySnapshot,
+    ] =
       await Promise.all([
         hasColumn('orders', 'cancellation_code'),
         hasColumn('orders', 'duplicate_of_order_id'),
+        hasColumn('order_items', 'unit_price_snapshot'),
+        hasColumn('order_items', 'price_currency_snapshot'),
       ]);
     const params = [];
     const conditions = [];
@@ -501,6 +508,16 @@ const getAll = async (req, res, next) => {
                 oi.order_id,
                 oi.finished_good_id,
                 oi.qty_ordered,
+                ${
+                  supportsUnitPriceSnapshot
+                    ? 'oi.unit_price_snapshot,'
+                    : ''
+                }
+                ${
+                  supportsPriceCurrencySnapshot
+                    ? 'oi.price_currency_snapshot,'
+                    : ''
+                }
                 fg.name AS product_name,
                 fg.article_code, fg.color, fg.size,
                 fg.unit, fg.quantity AS physical_stock,
@@ -678,13 +695,33 @@ const create = async (req, res, next) => {
       : false;
     const supportsOfferOrderSnapshots = await hasColumn('order_items', 'ordered_from_offer');
     const supportsOfferCampaigns = await hasOfferCampaignSchema();
+    const supportsRegularPriceMarkup = await hasColumn(
+      'users',
+      'regular_price_markup'
+    );
+    const supportsExchangeRate = await hasColumn(
+      'users',
+      'exchange_rate'
+    );
+    const supportsUnitPriceSnapshot = await hasColumn(
+      'order_items',
+      'unit_price_snapshot'
+    );
+    const supportsPriceCurrencySnapshot = await hasColumn(
+      'order_items',
+      'price_currency_snapshot'
+    );
+    const supportsIndiaPrice = await hasColumn(
+      'finished_goods',
+      'india_price'
+    );
     const supportsPercentageAllocations = await hasColumn(
       'user_product_permissions',
       'allocation_quantity'
     );
 
     let productSql = `
-      SELECT id, name, article_code, sole_code, color, quantity, price, inner_boxes_per_outer_box${supportsDisplayQuantity ? ', display_quantity' : ''}${supportsOfferAudience ? ', offer_enabled, offer_label, offer_ends_at, offer_all_users' : ''}${supportsOfferCampaigns ? ', offer_campaign_id' : ''}
+      SELECT id, name, article_code, sole_code, color, quantity, price, inner_boxes_per_outer_box${supportsIndiaPrice ? ', india_price' : ''}${supportsDisplayQuantity ? ', display_quantity' : ''}${supportsOfferAudience ? ', offer_enabled, offer_label, offer_ends_at, offer_all_users' : ''}${supportsOfferCampaigns ? ', offer_campaign_id' : ''}
       FROM finished_goods
       WHERE is_deleted = 0
         AND is_visible = 1
@@ -764,6 +801,42 @@ const create = async (req, res, next) => {
     }
 
     const productMap = new Map(products.rows.map((p) => [p.id, p]));
+    let orderCurrency = 'NPR';
+    let orderExchangeRate = 1;
+    let regularPriceMarkup = 0;
+
+    if (req.user.role === 'USER') {
+      const pricingResult = await client.query(
+        `SELECT currency_code${
+          supportsExchangeRate ? ', exchange_rate' : ''
+        }${
+          supportsRegularPriceMarkup ? ', regular_price_markup' : ''
+        }
+         FROM users
+         WHERE id = ?`,
+        [req.user.id]
+      );
+      const pricing = pricingResult.rows[0] || {};
+      orderCurrency = String(pricing.currency_code || 'NPR').toUpperCase();
+      orderExchangeRate = Math.max(0.000001, Number(pricing.exchange_rate || 1));
+      regularPriceMarkup =
+        supportsRegularPriceMarkup && orderCurrency === 'NPR'
+          ? Math.max(0, Number(pricing.regular_price_markup || 0))
+          : 0;
+    }
+
+    const getBaseOrderUnitPrice = (product) => {
+      if (orderCurrency === 'INR') {
+        const indiaPrice = Number(product?.india_price);
+        return Number.isFinite(indiaPrice) ? indiaPrice : null;
+      }
+
+      const nprPrice = Number(product?.price);
+      if (!Number.isFinite(nprPrice)) return null;
+      return orderCurrency === 'NPR'
+        ? nprPrice
+        : nprPrice / orderExchangeRate;
+    };
 
     let userOfferTargets = new Map();
     if (req.user.role === 'USER' && supportsOfferAudience && supportsOfferUsers && supportsOfferUserQuantity) {
@@ -932,11 +1005,13 @@ const create = async (req, res, next) => {
         const target = userOfferTargets.get(Number(product.id));
         const eligible = isActiveOfferProduct(product) && (Number(product.offer_all_users) === 1 || Boolean(target));
         if (!eligible) return;
+        const baseOfferPrice = getBaseOrderUnitPrice(product);
         offerSnapshotByProduct.set(Number(product.id), {
           offer_label_snapshot: product.offer_label || 'Special offer',
           offer_display_percentage: target?.display_percentage ?? null,
           offer_display_quantity: target?.display_quantity ?? getProductDisplayQuantity(product),
-          offer_price_snapshot: Number(product.price || 0) > 0 ? Number(product.price) + 50 : null,
+          offer_price_snapshot:
+            Number(baseOfferPrice) > 0 ? Number(baseOfferPrice) + 50 : null,
           offer_pairs_per_carton_snapshot: Number(product.inner_boxes_per_outer_box || 0) || null,
           offer_campaign_id: Number(product.offer_campaign_id),
         });
@@ -978,6 +1053,13 @@ const create = async (req, res, next) => {
 
     for (const item of items) {
       const offerSnapshot = offerSnapshotByProduct.get(Number(item.finished_good_id));
+      const product = productMap.get(Number(item.finished_good_id));
+      const baseUnitPrice = getBaseOrderUnitPrice(product);
+      const unitPriceSnapshot = offerSnapshot
+        ? offerSnapshot.offer_price_snapshot
+        : Number(baseUnitPrice) > 0
+          ? baseUnitPrice + regularPriceMarkup
+          : null;
       const orderItemColumns = ['order_id', 'finished_good_id', 'qty_ordered'];
       const orderItemValues = [orderId, item.finished_good_id, item.qty_ordered];
       if (supportsOfferOrderSnapshots) {
@@ -987,6 +1069,14 @@ const create = async (req, res, next) => {
       if (supportsOfferCampaigns) {
         orderItemColumns.push('offer_campaign_id');
         orderItemValues.push(offerSnapshot?.offer_campaign_id ?? null);
+      }
+      if (supportsUnitPriceSnapshot) {
+        orderItemColumns.push('unit_price_snapshot');
+        orderItemValues.push(unitPriceSnapshot);
+      }
+      if (supportsPriceCurrencySnapshot) {
+        orderItemColumns.push('price_currency_snapshot');
+        orderItemValues.push(unitPriceSnapshot === null ? null : orderCurrency);
       }
       const orderItemInsert = await appendFiscalInsertFields(
         'order_items',
@@ -1078,7 +1168,7 @@ const correctItems = async (req, res, next) => {
 
     const { clause, params } = buildInClause(productIds);
     const productsResult = await client.query(
-      `SELECT id, name, article_code, color, quantity, inner_boxes_per_outer_box
+      `SELECT id, name, article_code, color, quantity, price, inner_boxes_per_outer_box
        FROM finished_goods WHERE id IN ${clause} FOR UPDATE`,
       params
     );
@@ -1113,6 +1203,34 @@ const correctItems = async (req, res, next) => {
 
     const supportsOfferOrderSnapshots = await hasColumn('order_items', 'ordered_from_offer');
     const supportsOfferCampaigns = await hasOfferCampaignSchema();
+    const supportsRegularPriceMarkup = await hasColumn(
+      'users',
+      'regular_price_markup'
+    );
+    const supportsUnitPriceSnapshot = await hasColumn(
+      'order_items',
+      'unit_price_snapshot'
+    );
+    const supportsPriceCurrencySnapshot = await hasColumn(
+      'order_items',
+      'price_currency_snapshot'
+    );
+    let correctionRegularMarkup = 0;
+    if (supportsRegularPriceMarkup) {
+      const pricingResult = await client.query(
+        `SELECT currency_code, regular_price_markup
+         FROM users
+         WHERE id = ?`,
+        [order.created_by]
+      );
+      const pricing = pricingResult.rows[0] || {};
+      if (String(pricing.currency_code || 'NPR').toUpperCase() === 'NPR') {
+        correctionRegularMarkup = Math.max(
+          0,
+          Number(pricing.regular_price_markup || 0)
+        );
+      }
+    }
     const oldItemByProduct = new Map(oldItemsResult.rows.map((item) => [Number(item.finished_good_id), item]));
     if (supportsOfferCampaigns) {
       const campaignIds = correctedItems
@@ -1205,6 +1323,21 @@ const correctItems = async (req, res, next) => {
       if (supportsOfferCampaigns) {
         columns.push('offer_campaign_id');
         values.push(oldItem?.offer_campaign_id ?? null);
+      }
+      if (supportsUnitPriceSnapshot) {
+        const basePrice = Number(item.product.price);
+        const fallbackPrice =
+          Number(oldItem?.ordered_from_offer || 0) === 1
+            ? oldItem?.offer_price_snapshot
+            : basePrice > 0
+              ? basePrice + correctionRegularMarkup
+              : null;
+        columns.push('unit_price_snapshot');
+        values.push(oldItem?.unit_price_snapshot ?? fallbackPrice ?? null);
+      }
+      if (supportsPriceCurrencySnapshot) {
+        columns.push('price_currency_snapshot');
+        values.push(oldItem?.price_currency_snapshot ?? 'NPR');
       }
       const insert = await appendFiscalInsertFields('order_items', columns, values);
       await client.query(`INSERT INTO order_items (${insert.columns.join(', ')}) VALUES (${insert.columns.map(() => '?').join(', ')})`, insert.values);

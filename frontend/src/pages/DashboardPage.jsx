@@ -1194,10 +1194,80 @@ export default function DashboardPage() {
   ]);
 
   const onHoldSeriesList = useMemo(
-    () =>
-      [...new Set(onHoldBaseItems.map((item) => getSeriesName(item.sole_code)).filter(Boolean))]
-        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })),
-    [onHoldBaseItems]
+    () => {
+      if (!canManageVisibility) {
+        return [
+          ...new Set(
+            onHoldBaseItems
+              .map((item) => getSeriesName(item.sole_code))
+              .filter(Boolean)
+          ),
+        ].sort((a, b) =>
+          a.localeCompare(b, undefined, {
+            numeric: true,
+            sensitivity: "base",
+          })
+        );
+      }
+
+      const countryUsers = (state.users || []).filter(
+        (countryUser) =>
+          ["USER", "MEMBER", "ELDER"].includes(
+            String(countryUser.role || "").toUpperCase()
+          ) &&
+          String(countryUser.country_code || "NP").toUpperCase() ===
+            selectedHoldCountry
+      );
+      const deniedKeys = new Set(
+        state.permissions
+          .filter((permission) => Number(permission.can_view) === 0)
+          .map(
+            (permission) =>
+              `${Number(permission.user_id)}:${Number(
+                permission.finished_good_id
+              )}`
+          )
+      );
+      const grantedKeys = new Set(
+        state.permissions
+          .filter((permission) => Number(permission.can_view) === 1)
+          .map(
+            (permission) =>
+              `${Number(permission.user_id)}:${Number(
+                permission.finished_good_id
+              )}`
+          )
+      );
+      const countryOnHoldProducts = state.finishedGoods.filter((product) => {
+        if (getDashboardAvailableQty(product) <= 0) return false;
+        return !countryUsers.some((countryUser) => {
+          const key = `${Number(countryUser.id)}:${Number(product.id)}`;
+          return grantedKeys.has(key) && !deniedKeys.has(key);
+        });
+      });
+
+      return [
+        ...new Set(
+          countryOnHoldProducts
+            .map((item) => getSeriesName(item.sole_code))
+            .filter(Boolean)
+        ),
+      ].sort((a, b) =>
+        a.localeCompare(b, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        })
+      );
+    },
+    [
+      canManageVisibility,
+      getDashboardAvailableQty,
+      onHoldBaseItems,
+      selectedHoldCountry,
+      state.finishedGoods,
+      state.permissions,
+      state.users,
+    ]
   );
 
   const onHoldProducts = useMemo(() => {
@@ -1463,8 +1533,11 @@ export default function DashboardPage() {
 
   useEffect(() => { setCurrentPage(1); }, [search, stockFilter, seriesFilter]);
   useEffect(() => { setOnHoldPage(1); }, [onHoldSearch, onHoldSeriesFilter]);
+  useEffect(() => {
+    setOnHoldSeriesFilter("");
+    setOnHoldPage(1);
+  }, [selectedHoldCountry]);
   useEffect(() => { setOutOfStockPage(1); }, [outOfStockSearch, outOfStockSeriesFilter]);
-  useEffect(() => { setOnHoldPage(1); }, [selectedHoldCountry]);
   useEffect(() => {
     if (!countryHoldGroups.length) return;
     if (!countryHoldGroups.some((group) => group.countryCode === selectedHoldCountry)) {
