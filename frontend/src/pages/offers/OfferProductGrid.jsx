@@ -41,8 +41,13 @@ function OfferProductCard({ variants, canManage, canOrder, viewer, onEdit, onRem
     ? "All users"
     : `${targetQuantities.length} selected user(s)${targetQuantities.length ? ` · ${targetQuantities.map(formatNumber).join(", ")} pairs` : ""}`;
   const customerBasePrice = getProductPriceForUser(selected, viewer);
+  const backendOfferPrice = Number(selected.effective_offer_price);
   const customerOfferPrice =
-    Number(customerBasePrice) > 0 ? Number(customerBasePrice) + 50 : null;
+    Number.isFinite(backendOfferPrice) && backendOfferPrice > 0
+      ? backendOfferPrice
+      : Number(customerBasePrice) > 0
+        ? Number(customerBasePrice) + 50
+        : null;
   return (
     <article className={`group flex flex-col overflow-hidden rounded-2xl border bg-white transition-all duration-300 hover:shadow-xl ${active ? "border-amber-300" : "border-slate-200"}`}>
       <div className="relative aspect-[5/3] overflow-hidden bg-slate-100">

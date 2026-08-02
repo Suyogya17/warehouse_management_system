@@ -39,6 +39,10 @@ const {
   hasOfferCampaignSchema,
   getOfferCampaignUsage,
 } = require('../utils/offerCampaigns');
+const {
+  getEffectiveOfferPrice,
+  loadUserSeriesOfferAdjustments,
+} = require('../utils/offerPricing');
 
 const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'PACKED'];
 const ALL_STATUSES = [...ACTIVE_RESERVATION_STATUSES, 'DELIVERED', 'CANCELLED'];
@@ -715,6 +719,9 @@ const create = async (req, res, next) => {
       'finished_goods',
       'india_price'
     );
+    const supportsOfferPriceAdjustments = await hasTable(
+      'user_series_offer_price_adjustments'
+    );
     const supportsPercentageAllocations = await hasColumn(
       'user_product_permissions',
       'allocation_quantity'
@@ -824,6 +831,14 @@ const create = async (req, res, next) => {
           ? Math.max(0, Number(pricing.regular_price_markup || 0))
           : 0;
     }
+
+    const userSeriesOfferAdjustments =
+      req.user.role === 'USER' && supportsOfferPriceAdjustments
+        ? await loadUserSeriesOfferAdjustments(
+            (sql, values) => client.query(sql, values),
+            req.user.id
+          )
+        : new Map();
 
     const getBaseOrderUnitPrice = (product) => {
       if (orderCurrency === 'INR') {
@@ -1010,8 +1025,11 @@ const create = async (req, res, next) => {
           offer_label_snapshot: product.offer_label || 'Special offer',
           offer_display_percentage: target?.display_percentage ?? null,
           offer_display_quantity: target?.display_quantity ?? getProductDisplayQuantity(product),
-          offer_price_snapshot:
-            Number(baseOfferPrice) > 0 ? Number(baseOfferPrice) + 50 : null,
+          offer_price_snapshot: getEffectiveOfferPrice(
+            baseOfferPrice,
+            product.sole_code,
+            userSeriesOfferAdjustments
+          ),
           offer_pairs_per_carton_snapshot: Number(product.inner_boxes_per_outer_box || 0) || null,
           offer_campaign_id: Number(product.offer_campaign_id),
         });

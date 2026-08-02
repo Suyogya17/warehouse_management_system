@@ -1194,6 +1194,7 @@ const getDealerDetail = async (req, res, next) => {
                 fg.inner_boxes_per_outer_box AS pairs_per_carton,
                 COALESCE(dealer_sales.total_quantity, 0) AS total_quantity,
                 COALESCE(dealer_sales.order_count, 0) AS order_count,
+                COALESCE(dealer_sales.historical_order_count, 0) AS historical_order_count,
                 COALESCE(dealer_sales.cancelled_quantity, 0) AS cancelled_quantity,
                 dealer_sales.last_order_at,
                 dealer_sales.assigned_quantity,
@@ -1209,6 +1210,7 @@ const getDealerDetail = async (req, res, next) => {
            SELECT oi.finished_good_id,
                   COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS total_quantity,
                   COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
+                  COUNT(DISTINCT o.id) AS historical_order_count,
                   COALESCE(SUM(CASE WHEN ${genuineCancellationCondition} THEN oi.qty_ordered ELSE 0 END), 0) AS cancelled_quantity,
                   MAX(CASE WHEN o.status <> 'CANCELLED' THEN o.created_at END) AS last_order_at,
                   ${supportsOfferSnapshots && supportsOfferQuantitySnapshot
@@ -1321,6 +1323,7 @@ const getDealerDetail = async (req, res, next) => {
       "pairs_per_carton",
       "total_quantity",
       "order_count",
+      "historical_order_count",
       "cancelled_quantity",
       "assigned_quantity",
       "global_quantity",
@@ -1490,6 +1493,61 @@ const getDealerDetail = async (req, res, next) => {
   }
 };
 
+const getDealerProductOrders = async (req, res, next) => {
+  try {
+    const dealerId = Number(req.query.dealer_id);
+    const finishedGoodId = Number(req.query.finished_good_id);
+    const offerOnly = String(req.query.mode || "").trim().toLowerCase() === "offers";
+
+    if (!Number.isInteger(dealerId) || dealerId <= 0) {
+      return res.status(400).json({ success: false, message: "Valid dealer account required" });
+    }
+    if (!Number.isInteger(finishedGoodId) || finishedGoodId <= 0) {
+      return res.status(400).json({ success: false, message: "Valid product required" });
+    }
+
+    const supportsOfferSnapshots = await hasColumn("order_items", "ordered_from_offer");
+    if (offerOnly && !supportsOfferSnapshots) {
+      return res.status(409).json({
+        success: false,
+        message: "Offer-order snapshots are not installed on the backend.",
+      });
+    }
+
+    const offerFlagExpression = supportsOfferSnapshots
+      ? "COALESCE(oi.ordered_from_offer, 0)"
+      : "0";
+    const offerCondition = offerOnly
+      ? "AND COALESCE(oi.ordered_from_offer, 0) = 1"
+      : "";
+    const rows = await run(
+      `SELECT o.id AS order_id,
+              o.customer_name,
+              o.customer_phone,
+              o.status,
+              o.created_at,
+              o.delivery_note_number,
+              oi.qty_ordered,
+              ${offerFlagExpression} AS ordered_from_offer
+       FROM orders o
+       JOIN order_items oi ON oi.order_id = o.id
+       WHERE o.created_by = ?
+         AND oi.finished_good_id = ?
+         ${offerCondition}
+       ORDER BY o.created_at DESC, o.id DESC
+       LIMIT 200`,
+      [dealerId, finishedGoodId]
+    );
+
+    return res.json({
+      success: true,
+      data: mapNumeric(rows, ["order_id", "qty_ordered", "ordered_from_offer"]),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 const getUsers = async (req, res, next) => {
   try {
     const requiredWorkflowColumns = [
@@ -1635,6 +1693,7 @@ module.exports = {
   getProductSales,
   getDealers,
   getDealerDetail,
+  getDealerProductOrders,
   getUsers,
   getSupport,
 };

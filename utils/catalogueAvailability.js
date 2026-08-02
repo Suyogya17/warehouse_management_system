@@ -5,6 +5,11 @@ const {
   hasOfferCampaignSchema,
   getOfferCampaignUsage,
 } = require('./offerCampaigns');
+const {
+  getEffectiveOfferPrice,
+  getSeriesOfferAdjustment,
+  loadUserSeriesOfferAdjustments,
+} = require('./offerPricing');
 
 const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'PACKED'];
 const DEFAULT_DISPLAY_QUANTITY = 450;
@@ -62,6 +67,7 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     supportsOfferCampaigns,
     supportsPercentageAllocations,
     supportsOfferOrderSnapshots,
+    supportsOfferPriceAdjustments,
   ] = await Promise.all([
     hasColumn('finished_goods', 'display_order'),
     hasColumn('finished_goods', 'display_quantity'),
@@ -73,6 +79,7 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     hasOfferCampaignSchema(),
     hasColumn('user_product_permissions', 'allocation_quantity'),
     hasColumn('order_items', 'ordered_from_offer'),
+    hasTable('user_series_offer_price_adjustments'),
   ]);
   const supportsOfferUserQuantity = supportsOfferUsers
     ? await hasColumn('finished_good_offer_users', 'display_quantity')
@@ -157,7 +164,13 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     !isOfferView &&
     ['USER', 'MEMBER', 'ELDER'].includes(req.user.role) &&
     products.rows.length > 0;
-  const [audienceRows, reserved, campaignUsage, percentageAllocationRows] =
+  const [
+    audienceRows,
+    reserved,
+    campaignUsage,
+    percentageAllocationRows,
+    seriesOfferAdjustments,
+  ] =
     await Promise.all([
     shouldLoadOfferTargets
       ? query(
@@ -201,6 +214,9 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
           [availabilityUserId, ...productIds]
         )
       : Promise.resolve({ rows: [] }),
+    usesCustomerOfferAudience && supportsOfferPriceAdjustments
+      ? loadUserSeriesOfferAdjustments(query, availabilityUserId)
+      : Promise.resolve(new Map()),
   ]);
 
   const offerUserTargets = new Map(
@@ -276,6 +292,25 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
         !supportsOfferUsers ||
         Number(product.offer_all_users) === 1 ||
         offerUserTargets.has(Number(product.id));
+      const currencyCode = String(req.user?.currency_code || 'NPR')
+        .trim()
+        .toUpperCase();
+      const baseOfferPrice =
+        currencyCode === 'INR'
+          ? Number(product.india_price)
+          : Number(product.price);
+      const offerSeriesPriceAdjustment =
+        offerIsActive && canSeeOffer
+          ? getSeriesOfferAdjustment(seriesOfferAdjustments, product.sole_code)
+          : 0;
+      const effectiveOfferPrice =
+        offerIsActive && canSeeOffer
+          ? getEffectiveOfferPrice(
+              baseOfferPrice,
+              product.sole_code,
+              seriesOfferAdjustments
+            )
+          : null;
 
       if (isOfferView && usesCustomerOfferAudience && !canSeeOffer) {
         return null;
@@ -292,6 +327,8 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
               offer_ends_at: null,
             }),
         offer_display_quantity: hasPersonalOffer ? userOfferQuantity : null,
+        offer_series_price_adjustment: offerSeriesPriceAdjustment,
+        effective_offer_price: effectiveOfferPrice,
         offer_used_quantity:
           usesCustomerOfferAudience && offerIsActive ? campaignUsedQuantity : 0,
         offer_remaining_quantity:

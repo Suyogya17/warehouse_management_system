@@ -13,6 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import DataTable from "../../components/DataTable";
+import Button from "../../components/Button";
 import SectionCard from "../../components/SectionCard";
 import StatCard from "../../components/StatCard";
 import StatusBadge from "../../components/StatusBadge";
@@ -27,6 +28,100 @@ import {
   statusTone,
   sumRows,
 } from "./analyticsShared";
+
+function ProductOrderHistoryModal({
+  product,
+  dealer,
+  rows,
+  loading,
+  error,
+  onClose,
+}) {
+  if (!product) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-3 sm:p-6"
+      onMouseDown={onClose}
+    >
+      <section
+        className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white px-4 py-4 sm:px-6">
+          <div>
+            <h2 className="text-lg font-bold text-slate-950">
+              Order history · {product.article_code || product.name}
+            </h2>
+            <p className="text-sm text-slate-500">
+              {dealer?.dealer_name || "Dealer"} · {product.color || "No color"}
+            </p>
+            <p className="mt-1 text-xs text-slate-400">
+              Historical ordered totals exclude cancelled orders. Cancelled rows remain visible for reference.
+            </p>
+          </div>
+          <Button type="button" size="sm" variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+
+        <div className="p-4 sm:p-6">
+          {loading ? (
+            <p className="py-10 text-center text-sm text-slate-500">Loading order history…</p>
+          ) : error ? (
+            <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>
+          ) : (
+            <DataTable
+              rows={rows}
+              showToolbar={false}
+              emptyTitle="No matching order history"
+              columns={[
+                { key: "order_id", label: "Order ID", render: (row) => `#${row.order_id}` },
+                { key: "customer_name", label: "Customer shop" },
+                { key: "customer_phone", label: "Phone", render: (row) => row.customer_phone || "-" },
+                {
+                  key: "qty_ordered",
+                  label: "Quantity",
+                  render: (row) => {
+                    const pairsPerCarton = Number(product.pairs_per_carton || 0);
+                    const pairs = Number(row.qty_ordered || 0);
+                    const cartons = pairsPerCarton > 0 ? pairs / pairsPerCarton : 0;
+                    return (
+                      <div>
+                        <strong>{formatNumber(cartons)} CTN</strong>
+                        <p className="text-xs text-slate-500">{formatNumber(pairs)} pairs</p>
+                      </div>
+                    );
+                  },
+                },
+                { key: "created_at", label: "Order date", render: (row) => formatDate(row.created_at) },
+                {
+                  key: "status",
+                  label: "Status",
+                  render: (row) => (
+                    <StatusBadge tone={statusTone[String(row.status).toUpperCase()] || "neutral"}>
+                      {row.status}
+                    </StatusBadge>
+                  ),
+                },
+                { key: "delivery_note_number", label: "DN", render: (row) => row.delivery_note_number || "-" },
+                {
+                  key: "ordered_from_offer",
+                  label: "Source",
+                  render: (row) => (
+                    <StatusBadge tone={Number(row.ordered_from_offer) === 1 ? "warning" : "neutral"}>
+                      {Number(row.ordered_from_offer) === 1 ? "OFFER" : "REGULAR"}
+                    </StatusBadge>
+                  ),
+                },
+              ]}
+            />
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
 
 export default function DealerAnalytics({ data, token }) {
   const [analysisMode, setAnalysisMode] = useState("ALL");
@@ -43,10 +138,37 @@ export default function DealerAnalytics({ data, token }) {
   const [productSearch, setProductSearch] = useState("");
   const [debouncedProductSearch, setDebouncedProductSearch] = useState("");
   const [productPage, setProductPage] = useState(1);
+  const [orderHistoryProduct, setOrderHistoryProduct] = useState(null);
+  const [orderHistory, setOrderHistory] = useState([]);
+  const [orderHistoryLoading, setOrderHistoryLoading] = useState(false);
+  const [orderHistoryError, setOrderHistoryError] = useState("");
   const selectedDealer =
     selectedDealerIndex === ""
       ? null
       : dealerOptions[Number(selectedDealerIndex)] || null;
+
+  const openOrderHistory = async (product) => {
+    if (!selectedDealer || !product) return;
+    setOrderHistoryProduct(product);
+    setOrderHistory([]);
+    setOrderHistoryError("");
+    setOrderHistoryLoading(true);
+    try {
+      const result = await api.getDealerProductOrders(
+        {
+          dealer_id: selectedDealer.dealer_id,
+          finished_good_id: product.id,
+          mode: analysisMode === "OFFERS" ? "offers" : "all",
+        },
+        token
+      );
+      setOrderHistory(result.data || []);
+    } catch (error) {
+      setOrderHistoryError(error.message || "Could not load product orders.");
+    } finally {
+      setOrderHistoryLoading(false);
+    }
+  };
 
   const filteredDealerOptions = useMemo(() => {
     const query = dealerSearch.trim().toLowerCase();
@@ -201,6 +323,14 @@ export default function DealerAnalytics({ data, token }) {
 
   return (
     <div className="space-y-4">
+      <ProductOrderHistoryModal
+        product={orderHistoryProduct}
+        dealer={selectedDealer}
+        rows={orderHistory}
+        loading={orderHistoryLoading}
+        error={orderHistoryError}
+        onClose={() => setOrderHistoryProduct(null)}
+      />
       <SectionCard
         title={analysisMode === "OFFERS" ? "Dealer Offer Product Intelligence" : "Dealer Product Intelligence"}
         subtitle={
@@ -389,15 +519,15 @@ export default function DealerAnalytics({ data, token }) {
                   }] : []),
                   {
                     key: "ordered",
-                    label: analysisMode === "OFFERS" ? "Taken / shown" : "Taken",
+                    label: "Historical ordered",
                     exportValue: (row) =>
                       analysisMode === "OFFERS"
-                        ? `${row.ordered_cartons} CTN / ${row.total_quantity} pairs taken out of ${row.assigned_cartons || 0} CTN / ${row.assigned_quantity || 0} pairs shown`
+                        ? `${row.ordered_cartons} CTN / ${row.total_quantity} pairs ordered out of ${row.assigned_cartons || 0} CTN / ${row.assigned_quantity || 0} pairs shown`
                         : `${row.ordered_cartons} CTN / ${row.total_quantity} pairs`,
                     render: (row) => (
                       <div className="min-w-36">
                         <strong>{formatNumber(row.ordered_cartons)} CTN</strong>
-                        <p className="text-xs text-slate-500">{formatNumber(row.total_quantity)} pairs taken</p>
+                        <p className="text-xs text-slate-500">{formatNumber(row.total_quantity)} pairs ordered</p>
                         {analysisMode === "OFFERS" ? (
                           row.assigned_quantity > 0 ? (
                             <p className="mt-1 border-t border-slate-200 pt-1 text-xs font-semibold text-indigo-700">
@@ -410,10 +540,47 @@ export default function DealerAnalytics({ data, token }) {
                       </div>
                     ),
                   },
+                  {
+                    key: "current_stock",
+                    label: "Current stock",
+                    exportValue: (row) => {
+                      const pairsPerCarton = Number(row.pairs_per_carton || 0);
+                      const currentStock = Number(row.current_stock || 0);
+                      const cartons = pairsPerCarton > 0 ? currentStock / pairsPerCarton : 0;
+                      return `${cartons} CTN / ${currentStock} pairs`;
+                    },
+                    render: (row) => {
+                      const pairsPerCarton = Number(row.pairs_per_carton || 0);
+                      const currentStock = Number(row.current_stock || 0);
+                      const cartons = pairsPerCarton > 0 ? currentStock / pairsPerCarton : 0;
+                      return (
+                        <div className="min-w-28">
+                          <strong>{formatNumber(cartons)} CTN</strong>
+                          <p className="text-xs text-slate-500">{formatNumber(currentStock)} pairs now</p>
+                        </div>
+                      );
+                    },
+                  },
                   { key: "order_count", label: "Orders", render: (row) => formatNumber(row.order_count) },
                   { key: "last_order_at", label: "Last order", render: (row) => row.last_order_at ? formatDate(row.last_order_at) : "-" },
                   { key: "status", label: "Status", render: (row) => <StatusBadge tone={row.status === "GREAT" ? "success" : row.status === "OUT OF STOCK" ? "danger" : row.status === "LOW SALES" ? "warning" : "neutral"}>{row.status}</StatusBadge> },
                   { key: "reason", label: "Why / evidence" },
+                  {
+                    key: "order_history",
+                    label: "Order details",
+                    exportValue: () => "",
+                    render: (row) => (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        disabled={Number(row.historical_order_count || 0) <= 0}
+                        onClick={() => openOrderHistory(row)}
+                      >
+                        View orders
+                      </Button>
+                    ),
+                  },
                 ]}
               />
             </div>

@@ -13,6 +13,7 @@ router.get("/products", cacheResponse(15000), productIntelligence.getProducts);
 router.get("/production", cacheResponse(30000), ctrl.getProduction);
 router.get("/sales", cacheResponse(30000), ctrl.getSales);
 router.get("/sales/product/:id", cacheResponse(15000), ctrl.getProductSales);
+router.get("/dealers/product-orders", cacheResponse(15000), ctrl.getDealerProductOrders);
 router.get("/dealers/detail", cacheResponse(15000), ctrl.getDealerDetail);
 router.get("/dealers", cacheResponse(30000), ctrl.getDealers);
 router.get("/users", cacheResponse(30000), ctrl.getUsers);

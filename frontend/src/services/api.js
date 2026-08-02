@@ -564,6 +564,14 @@ deleteStockAdjustment: (id, token) =>
     const query = buildQueryString(params);
     return apiRequest(`/analytics/dealers/detail${query ? `?${query}` : ""}`, {}, token);
   },
+  getDealerProductOrders: (params, token) => {
+    const query = buildQueryString(params);
+    return apiRequest(
+      `/analytics/dealers/product-orders${query ? `?${query}` : ""}`,
+      {},
+      token
+    );
+  },
   trackProductSearch: (payload, token) =>
     apiRequest(
       "/product-interest/search",
