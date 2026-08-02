@@ -395,6 +395,8 @@ export const api = {
   },
   getProductPercentageAllocations: (token) =>
     apiRequest("/permissions/percentage-allocations", {}, token),
+  getProductPercentageAllocationHistory: (token) =>
+    apiRequest("/permissions/percentage-allocation-history", {}, token),
   saveProductPercentageAllocations: (id, targets, token) =>
     apiRequest(
       `/permissions/percentage-allocations/${id}`,

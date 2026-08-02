@@ -53,7 +53,16 @@ export default function OffersPage() {
   const [loadingOfferPurchases, setLoadingOfferPurchases] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ offer_label: "Special offer", offer_ends_at: "", offer_all_users: true, offer_target_user_ids: [], offer_target_quantities: {}, offer_target_percentages: {} });
+  const [form, setForm] = useState({
+    offer_label: "Special offer",
+    offer_ends_at: "",
+    offer_all_users: true,
+    offer_target_user_ids: [],
+    offer_target_quantities: {},
+    offer_target_percentages: {},
+    offer_target_cartons: {},
+    offer_division_mode: "PERCENTAGE",
+  });
   const [saving, setSaving] = useState(false);
   const offers = useMemo(() => products.filter(isActiveOffer), [products]);
   const offerAvailabilityById = useMemo(
@@ -195,6 +204,14 @@ export default function OffersPage() {
 
   const beginEdit = (product) => {
     const savedTargets = product.offer_targets || [];
+    const pairsPerCarton = Number(product.inner_boxes_per_outer_box || 0);
+    const savedAsCartons =
+      savedTargets.length > 0 &&
+      savedTargets.every(
+        (target) =>
+          target.display_percentage === null ||
+          target.display_percentage === undefined
+      );
     setEditing(product);
     setForm({
       offer_label: product.offer_label || "Special offer",
@@ -207,6 +224,15 @@ export default function OffersPage() {
         const defaultPercentage = OFFER_PERCENTAGES_BY_EMAIL[String(customer?.email || "").trim().toLowerCase()];
         return [Number(target.user_id), target.display_percentage ?? defaultPercentage ?? ""];
       })),
+      offer_target_cartons: Object.fromEntries(
+        savedTargets.map((target) => [
+          Number(target.user_id),
+          pairsPerCarton > 0
+            ? Math.floor(Number(target.display_quantity || 0) / pairsPerCarton)
+            : 0,
+        ])
+      ),
+      offer_division_mode: savedAsCartons ? "CTN" : "PERCENTAGE",
     });
   };
 

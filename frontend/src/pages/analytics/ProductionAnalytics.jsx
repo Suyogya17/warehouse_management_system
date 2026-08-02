@@ -97,10 +97,11 @@ export default function ProductionAnalytics({ data }) {
           </label>
         </div>
         {(productionSearch || productionSeries) && latestProductionMatch && (
-          <div className="mx-4 mb-4 grid gap-3 rounded-xl border border-indigo-100 bg-indigo-50 p-4 sm:grid-cols-3">
+          <div className="mx-4 mb-4 grid gap-3 rounded-xl border border-indigo-100 bg-indigo-50 p-4 sm:grid-cols-2 xl:grid-cols-4">
             <div><p className="text-xs font-semibold uppercase text-indigo-500">Latest product</p><p className="mt-1 font-bold text-indigo-950">{productName(latestProductionMatch)}</p></div>
             <div><p className="text-xs font-semibold uppercase text-indigo-500">Production date</p><p className="mt-1 font-bold text-indigo-950">{formatDate(latestProductionMatch.latest_production_at)}</p></div>
-            <div><p className="text-xs font-semibold uppercase text-indigo-500">Latest produced qty</p><p className="mt-1 font-bold text-indigo-950">{formatNumber(latestProductionMatch.latest_quantity)} {latestProductionMatch.unit || ""}</p></div>
+            <div><p className="text-xs font-semibold uppercase text-indigo-500">Total produced qty</p><p className="mt-1 font-bold text-indigo-950">{formatNumber(latestProductionMatch.total_quantity)} {latestProductionMatch.unit || ""}</p><p className="mt-1 text-xs text-indigo-600">{formatNumber(latestProductionMatch.production_runs)} production runs</p></div>
+            <div><p className="text-xs font-semibold uppercase text-indigo-500">Latest batch qty</p><p className="mt-1 font-bold text-indigo-950">{formatNumber(latestProductionMatch.latest_quantity)} {latestProductionMatch.unit || ""}</p></div>
           </div>
         )}
         <DataTable
@@ -110,7 +111,8 @@ export default function ProductionAnalytics({ data }) {
             { key: "product", label: "Product", render: productName },
             { key: "sole_code", label: "Series", render: (row) => row.sole_code || "-" },
             { key: "latest_production_at", label: "Latest Production", render: (row) => formatDate(row.latest_production_at) },
-            { key: "latest_quantity", label: "Latest Qty", render: (row) => `${formatNumber(row.latest_quantity)} ${row.unit || ""}` },
+            { key: "total_quantity", label: "Total Produced", render: (row) => `${formatNumber(row.total_quantity)} ${row.unit || ""}` },
+            { key: "latest_quantity", label: "Latest Batch", render: (row) => `${formatNumber(row.latest_quantity)} ${row.unit || ""}` },
           ]}
         />
       </SectionCard>
@@ -258,4 +260,3 @@ export default function ProductionAnalytics({ data }) {
     </div>
   );
 }
-

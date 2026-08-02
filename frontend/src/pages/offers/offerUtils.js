@@ -95,3 +95,27 @@ export const getPercentageAllocations = (product, targets = []) => {
     ])
   );
 };
+
+export const getCartonAllocations = (product, targets = []) => {
+  const pairsPerCarton = Number(product?.inner_boxes_per_outer_box || 0);
+  const totalCartons = getRoundedCartons(product?.quantity, pairsPerCarton);
+  if (pairsPerCarton <= 0 || totalCartons <= 0) return new Map();
+
+  return new Map(
+    targets.map((target) => {
+      const cartons = Math.max(
+        0,
+        Math.floor(Number(target.cartons || 0))
+      );
+      return [
+        Number(target.user_id),
+        {
+          user_id: Number(target.user_id),
+          cartons,
+          pairs: cartons * pairsPerCarton,
+          percentage: (cartons / totalCartons) * 100,
+        },
+      ];
+    })
+  );
+};

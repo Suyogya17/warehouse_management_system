@@ -38,6 +38,26 @@ const getCartons = (pairs, pairsPerCarton) =>
 const formatVelocity = (value) =>
   `${Number(value || 0).toFixed(2)} pairs/day`;
 
+const formatPairsAndCartons = (pairs, cartons) =>
+  `${formatNumber(pairs)} pairs / ${formatNumber(cartons)} CTN`;
+
+const getStatusMeaning = (status) => {
+  switch (status) {
+    case "FAST":
+      return "is selling quickly and may need production soon";
+    case "HEALTHY":
+      return "has a healthy balance between recent demand and available stock";
+    case "SLOW":
+      return "is selling more slowly than most matching products";
+    case "DEAD_STOCK_RISK":
+      return "has stock but shows a risk of becoming dead stock";
+    case "OUT_OF_STOCK":
+      return "has no unreserved stock currently available";
+    default:
+      return "has been analysed using its recent orders and current stock";
+  }
+};
+
 export default function ProductIntelligence({ token }) {
   const [days, setDays] = useState("90");
   const [mode, setMode] = useState("ALL");
@@ -115,6 +135,27 @@ export default function ProductIntelligence({ token }) {
   const selectedTrend = useMemo(
     () => productDetail?.daily_trend || [],
     [productDetail?.daily_trend]
+  );
+  const selectedProductLabel = [
+    selectedProduct?.article_code || selectedProduct?.name,
+    selectedProduct?.color,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const selectedAvailableStock = Number(
+    selectedProduct?.available_stock || 0
+  );
+  const selectedOrderedQuantity = Number(
+    selectedProduct?.total_quantity || 0
+  );
+  const selectedOrderCount = Number(selectedProduct?.order_count || 0);
+  const selectedDealerCount = Number(selectedProduct?.dealer_count || 0);
+  const selectedInterestCount = Number(selectedProduct?.interest_count || 0);
+  const selectedGenuineCancelled = Number(
+    selectedProduct?.genuine_cancelled_quantity || 0
+  );
+  const selectedDuplicateCancelled = Number(
+    selectedProduct?.duplicate_cancelled_quantity || 0
   );
 
   return (
@@ -237,30 +278,45 @@ export default function ProductIntelligence({ token }) {
         />
         <StatCard
           label="Available Stock"
-          value={`${formatNumber(summary.available_stock)} pairs`}
+          value={formatPairsAndCartons(
+            summary.available_stock,
+            summary.available_stock_cartons
+          )}
           icon="stock"
         />
         <StatCard
           label={`Ordered · ${days} days`}
-          value={`${formatNumber(summary.ordered_quantity)} pairs`}
+          value={formatPairsAndCartons(
+            summary.ordered_quantity,
+            summary.ordered_quantity_cartons
+          )}
           tone="success"
           icon="orders"
         />
         <StatCard
           label="Production Signal"
-          value={`${formatNumber(summary.recommended_production_pairs)} pairs`}
+          value={formatPairsAndCartons(
+            summary.recommended_production_pairs,
+            summary.recommended_production_cartons
+          )}
           tone="calm"
           icon="production"
         />
         <StatCard
           label="Genuine Cancelled"
-          value={`${formatNumber(summary.genuine_cancelled_quantity)} pairs`}
+          value={formatPairsAndCartons(
+            summary.genuine_cancelled_quantity,
+            summary.genuine_cancelled_cartons
+          )}
           tone="alert"
           icon="orders"
         />
         <StatCard
           label="Duplicate Orders"
-          value={`${formatNumber(summary.duplicate_cancelled_quantity)} pairs`}
+          value={formatPairsAndCartons(
+            summary.duplicate_cancelled_quantity,
+            summary.duplicate_cancelled_cartons
+          )}
           tone="neutral"
           icon="orders"
         />
@@ -469,6 +525,121 @@ export default function ProductIntelligence({ token }) {
             </div>
           ) : (
             <>
+              <div className="m-4 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4 sm:p-5">
+                <h3 className="text-base font-bold text-slate-950">
+                  How to understand this product
+                </h3>
+                <p className="mt-1 text-sm text-slate-700">
+                  This means{" "}
+                  <strong>{selectedProductLabel || "this product"}</strong>{" "}
+                  {getStatusMeaning(selectedProduct.status)}.
+                </p>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-bold text-slate-900">
+                      Stock: {formatNumber(selectedAvailableStock)} pairs /{" "}
+                      {formatNumber(
+                        getCartons(
+                          selectedAvailableStock,
+                          selectedPairsPerCarton
+                        )
+                      )}{" "}
+                      CTN
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600">
+                      This is the stock currently available after reserved
+                      quantities.
+                      {selectedPairsPerCarton > 0
+                        ? ` One full carton contains ${formatNumber(selectedPairsPerCarton)} pairs.`
+                        : ""}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-bold text-slate-900">
+                      Ordered: {formatNumber(selectedOrderedQuantity)} pairs /{" "}
+                      {formatNumber(
+                        getCartons(
+                          selectedOrderedQuantity,
+                          selectedPairsPerCarton
+                        )
+                      )}{" "}
+                      CTN / {formatNumber(selectedOrderCount)} orders
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600">
+                      During the selected {days} days, customers ordered this
+                      quantity through {formatNumber(selectedOrderCount)}{" "}
+                      non-cancelled {selectedOrderCount === 1 ? "order" : "orders"}.
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-bold text-slate-900">
+                      Velocity: {formatVelocity(selectedProduct.sales_velocity)}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600">
+                      Calculation: {formatNumber(selectedOrderedQuantity)} pairs
+                      {" ÷ "}
+                      {days} calendar days ={" "}
+                      {Number(selectedProduct.sales_velocity || 0).toFixed(2)}{" "}
+                      pairs per day.
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-bold text-slate-900">
+                      {formatNumber(selectedDealerCount)}{" "}
+                      {selectedDealerCount === 1 ? "dealer" : "dealers"}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600">
+                      {formatNumber(selectedDealerCount)} different
+                      user/dealer{" "}
+                      {selectedDealerCount === 1 ? "account placed" : "accounts placed"}{" "}
+                      the non-cancelled orders.
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-bold text-slate-900">
+                      {formatNumber(selectedInterestCount)} product opens
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600">
+                      {selectedInterestCount > 0
+                        ? `${formatNumber(selectedInterestCount)} tracked product-interest events were recorded during this period.`
+                        : "No tracked user opened this product during this period. Tracking only includes activity recorded after product-interest tracking was deployed."}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-bold text-slate-900">
+                      Cancelled — Genuine:{" "}
+                      {formatNumber(selectedGenuineCancelled)}, Duplicate:{" "}
+                      {formatNumber(selectedDuplicateCancelled)}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600">
+                      Cancelled quantities are shown separately and are not
+                      included in ordered quantity or sales velocity.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge tone={statusTone[selectedProduct.status]}>
+                      {String(selectedProduct.status || "UNKNOWN").replace(
+                        /_/g,
+                        " "
+                      )}
+                    </StatusBadge>
+                    <p className="text-xs leading-5 text-slate-600">
+                      {selectedProduct.reason ||
+                        "The status is based on recent sales velocity and available stock."}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-6">
                 <StatCard
                   label="Ordered"

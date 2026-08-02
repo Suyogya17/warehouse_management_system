@@ -11,6 +11,11 @@ router.get(
   authorize('ADMIN', 'CO_ADMIN'),
   ctrl.getPercentageAllocations
 );
+router.get(
+  '/percentage-allocation-history',
+  authorize('ADMIN', 'CO_ADMIN'),
+  ctrl.getPercentageAllocationHistory
+);
 router.put(
   '/percentage-allocations/:finished_good_id',
   authorize('ADMIN', 'CO_ADMIN'),

@@ -61,7 +61,7 @@ export default function DealerAnalytics({ data, token }) {
     const timer = window.setTimeout(() => {
       setDebouncedProductSearch(productSearch.trim());
       setProductPage(1);
-    }, 300);
+    }, 450);
     return () => window.clearTimeout(timer);
   }, [productSearch]);
 
@@ -229,6 +229,7 @@ export default function DealerAnalytics({ data, token }) {
             value={selectedDealerIndex}
             onChange={(event) => {
               setSelectedDealerIndex(event.target.value);
+              setDealerDetail(null);
               setProductPage(1);
             }}
             className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
@@ -249,12 +250,22 @@ export default function DealerAnalytics({ data, token }) {
           </select>
         </div>
 
-        {dealerDetailLoading ? (
+        {dealerDetailLoading && !dealerDetail ? (
           <div className="px-6 py-12 text-sm text-slate-500">Loading dealer product analysis...</div>
-        ) : dealerDetailError ? (
+        ) : dealerDetailError && !dealerDetail ? (
           <div className="px-6 py-8 text-sm font-semibold text-red-600">{dealerDetailError}</div>
         ) : dealerDetail ? (
           <div className="space-y-5 p-4">
+            {dealerDetailLoading ? (
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700">
+                Updating product results…
+              </div>
+            ) : null}
+            {dealerDetailError ? (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+                {dealerDetailError}
+              </div>
+            ) : null}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
               <StatCard label="Orders" value={formatNumber(dealerDetail.summary?.order_count)} icon="orders" />
               <StatCard label="Ordered Pairs" value={formatNumber(dealerDetail.summary?.total_quantity)} icon="finishedGoods" />

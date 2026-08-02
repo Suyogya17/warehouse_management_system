@@ -644,8 +644,17 @@ const getProduction = async (req, res, next) => {
       run(
         `SELECT fg.id, fg.name, fg.article_code, fg.sole_code, fg.color, fg.size, fg.unit,
                 p.qty_produced AS latest_quantity,
-                p.created_at AS latest_production_at
+                p.created_at AS latest_production_at,
+                totals.total_quantity,
+                totals.production_runs
          FROM finished_goods fg
+         JOIN (
+           SELECT finished_good_id,
+                  COALESCE(SUM(qty_produced), 0) AS total_quantity,
+                  COUNT(id) AS production_runs
+           FROM production
+           GROUP BY finished_good_id
+         ) totals ON totals.finished_good_id = fg.id
          JOIN production p ON p.id = (
            SELECT p2.id
            FROM production p2
@@ -671,7 +680,11 @@ const getProduction = async (req, res, next) => {
         ]),
         raw_material_consumption: mapNumeric(rawMaterialConsumption, ["total_consumed"]),
         production_by_user: mapNumeric(productionByUser, ["production_runs", "total_quantity"]),
-        latest_product_production: mapNumeric(latestProductProduction, ["latest_quantity"]),
+        latest_product_production: mapNumeric(latestProductProduction, [
+          "latest_quantity",
+          "total_quantity",
+          "production_runs",
+        ]),
       },
     });
   } catch (err) {

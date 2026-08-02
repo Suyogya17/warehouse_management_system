@@ -493,9 +493,6 @@ export default function OrdersPage() {
             <td style="border:1px solid black;padding:6px;text-align:center;">
               ${escapeHtml(item.finished_good_id)}
             </td>
-            <td style="border:1px solid black;padding:6px;text-align:center;">
-              ${escapeHtml(item.product_id)}
-            </td>
             <td style="border:1px solid black;padding:6px;">
               ${escapeHtml(item.product_size)}
             </td>
@@ -677,7 +674,6 @@ export default function OrdersPage() {
               <tr>
                 <th width="3%">SN</th>
                 <th width="7%">F.G. ID</th>
-                <th width="11%">Product ID</th>
                 <th width="8%">Size</th>
                 <th width="27%">Description of Goods</th>
                 <th width="15%">Warehouse</th>

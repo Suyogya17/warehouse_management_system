@@ -52,6 +52,13 @@ const run = async (sql, params = []) => {
 
 const number = (value) => Number(value || 0);
 
+const cartonsForPairs = (pairs, pairsPerCarton) => {
+  const cartonSize = number(pairsPerCarton);
+  return cartonSize > 0 ? number(pairs) / cartonSize : 0;
+};
+
+const roundCartons = (value) => Math.round(number(value) * 100) / 100;
+
 const quantile = (sortedValues, percentile) => {
   if (!sortedValues.length) return 0;
   const index = (sortedValues.length - 1) * percentile;
@@ -359,26 +366,61 @@ const getProducts = async (req, res, next) => {
       (totals, row) => ({
         product_count: totals.product_count + 1,
         available_stock: totals.available_stock + row.available_stock,
+        available_stock_cartons:
+          totals.available_stock_cartons +
+          cartonsForPairs(row.available_stock, row.pairs_per_carton),
         ordered_quantity: totals.ordered_quantity + row.total_quantity,
+        ordered_quantity_cartons:
+          totals.ordered_quantity_cartons +
+          cartonsForPairs(row.total_quantity, row.pairs_per_carton),
         recommended_production_pairs:
           totals.recommended_production_pairs +
           row.recommended_production_pairs,
+        recommended_production_cartons:
+          totals.recommended_production_cartons +
+          row.recommended_production_cartons,
         genuine_cancelled_quantity:
           totals.genuine_cancelled_quantity +
           row.genuine_cancelled_quantity,
+        genuine_cancelled_cartons:
+          totals.genuine_cancelled_cartons +
+          cartonsForPairs(
+            row.genuine_cancelled_quantity,
+            row.pairs_per_carton
+          ),
         duplicate_cancelled_quantity:
           totals.duplicate_cancelled_quantity +
           row.duplicate_cancelled_quantity,
+        duplicate_cancelled_cartons:
+          totals.duplicate_cancelled_cartons +
+          cartonsForPairs(
+            row.duplicate_cancelled_quantity,
+            row.pairs_per_carton
+          ),
       }),
       {
         product_count: 0,
         available_stock: 0,
+        available_stock_cartons: 0,
         ordered_quantity: 0,
+        ordered_quantity_cartons: 0,
         recommended_production_pairs: 0,
+        recommended_production_cartons: 0,
         genuine_cancelled_quantity: 0,
+        genuine_cancelled_cartons: 0,
         duplicate_cancelled_quantity: 0,
+        duplicate_cancelled_cartons: 0,
       }
     );
+    [
+      "available_stock_cartons",
+      "ordered_quantity_cartons",
+      "recommended_production_cartons",
+      "genuine_cancelled_cartons",
+      "duplicate_cancelled_cartons",
+    ].forEach((key) => {
+      summary[key] = roundCartons(summary[key]);
+    });
 
     return res.json({
       success: true,
