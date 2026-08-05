@@ -7,7 +7,9 @@
 
   const CACHE_ROOT = path.join(__dirname, '..', '.catalogue-cache');
   const UPLOAD_ROOT = path.join(__dirname, '..', 'uploads');
-  const CACHE_VERSION = 8;
+  // Version 9 guarantees catalogue downloads contain no CTN/pair quantities.
+  // The live Gallery remains the source for exact current stock.
+  const CACHE_VERSION = 9;
   const STANDARD_IMAGE_OPTIONS = { width: 520, quality: 58 };
   const HIGH_IMAGE_OPTIONS = { width: 1200, quality: 88 };
   const ACTIVE_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -506,7 +508,7 @@
         id: Number(product.id),
         image: product.image_url || '',
         updated: product.updated_at || '',
-        quantity: getVisiblePairs(product),
+        inStock: getVisiblePairs(product) > 0,
         offer: Number(product.offer_enabled || 0),
         offerEndsAt: product.offer_ends_at || '',
       }))

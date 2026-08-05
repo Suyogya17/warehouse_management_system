@@ -79,7 +79,6 @@ export default function OrdersPage() {
   });
   const [debouncedOrderSearch, setDebouncedOrderSearch] = useState("");
   const [availability, setAvailability] = useState([]);
-  const [warehouseStock, setWarehouseStock] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [correctionOrder, setCorrectionOrder] = useState(null);
@@ -119,12 +118,10 @@ export default function OrdersPage() {
   }, [debouncedOrderSearch, orderPage, statusFilter, token]);
 
   const loadReferenceData = useCallback(async () => {
-    const [availabilityResult, warehouseStockResult] = await Promise.all([
-      api.getAvailability(token, { includeHidden: canManageOrders }),
-      api.getWarehouseStock(token),
-    ]);
+    const availabilityResult = await api.getAvailability(token, {
+      includeHidden: canManageOrders,
+    });
     setAvailability(availabilityResult.data || []);
-    setWarehouseStock(warehouseStockResult.data || []);
   }, [canManageOrders, token]);
 
   const load = useCallback(
@@ -152,19 +149,6 @@ export default function OrdersPage() {
     () => new Map(availability.map((item) => [String(item.id), item])),
     [availability]
   );
-
-  const warehouseStockByProductId = useMemo(() => {
-    const grouped = new Map();
-
-    warehouseStock.forEach((item) => {
-      const key = String(item.finished_good_id);
-      const rows = grouped.get(key) || [];
-      rows.push(item);
-      grouped.set(key, rows);
-    });
-
-    return grouped;
-  }, [warehouseStock]);
 
   const totals = availability.reduce(
     (acc, item) => {
@@ -408,112 +392,8 @@ export default function OrdersPage() {
   const formatPrintNumber = (value) =>
     Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 
-  const previewWarehouseAllocation = (warehouses = [], requestedQty = 0) => {
-    let remaining = Number(requestedQty || 0);
-    const allocations = [];
-
-    const sortedWarehouses = [...warehouses]
-      .filter((warehouse) => Number(warehouse.quantity || 0) > 0)
-      .sort((a, b) => {
-        const aDate = new Date(a.updated_at || 0).getTime();
-        const bDate = new Date(b.updated_at || 0).getTime();
-        if (aDate !== bDate) return aDate - bDate;
-        return Number(a.id || 0) - Number(b.id || 0);
-      });
-
-    for (const warehouse of sortedWarehouses) {
-      if (remaining <= 0) break;
-
-      const available = Number(warehouse.quantity || 0);
-      const quantity = Math.min(available, remaining);
-
-      allocations.push({
-        warehouse_name: warehouse.warehouse_name,
-        quantity,
-      });
-
-      remaining -= quantity;
-    }
-
-    return allocations;
-  };
-
-  const printDeliveryNote = (order = "") => {
-    const now = new Date();
-    const englishDate = formatEnglishDate(now, { includeTime: false });
-    const nepaliDate = formatNepaliDate(now);
-    const currentTime = now.toLocaleTimeString();
-
-    const deliveryNoteNumber =
-  order.delivery_note_number ||
-  deliveryNoteNumbersByOrderId.get(Number(order.id)) ||
-  "-";
-
-    const printableItems = (order.items || []).map((item) => {
-      const product = availabilityById.get(String(item.finished_good_id));
-      const pairs = Number(item.qty_ordered || 0);
-      const pairsPerCarton = Number(
-        item.inner_boxes_per_outer_box || product?.inner_boxes_per_outer_box || 0
-      );
-      const cartons = pairsPerCarton > 0 ? pairs / pairsPerCarton : 0;
-
-      const orderWarehouses = item.warehouse_allocations || [];
-      const productWarehouses = warehouseStockByProductId.get(String(item.finished_good_id)) || [];
-      const warehouseAllocations = orderWarehouses.length
-        ? orderWarehouses
-        : previewWarehouseAllocation(productWarehouses, pairs);
-      const warehouseName =
-        warehouseAllocations
-          .filter((warehouse) => Number(warehouse.quantity || 0) > 0)
-          .map((warehouse) => `${warehouse.warehouse_name} (${formatPrintNumber(warehouse.quantity)})`)
-          .join(", ") || "-";
-
-      return {
-        ...item,
-        pairs,
-        pairsPerCarton,
-        cartons,
-        finished_good_id: item.finished_good_id || product?.id || "-",
-        product_id: item.product_id || item.article_code || product?.article_code || "-",
-        product_size: item.product_size || product?.size || "-",
-        warehouse_name: warehouseName,
-      };
-    });
-
-    const totalPairs = printableItems.reduce((sum, item) => sum + item.pairs, 0);
-    const totalCartons = printableItems.reduce((sum, item) => sum + item.cartons, 0);
-
-    const itemsHtml = printableItems
-      .map(
-        (item, index) => `
-          <tr>
-            <td style="border:1px solid black;padding:6px;text-align:center;">
-              ${index + 1}
-            </td>
-            <td style="border:1px solid black;padding:6px;text-align:center;">
-              ${escapeHtml(item.finished_good_id)}
-            </td>
-            <td style="border:1px solid black;padding:6px;">
-              ${escapeHtml(item.product_size)}
-            </td>
-            <td style="border:1px solid black;padding:6px;">
-              ${escapeHtml(item.product_name)}
-            </td>
-            <td style="border:1px solid black;padding:4px;">
-              ${escapeHtml(item.warehouse_name)}
-            </td>
-            <td style="border:1px solid black;padding:6px;text-align:center;">
-              ${item.pairsPerCarton > 0 ? formatPrintNumber(item.cartons) : "0"}
-            </td>
-            <td style="border:1px solid black;padding:6px;text-align:center;">
-              ${formatPrintNumber(item.pairs)} ${escapeHtml(item.unit || "pairs")}
-            </td>
-          </tr>
-        `
-      )
-      .join("");
-
-    const printWindow = window.open("", "_blank", "width=900,height=700");
+  const printDeliveryNote = async (order = {}) => {
+    const printWindow = window.open("", "_blank", "width=1000,height=760");
 
     if (!printWindow) {
       showToast({
@@ -524,204 +404,277 @@ export default function OrdersPage() {
       return;
     }
 
-    api.logOrderPrint(order.id, token).catch(() => {});
+    printWindow.document.open();
+    printWindow.document.write(`<!doctype html><html><body style="font-family:Arial;padding:40px;text-align:center"><h2>Preparing warehouse delivery note…</h2><p>Please wait while the warehouse quantities are fixed.</p></body></html>`);
+    printWindow.document.close();
+
+    let preparedOrder;
+    try {
+      const prepared = await api.prepareOrderDeliveryNote(order.id, token);
+      preparedOrder = prepared.data;
+    } catch (error) {
+      printWindow.close();
+      showToast({
+        tone: "error",
+        title: "Could not prepare DN",
+        message: error.message,
+      });
+      return;
+    }
+
+    const now = new Date();
+    const englishDate = formatEnglishDate(now, { includeTime: false });
+    const nepaliDate = formatNepaliDate(now);
+    const currentTime = now.toLocaleTimeString();
+    const deliveryNoteNumber =
+      preparedOrder.delivery_note_number ||
+      deliveryNoteNumbersByOrderId.get(Number(preparedOrder.id)) ||
+      "-";
+
+    const groupedRows = new Map();
+    (preparedOrder.items || []).forEach((item) => {
+      const pairsPerCarton = Number(
+        item.inner_boxes_per_outer_box || 0
+      );
+      const allocations = (item.warehouse_allocations || []).filter(
+        (allocation) => Number(allocation.quantity || 0) > 0
+      );
+      const printableAllocations = allocations.length
+        ? allocations
+        : [
+            {
+              warehouse_id: null,
+              warehouse_name: "Source not recorded",
+              quantity: Number(item.qty_ordered || 0),
+              print_group_code_snapshot: "LEGACY_UNALLOCATED",
+              print_group_name_snapshot: "Legacy / Unallocated",
+              print_group_display_order: 999,
+            },
+          ];
+
+      printableAllocations.forEach((allocation) => {
+        const groupCode =
+          allocation.print_group_code_snapshot || "LEGACY_UNALLOCATED";
+        if (!groupedRows.has(groupCode)) {
+          groupedRows.set(groupCode, {
+            code: groupCode,
+            name:
+              allocation.print_group_name_snapshot || "Legacy / Unallocated",
+            displayOrder: Number(
+              allocation.print_group_display_order || 999
+            ),
+            rows: [],
+          });
+        }
+        const pairs = Number(allocation.quantity || 0);
+        groupedRows.get(groupCode).rows.push({
+          finishedGoodId: item.finished_good_id || "-",
+          articleCode: item.article_code || "-",
+          productName: item.product_name || "-",
+          color: item.color || "-",
+          size: item.size || "-",
+          warehouseName: allocation.warehouse_name || "-",
+          pairs,
+          cartons: pairsPerCarton > 0 ? pairs / pairsPerCarton : 0,
+        });
+      });
+    });
+
+    const groups = [...groupedRows.values()].sort(
+      (left, right) =>
+        left.displayOrder - right.displayOrder ||
+        left.name.localeCompare(right.name)
+    );
+    // The enlarged six-column DN layout fits up to 22 normal product rows on one A4
+    // copy. Browser print overflow is controlled by the fixed print-page size
+    // below, so a warehouse is not split early while space is still available.
+    const rowsPerPage = 22;
+    const pages = groups.flatMap((group) => {
+      const chunks = [];
+      for (let index = 0; index < group.rows.length; index += rowsPerPage) {
+        chunks.push(group.rows.slice(index, index + rowsPerPage));
+      }
+      return (chunks.length ? chunks : [[]]).map((rows, index) => ({
+        ...group,
+        rows,
+        groupPage: index + 1,
+        groupPages: Math.max(1, chunks.length),
+        groupPairs: group.rows.reduce((sum, row) => sum + row.pairs, 0),
+        groupCartons: group.rows.reduce((sum, row) => sum + row.cartons, 0),
+      }));
+    });
+
+    const pageHtml = pages
+      .map((page, pageIndex) => {
+        const pagePairs = page.rows.reduce((sum, row) => sum + row.pairs, 0);
+        const pageCartons = page.rows.reduce(
+          (sum, row) => sum + row.cartons,
+          0
+        );
+        const itemsHtml = page.rows
+          .map(
+            (item, index) => `
+              <tr>
+                <td>${page.groupPage === 1 ? index + 1 : page.groupPage * rowsPerPage - rowsPerPage + index + 1}</td>
+                <td>${escapeHtml(item.finishedGoodId)}</td>
+                <td>${escapeHtml(item.productName)}</td>
+                <td>${escapeHtml(item.warehouseName)}</td>
+                <td class="number">${formatPrintNumber(item.cartons)}</td>
+                <td class="number">${formatPrintNumber(item.pairs)}</td>
+              </tr>`
+          )
+          .join("");
+
+        return `
+          <section class="print-page${pageIndex === pages.length - 1 ? " last" : ""}">
+            <div class="page-indicator">Page ${pageIndex + 1} of ${pages.length}</div>
+            <div class="header">DELIVERY NOTE</div>
+            <div class="warehouse-title">${escapeHtml(deliveryNoteNumber)} · ${escapeHtml(page.name)}</div>
+            <table class="top-grid">
+              <tr>
+                <td width="52%">
+                  <strong>Order ID:</strong> #${escapeHtml(preparedOrder.id)}<br/>
+                  <strong>Delivery Note No:</strong> ${escapeHtml(deliveryNoteNumber)}<br/>
+                  <strong>Warehouse Group:</strong> ${escapeHtml(page.name)}<br/>
+                  <strong>Printed:</strong> ${escapeHtml(englishDate)} · ${escapeHtml(nepaliDate)} · ${escapeHtml(currentTime)}<br/>
+                  <strong>Printed By:</strong> ${escapeHtml(user?.name || "User")}
+                </td>
+                <td width="48%">
+                  <strong>Customer:</strong> ${escapeHtml(preparedOrder.customer_name || "-")}<br/>
+                  <strong>Phone:</strong> ${escapeHtml(preparedOrder.customer_phone || "-")}<br/>
+                  <strong>Address:</strong> ${escapeHtml(preparedOrder.customer_address || "-")}<br/>
+                  <strong>PAN:</strong> ${escapeHtml(preparedOrder.pan_number || "-")}<br/>
+                  <strong>Transport:</strong> ${escapeHtml(preparedOrder.transport_name || "-")}
+                </td>
+              </tr>
+            </table>
+            <table class="items">
+              <thead>
+                <tr>
+                  <th>S.No</th><th>F.G. ID</th><th>Description of Goods</th>
+                  <th>Warehouse</th><th>Carton</th><th>Pairs</th>
+                </tr>
+              </thead>
+              <tbody>${itemsHtml}</tbody>
+            </table>
+            <table class="totals">
+              <tr><td class="label">This page</td><td>${formatPrintNumber(pageCartons)} CTN</td><td>${formatPrintNumber(pagePairs)} pairs</td></tr>
+              <tr><td class="label">${escapeHtml(page.name)} total</td><td>${formatPrintNumber(page.groupCartons)} CTN</td><td>${formatPrintNumber(page.groupPairs)} pairs</td></tr>
+            </table>
+            <div class="signature">
+              <div>___________________<br/>Packed / Delivered By</div>
+              <div>___________________<br/>Checked By</div>
+              <div>___________________<br/>Received By</div>
+            </div>
+          </section>`;
+      })
+      .join("");
+
+    api.logOrderPrint(preparedOrder.id, token, {
+      print_type: "grouped_delivery_note",
+      warehouse_groups: groups.map((group) => group.name),
+    }).catch(() => {});
 
     printWindow.document.open();
     printWindow.document.write(`
       <!doctype html>
       <html>
         <head>
-          <title>Delivery Note</title>
+          <title>${escapeHtml(deliveryNoteNumber)} · Warehouse Delivery Note</title>
           <style>
-            body {
-              font-family: Arial;
-              padding: 24px;
-              color: black;
-            }
-
-            @page {
-              size: A4;
-              margin: 16mm;
-              @bottom-right {
-                content: "Page " counter(page) " of " counter(pages);
-              }
-            }
-
+            * { box-sizing: border-box; }
+            body { margin: 0; color: #000; font-family: Arial, sans-serif; font-size: 16px; }
+            @page { size: A4 portrait; margin: 8mm; }
+            .print-page { position: relative; width: 194mm; height: 279mm; overflow: hidden; padding-bottom: 4mm; page-break-after: always; break-after: page; }
+            .print-page.last { page-break-after: auto; break-after: auto; }
+            .page-indicator { position: absolute; top: 3px; right: 0; font-size: 14px; font-weight: 700; }
+            .header { text-align: center; font-size: 26px; font-weight: 800; letter-spacing: .08em; }
+            .warehouse-title { margin: 5px 0 7px; border: 2px solid #111; padding: 6px 10px; text-align: center; font-size: 18px; font-weight: 800; }
+            table { width: 100%; border-collapse: collapse; }
+            .top-grid { margin-bottom: 6px; }
+            .top-grid td { border: 1px solid #111; padding: 6px 8px; font-size: 16px; line-height: 1.25; vertical-align: top; }
+            .items th, .items td { border: 1px solid #111; padding: 5px 7px; vertical-align: top; line-height: 1.2; }
+            .items th { background: #eee; text-align: left; font-size: 16px; }
+            .items td { font-size: 16px; }
+            .items th:nth-child(1) { width: 6%; }
+            .items th:nth-child(2) { width: 9%; }
+            .items th:nth-child(3) { width: 44%; }
+            .items th:nth-child(4) { width: 23%; }
+            .items th:nth-child(5), .items th:nth-child(6) { width: 9%; }
+            .items td:first-child, .items td:nth-child(2), .number { text-align: center; }
+            .items tbody td { vertical-align: middle; }
+            .nowrap { white-space: nowrap; }
+            .totals { margin-top: 4px; }
+            .totals td { border: 1px solid #111; padding: 6px; font-size: 15px; font-weight: 700; text-align: center; }
+            .totals .label { text-align: right; }
+            .signature { margin-top: 22px; display: flex; justify-content: space-between; }
+            .signature div { width: 30%; text-align: center; font-size: 15px; line-height: 1.5; }
+            tr, .totals, .signature { break-inside: avoid; page-break-inside: avoid; }
             @media print {
-              body {
-                padding: 0 0 22mm;
-              }
-
-              thead {
-                display: table-header-group;
-              }
-
-              tr,
-              .totals,
-              .signature {
-                break-inside: avoid;
-                page-break-inside: avoid;
-              }
-
-              .page-number {
-                display: block;
-                position: fixed;
-                right: 0;
-                bottom: 0;
-                font-size: 11px;
-              }
-
-              .page-number::after {
-                content: "Page " counter(page) " of " counter(pages);
-              }
+              html, body { width: 210mm; }
+              .print-page { min-height: 0; }
             }
-
-            .page-number {
-              display: none;
-            }
-
-            .header {
-              text-align: center;
-              font-size: 20px;
-              font-weight: bold;
-              margin-bottom: 10px;
-            }
-
-            .top-grid {
-              width: 100%;
-              border-collapse: collapse;
-              margin-bottom: 10px;
-            }
-
-            .top-grid td {
-              border: 1px solid black;
-              padding: 10px;
-              vertical-align: top;
-            }
-
-            table.items {
-              width: 100%;
-              border-collapse: collapse;
-            }
-
-            table.items th {
-              border: 1px solid black;
-              padding: 6px;
-              background: #f3f3f3;
-              text-align: left;
-            }
-
-            .totals {
-              width: 100%;
-              border-collapse: collapse;
-              margin-top: 4px;
-            }
-
-            .totals td {
-              border: 1px solid black;
-              padding: 8px;
-              font-weight: bold;
-            }
-
-            .totals .label {
-              text-align: right;
-            }
-
-            .totals .value {
-              text-align: center;
-            }
-
-            .signature {
-              margin-top: 70px;
-              display: flex;
-              justify-content: space-between;
-            }
-
-            .signature div {
-              text-align: center;
-              width: 200px;
-            }
+            @media screen { body { background: #e5e7eb; padding: 20px; } .print-page { margin: 0 auto 20px; background: white; } }
           </style>
         </head>
-
-        <body>
-          <div class="header">DELIVERY NOTE</div>
-
-          <table class="top-grid">
-            <tr>
-              <td width="60%">
-                <strong>Dated</strong><br/>
-                Nepali Date: ${nepaliDate}<br/>
-                English Date: ${englishDate}<br/>
-                Time: ${currentTime}<br/>
-                <strong>Transport Name:</strong> ${escapeHtml(order.transport_name || "-")}<br/>
-                <strong>Gate Pass No:</strong><br/>
-                <strong>Bill No:</strong><br/>
-              </td>
-              <td width="40%">
-                <strong>Delivery Note No:</strong> ${deliveryNoteNumber}<br/>
-                <strong>Created By:</strong> ${escapeHtml(order.created_by_name || "-")}<br/>
-                <strong>Customer Name:</strong> ${escapeHtml(order.customer_name)}<br/>
-                <strong>Phone Number:</strong> ${escapeHtml(order.customer_phone || "-")}<br/>
-                <strong>Address:</strong> ${escapeHtml(order.customer_address || "-")}<br/>
-                <strong>PAN Number:</strong> ${escapeHtml(order.pan_number || "-")}
-              </td>
-            </tr>
-          </table>
-
-          <table class="items">
-            <thead>
-              <tr>
-                <th width="3%">SN</th>
-                <th width="7%">F.G. ID</th>
-                <th width="8%">Size</th>
-                <th width="27%">Description of Goods</th>
-                <th width="15%">Warehouse</th>
-                <th width="9%">Carton</th>
-                <th width="10%">Pairs</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${itemsHtml}
-            </tbody>
-          </table>
-
-          <table class="totals">
-            <tr>
-              <td class="label" width="81%">Total</td>
-              <td class="value" width="9%">${formatPrintNumber(totalCartons)}</td>
-              <td class="value" width="10%">${formatPrintNumber(totalPairs)} pairs</td>
-            </tr>
-          </table>
-
-          <div class="signature">
-            <div>
-              ___________________<br/>
-              Delivered By
-            </div>
-            <div>
-              ___________________<br/>
-              Received By
-            </div>
-            <div>
-              ___________________<br/>
-              Printed By </br> 
-              (${escapeHtml(user?.name || "User")})
-            </div>
-          </div>
-
-          <div class="page-number"></div>
-        </body>
+        <body>${pageHtml}</body>
       </html>
     `);
 
     printWindow.document.close();
 
     let didPrint = false;
+    const fitDeliveryNoteRows = () => {
+      const printablePages = printWindow.document.querySelectorAll(".print-page");
+
+      printablePages.forEach((pageElement) => {
+        const rows = [...pageElement.querySelectorAll(".items tbody tr")];
+        const tbody = pageElement.querySelector(".items tbody");
+        const totalsTable = pageElement.querySelector(".totals");
+        const signature = pageElement.querySelector(".signature");
+        if (!rows.length || !tbody || !totalsTable || !signature) return;
+
+        rows.forEach((row) => {
+          row.style.height = "auto";
+        });
+
+        const pageRect = pageElement.getBoundingClientRect();
+        const tbodyRect = tbody.getBoundingClientRect();
+        const totalsStyle = printWindow.getComputedStyle(totalsTable);
+        const signatureStyle = printWindow.getComputedStyle(signature);
+        const totalsMarginTop = Number.parseFloat(totalsStyle.marginTop) || 0;
+        const signatureMarginTop = Number.parseFloat(signatureStyle.marginTop) || 0;
+        const naturalRowHeight = Math.max(
+          ...rows.map((row) => row.getBoundingClientRect().height)
+        );
+        const reservedAfterRows =
+          totalsTable.getBoundingClientRect().height +
+          totalsMarginTop +
+          signature.getBoundingClientRect().height +
+          signatureMarginTop +
+          8;
+        const availableRowsHeight = Math.max(
+          0,
+          pageRect.height -
+            (tbodyRect.top - pageRect.top) -
+            reservedAfterRows
+        );
+        const fittedRowHeight = Math.min(
+          48,
+          Math.max(naturalRowHeight, Math.floor(availableRowsHeight / rows.length))
+        );
+
+        rows.forEach((row) => {
+          row.style.height = `${fittedRowHeight}px`;
+        });
+      });
+    };
+
     const printNote = () => {
       if (didPrint) return;
       if (printWindow.closed) return;
       didPrint = true;
+      fitDeliveryNoteRows();
       printWindow.focus();
       printWindow.print();
     };
@@ -1045,9 +998,10 @@ export default function OrdersPage() {
                             size="sm"
                             variant="secondary"
                             className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm"
+                            title="Prepare and print separate Factory Warehouse, Dhalku, and Kalanki copies under the same DN"
                             onClick={() => printDeliveryNote(row)}
                           >
-                            🖨️ DN
+                            🖨️ Warehouse DN
                           </Button>
                         ) : null}
 

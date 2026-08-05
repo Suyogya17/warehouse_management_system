@@ -23,6 +23,7 @@ const analyticsRoutes = require("./routes/analyticsRoutes");
 const importTrackingRoutes = require("./routes/importTrackingRoutes");
 const catalogueRoutes = require("./routes/catalogueRoutes");
 const productInterestRoutes = require("./routes/productInterestRoutes");
+const chatRoutes = require("./routes/chatRoutes");
 
 const app = express();
 
@@ -77,7 +78,8 @@ app.options("*", cors(corsOptions));
 
 app.use((req, res, next) => {
   const isTrackingEvent = req.path.startsWith("/api/product-interest");
-  if (!isTrackingEvent && ["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+  const isChatRequest = req.path.startsWith("/api/chat");
+  if (!isTrackingEvent && !isChatRequest && ["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
     clearCache();
   }
 
@@ -139,6 +141,7 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/import-tracking", importTrackingRoutes);
 app.use("/api/catalogues", catalogueRoutes);
 app.use("/api/product-interest", productInterestRoutes);
+app.use("/api/chat", chatRoutes);
 
 /* ─────────────────────────────
    ROOT ENDPOINT

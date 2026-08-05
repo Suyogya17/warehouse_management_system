@@ -5,6 +5,7 @@ import { ArrowRight, ChevronLeft, ChevronRight, Package as PackageIcon, Eye, Eye
 import PageHeader from "../components/PageHeader";
 import ProductImageGallery from "../components/ProductImageGallery";
 import StatCard from "../components/StatCard";
+import VisibilitySummary from "../components/VisibilitySummary";
 
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -14,6 +15,7 @@ import { formatNumber, formatProductPriceForUser } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
 import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
 import { getRoundedCartons } from "../utils/displayStock";
+import { buildVisibilitySummary } from "../utils/visibilitySummary";
 
 const getAvailableQty = (product) =>
   Number(product?.available_qty ?? product?.display_quantity ?? product?.quantity ?? 0);
@@ -979,7 +981,10 @@ export default function DashboardPage() {
       [
         "availability",
         canManageVisibility || user.role === "MEMBER" || user.role === "USER"
-          ? api.getAvailability(token, { includeHidden: canManageVisibility || user.role === "MEMBER" })
+          ? api.getAvailability(token, {
+              include_hidden:
+                canManageVisibility || user.role === "MEMBER" ? 1 : undefined,
+            })
           : Promise.resolve({ data: [] }),
       ],
       ["permissions", canManageVisibility ? api.getPermissions(token, { compact: 1 }) : Promise.resolve({ data: [] })],
@@ -1189,6 +1194,22 @@ export default function DashboardPage() {
     state.finishedGoods,
     state.availability,
   ]);
+
+  const visibilitySummary = useMemo(
+    () =>
+      buildVisibilitySummary({
+        products: state.finishedGoods,
+        users: state.users,
+        permissions: state.permissions,
+        getAvailableQuantity: getDashboardAvailableQty,
+      }),
+    [
+      getDashboardAvailableQty,
+      state.finishedGoods,
+      state.permissions,
+      state.users,
+    ]
+  );
 
   const onHoldSeriesList = useMemo(
     () => {
@@ -1465,10 +1486,6 @@ export default function DashboardPage() {
     stockFilter,
   ]);
 
-  const countryHoldTotal = countryHoldGroups.reduce(
-    (sum, group) => sum + group.products.length,
-    0
-  );
   const selectedCountryHoldGroup =
     countryHoldGroups.find((group) => group.countryCode === selectedHoldCountry) ||
     countryHoldGroups[0] ||
@@ -1562,14 +1579,22 @@ export default function DashboardPage() {
             />
             {canViewOnHold && (
               <StatCard
-                label="On Hold Products"
-                value={formatNumber(canManageVisibility ? countryHoldTotal : onHoldProducts.length)}
+                label="No Country Access"
+                value={formatNumber(
+                  canManageVisibility
+                    ? visibilitySummary.noCountryAccessArticles
+                    : onHoldProducts.length
+                )}
                 tone="alert"
                 icon="hidden"
               />
             )}
           </>
         </div>
+      )}
+
+      {canManageVisibility && (
+        <VisibilitySummary summary={visibilitySummary} />
       )}
 
       {user.role === "USER" && advertisementsBelowStatus.length > 0 && (
@@ -1589,7 +1614,7 @@ export default function DashboardPage() {
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h2 className="text-lg font-bold text-slate-800">
-              {isAdmin ? "Displayed Products" : "Finished Goods"}&nbsp;
+              {isAdmin ? "Open in Both Countries" : "Finished Goods"}&nbsp;
               <span className="text-slate-400 font-normal text-base">({filteredProducts.length})</span>
             </h2>
             <div className="flex gap-2 flex-wrap">
@@ -1647,9 +1672,9 @@ export default function DashboardPage() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
               <EyeOff size={18} className="text-amber-500" />
-              On Hold&nbsp;
+              On Hold in Any Country&nbsp;
               <span className="text-slate-400 font-normal text-base">
-                ({canManageVisibility ? countryHoldTotal : onHoldProducts.length})
+                ({canManageVisibility ? visibilitySummary.onHoldInAnyCountryArticles : onHoldProducts.length})
               </span>
             </h2>
             <div className="flex gap-2 flex-wrap">

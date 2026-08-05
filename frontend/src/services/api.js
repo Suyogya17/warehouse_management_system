@@ -142,6 +142,20 @@ const downloadApiFile = async (path, token) => {
   }
 };
 
+const downloadProtectedFile = async (path, token) => {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: buildHeaders(token, false),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.message || "Could not download the attachment.");
+  }
+  return {
+    blob: await response.blob(),
+    contentDisposition: response.headers.get("Content-Disposition") || "",
+  };
+};
+
 export const api = {
   login: (payload) =>
     apiRequest("/auth/login", {
@@ -172,6 +186,215 @@ export const api = {
 
   getNotifications: (token) =>
     apiRequest("/notifications", { showLoader: false }, token),
+
+  getChatUnreadCount: (token) =>
+    apiRequest("/chat/unread-count", { showLoader: false }, token),
+
+  getMyChatPresence: (token) =>
+    apiRequest("/chat/presence/me", { showLoader: false }, token),
+
+  updateMyChatPresence: (enabled, token) =>
+    apiRequest(
+      "/chat/presence/me",
+      { method: "PUT", body: JSON.stringify({ enabled }), showLoader: false },
+      token
+    ),
+
+  sendChatPresenceHeartbeat: (token) =>
+    apiRequest(
+      "/chat/presence/heartbeat",
+      { method: "POST", showLoader: false },
+      token
+    ),
+
+  getMyChat: (token, afterId, changedAfter) => {
+    const query = buildQueryString({ after_id: afterId, changed_after: changedAfter });
+    return apiRequest(`/chat/me${query ? `?${query}` : ""}`, { showLoader: false }, token);
+  },
+
+  sendMyChatMessage: (message, token) =>
+    apiRequest(
+      "/chat/me/messages",
+      { method: "POST", body: JSON.stringify({ message }), showLoader: false },
+      token
+    ),
+
+  getChatReferenceOptions: (type, search, token, conversationId) => {
+    const query = buildQueryString({ type, search, conversation_id: conversationId });
+    return apiRequest(`/chat/reference-options?${query}`, { showLoader: false }, token);
+  },
+
+  sendMyChatReference: (payload, token) =>
+    apiRequest(
+      "/chat/me/references",
+      { method: "POST", body: JSON.stringify(payload), showLoader: false },
+      token
+    ),
+
+  sendAdminChatReference: (id, payload, token) =>
+    apiRequest(
+      `/chat/conversations/${id}/references`,
+      { method: "POST", body: JSON.stringify(payload), showLoader: false },
+      token
+    ),
+
+  sendMyChatAttachment: (file, message, token) => {
+    const body = new FormData();
+    body.append("file", file);
+    if (message) body.append("message", message);
+    return apiRequest(
+      "/chat/me/attachments",
+      { method: "POST", body, showLoader: false, timeoutMs: 60000 },
+      token
+    );
+  },
+
+  sendAdminChatAttachment: (id, file, message, token) => {
+    const body = new FormData();
+    body.append("file", file);
+    if (message) body.append("message", message);
+    return apiRequest(
+      `/chat/conversations/${id}/attachments`,
+      { method: "POST", body, showLoader: false, timeoutMs: 60000 },
+      token
+    );
+  },
+
+  getChatAttachment: (attachmentId, token, variant) => {
+    const query = buildQueryString({ variant });
+    return downloadProtectedFile(
+      `/chat/attachments/${attachmentId}${query ? `?${query}` : ""}`,
+      token
+    );
+  },
+
+  markMyChatRead: (token) =>
+    apiRequest("/chat/me/read", { method: "PUT", showLoader: false }, token),
+
+  getChatConversations: (token, params = {}) => {
+    const query = buildQueryString(params);
+    return apiRequest(
+      `/chat/conversations${query ? `?${query}` : ""}`,
+      { showLoader: false },
+      token
+    );
+  },
+
+  getChatUsers: (token, params = {}) => {
+    const query = buildQueryString(params);
+    return apiRequest(
+      `/chat/users${query ? `?${query}` : ""}`,
+      { showLoader: false },
+      token
+    );
+  },
+
+  startAdminChat: (userId, token) =>
+    apiRequest(
+      "/chat/conversations",
+      { method: "POST", body: JSON.stringify({ user_id: userId }), showLoader: false },
+      token
+    ),
+
+  getStaffChatUsers: (token, params = {}) => {
+    const query = buildQueryString(params);
+    return apiRequest(
+      `/chat/staff/users${query ? `?${query}` : ""}`,
+      { showLoader: false },
+      token
+    );
+  },
+
+  getStaffChatConversations: (token) =>
+    apiRequest("/chat/staff/conversations", { showLoader: false }, token),
+
+  startStaffChat: (userId, token) =>
+    apiRequest(
+      "/chat/staff/conversations",
+      { method: "POST", body: JSON.stringify({ user_id: userId }), showLoader: false },
+      token
+    ),
+
+  getStaffChatConversation: (id, token, afterId, changedAfter) => {
+    const query = buildQueryString({ after_id: afterId, changed_after: changedAfter });
+    return apiRequest(
+      `/chat/staff/conversations/${id}${query ? `?${query}` : ""}`,
+      { showLoader: false },
+      token
+    );
+  },
+
+  sendStaffChatMessage: (id, message, token) =>
+    apiRequest(
+      `/chat/staff/conversations/${id}/messages`,
+      { method: "POST", body: JSON.stringify({ message }), showLoader: false },
+      token
+    ),
+
+  sendStaffChatReference: (id, payload, token) =>
+    apiRequest(
+      `/chat/staff/conversations/${id}/references`,
+      { method: "POST", body: JSON.stringify(payload), showLoader: false },
+      token
+    ),
+
+  sendStaffChatAttachment: (id, file, message, token) => {
+    const body = new FormData();
+    body.append("file", file);
+    if (message) body.append("message", message);
+    return apiRequest(
+      `/chat/staff/conversations/${id}/attachments`,
+      { method: "POST", body, showLoader: false, timeoutMs: 60000 },
+      token
+    );
+  },
+
+  markStaffChatRead: (id, token) =>
+    apiRequest(
+      `/chat/staff/conversations/${id}/read`,
+      { method: "PUT", showLoader: false },
+      token
+    ),
+
+  getChatConversation: (id, token, afterId, changedAfter) => {
+    const query = buildQueryString({ after_id: afterId, changed_after: changedAfter });
+    return apiRequest(
+      `/chat/conversations/${id}${query ? `?${query}` : ""}`,
+      { showLoader: false },
+      token
+    );
+  },
+
+  sendAdminChatMessage: (id, message, token) =>
+    apiRequest(
+      `/chat/conversations/${id}/messages`,
+      { method: "POST", body: JSON.stringify({ message }), showLoader: false },
+      token
+    ),
+
+  editChatMessage: (messageId, message, token) =>
+    apiRequest(
+      `/chat/messages/${messageId}`,
+      { method: "PUT", body: JSON.stringify({ message }), showLoader: false },
+      token
+    ),
+
+  deleteChatMessage: (messageId, token) =>
+    apiRequest(
+      `/chat/messages/${messageId}`,
+      { method: "DELETE", showLoader: false },
+      token
+    ),
+
+  markAdminChatRead: (id, token) =>
+    apiRequest(`/chat/conversations/${id}/read`, { method: "PUT", showLoader: false }, token),
+
+  updateChatStatus: (id, status, token) =>
+    apiRequest(
+      `/chat/conversations/${id}/status`,
+      { method: "PUT", body: JSON.stringify({ status }), showLoader: false },
+      token
+    ),
 
   createNotification: (payload, token) =>
     apiRequest("/notifications", {
@@ -438,6 +661,13 @@ export const api = {
 
   assignOrderDeliveryNote: (id, token) =>
     apiRequest(`/orders/${id}/delivery-note`, { method: "PUT" }, token),
+
+  prepareOrderDeliveryNote: (id, token) =>
+    apiRequest(
+      `/orders/${id}/delivery-note/prepare`,
+      { method: "POST" },
+      token
+    ),
 
   correctOrderItems: (id, payload, token) =>
     apiRequest(

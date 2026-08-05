@@ -12,6 +12,7 @@ router.post('/', authorize('ADMIN','CO_ADMIN', 'USER'), ctrl.create);
 router.put('/:id/items', authorize('ADMIN', 'CO_ADMIN'), ctrl.correctItems);
 router.put('/:id/status', authorize('ADMIN', 'CO_ADMIN'), ctrl.updateStatus);
 router.put('/:id/delivery-note', authorize('ADMIN', 'CO_ADMIN'), ctrl.assignDeliveryNote);
+router.post('/:id/delivery-note/prepare', authorize('ADMIN', 'CO_ADMIN'), ctrl.prepareDeliveryNote);
 router.put('/:id/reopen-packing', authorize('ADMIN', 'CO_ADMIN'), ctrl.reopenPacking);
 router.post('/:id/print', authorize('ADMIN', 'CO_ADMIN'), ctrl.logPrint);
 

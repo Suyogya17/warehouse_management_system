@@ -1,5 +1,6 @@
 node_modules
 .catalogue-cache/
+private_uploads/
 # Keep environment variables out of version control
 .env
 

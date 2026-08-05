@@ -4,6 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import Button from "../components/Button";
 import Icon from "../components/Icon";
 import NotificationWatcher from "../components/NotificationWatcher";
+import ChatWidget from "../components/ChatWidget";
 import { normalizeRole } from "../utils/roles";
 import { canManageProductVisibility } from "../utils/pagePermissions";
 import { api } from "../services/api";
@@ -33,6 +34,7 @@ const navByRole = {
     { to: "/warehouses", label: "Warehouses", icon: "box" },
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/product-display", label: "Product Display", icon: "eye" },
+    { to: "/open-products", label: "Open Products", icon: "eye" },
     { to: "/product-percentages", label: "Product Percentages", icon: "users" },
     { to: "/offers", label: "Offers", icon: "finishedGoods" },
     { to: "/gallery", label: "Gallery", icon: "image" },
@@ -60,6 +62,7 @@ const navByRole = {
     { to: "/warehouses", label: "Warehouses", icon: "box" },
     { to: "/permissions", label: "Permissions", icon: "permission" },
     { to: "/product-display", label: "Product Display", icon: "eye" },
+    { to: "/open-products", label: "Open Products", icon: "eye" },
     { to: "/product-percentages", label: "Product Percentages", icon: "users" },
     { to: "/offers", label: "Offers", icon: "finishedGoods" },
     { to: "/gallery", label: "Gallery", icon: "image" },
@@ -153,6 +156,13 @@ export default function AppShell() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  const [chatUnreadCount, setChatUnreadCount] = useState(0);
+  const [presenceSettings, setPresenceSettings] = useState({
+    available: false,
+    enabled: false,
+    loading: true,
+    saving: false,
+  });
 
   const role = normalizeRole(user?.role);
   const navItems = useMemo(() => {
@@ -163,6 +173,7 @@ export default function AppShell() {
     const restrictedVisibilityRoutes = new Set([
       "/permissions",
       "/product-display",
+      "/open-products",
       "/on-hold",
     ]);
 
@@ -178,11 +189,14 @@ export default function AppShell() {
   };
 
   const pageTitle = useMemo(() => {
+    if (location.pathname === "/chat") {
+      return ["ADMIN", "CO_ADMIN"].includes(role) ? "Messages" : "Chat with Admin";
+    }
     return (
       navItems.find((item) => item.to === location.pathname)?.label ||
       "Dashboard"
     );
-  }, [location.pathname, navItems]);
+  }, [location.pathname, navItems, role]);
   const isOrdersWorkspace = location.pathname === "/orders";
 
   useEffect(() => {
@@ -233,6 +247,114 @@ export default function AppShell() {
 
     return () => {
       cancelled = true;
+    };
+  }, [token, user?.id]);
+
+  useEffect(() => {
+    if (!token || !user?.id) {
+      setPresenceSettings({ available: false, enabled: false, loading: false, saving: false });
+      return undefined;
+    }
+    let cancelled = false;
+    api
+      .getMyChatPresence(token)
+      .then((result) => {
+        if (cancelled) return;
+        setPresenceSettings({
+          available: Boolean(result.data?.available),
+          enabled: Boolean(result.data?.active_status_enabled),
+          loading: false,
+          saving: false,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPresenceSettings({ available: false, enabled: false, loading: false, saving: false });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, user?.id]);
+
+  useEffect(() => {
+    if (!token || !user?.id || !presenceSettings.available || !presenceSettings.enabled) {
+      return undefined;
+    }
+    let stopped = false;
+    let sending = false;
+    const heartbeat = async () => {
+      if (stopped || sending || document.visibilityState === "hidden") return;
+      sending = true;
+      try {
+        await api.sendChatPresenceHeartbeat(token);
+      } catch {
+        // Presence is optional and should never interrupt normal application work.
+      } finally {
+        sending = false;
+      }
+    };
+    heartbeat();
+    const interval = window.setInterval(heartbeat, 45000);
+    document.addEventListener("visibilitychange", heartbeat);
+    window.addEventListener("focus", heartbeat);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", heartbeat);
+      window.removeEventListener("focus", heartbeat);
+    };
+  }, [presenceSettings.available, presenceSettings.enabled, token, user?.id]);
+
+  const toggleActiveStatus = async () => {
+    if (!presenceSettings.available || presenceSettings.saving) return;
+    const enabled = !presenceSettings.enabled;
+    setPresenceSettings((current) => ({ ...current, enabled, saving: true }));
+    try {
+      const result = await api.updateMyChatPresence(enabled, token);
+      setPresenceSettings({
+        available: Boolean(result.data?.available),
+        enabled: Boolean(result.data?.active_status_enabled),
+        loading: false,
+        saving: false,
+      });
+    } catch {
+      setPresenceSettings((current) => ({ ...current, enabled: !enabled, saving: false }));
+    }
+  };
+
+  useEffect(() => {
+    if (!token || !user?.id) {
+      setChatUnreadCount(0);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let loading = false;
+    const refreshUnread = async () => {
+      if (loading || document.visibilityState === "hidden") return;
+      loading = true;
+      try {
+        const result = await api.getChatUnreadCount(token);
+        if (!cancelled) setChatUnreadCount(Number(result.data?.unread_count || 0));
+      } catch {
+        // The chat page shows actionable errors; a badge refresh should stay quiet.
+      } finally {
+        loading = false;
+      }
+    };
+
+    const handleRefresh = () => refreshUnread();
+    refreshUnread();
+    const interval = window.setInterval(refreshUnread, 15000);
+    window.addEventListener("nepcha:chat-unread-changed", handleRefresh);
+    document.addEventListener("visibilitychange", handleRefresh);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener("nepcha:chat-unread-changed", handleRefresh);
+      document.removeEventListener("visibilitychange", handleRefresh);
     };
   }, [token, user?.id]);
 
@@ -301,8 +423,29 @@ export default function AppShell() {
           </span>
           <p className="mt-2 text-xs font-medium text-slate-500">
             {countryNames[user?.country_code] || user?.country_code || "Nepal"}
-    
           </p>
+          <button
+            type="button"
+            onClick={toggleActiveStatus}
+            disabled={!presenceSettings.available || presenceSettings.loading || presenceSettings.saving}
+            className="mt-2 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:border-indigo-200 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            title={presenceSettings.enabled ? "Turn off active status" : "Turn on active status"}
+          >
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${
+                presenceSettings.enabled ? "bg-emerald-500" : "bg-slate-300"
+              }`}
+            />
+            {presenceSettings.loading
+              ? "Checking status…"
+              : presenceSettings.saving
+                ? "Saving…"
+                : presenceSettings.enabled
+                  ? "Active status on"
+                  : presenceSettings.available
+                    ? "Active status off"
+                    : "Active status unavailable"}
+          </button>
         </div>
 
         <button
@@ -398,6 +541,9 @@ export default function AppShell() {
       onWheelCapture={preventNumberWheelChange}
     >
       <NotificationWatcher user={user} token={token} onNotify={addNotification} />
+      {location.pathname !== "/chat" ? (
+        <ChatWidget user={user} token={token} unreadCount={chatUnreadCount} />
+      ) : null}
       <div
         className={`mx-auto flex min-h-screen w-full py-3 lg:h-screen lg:min-h-0 lg:items-stretch lg:py-4 ${
           isOrdersWorkspace

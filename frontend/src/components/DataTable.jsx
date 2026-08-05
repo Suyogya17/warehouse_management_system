@@ -30,6 +30,7 @@ export default function DataTable({
   wrapCells = false,
   responsiveScroll = false,
   serverPagination = null,
+  onExport = null,
 }) {
   const alignmentClass = (column) => {
     if (column.align === "center") return "text-center";
@@ -41,6 +42,7 @@ export default function DataTable({
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
   const [searchKey, setSearchKey] = useState("all");
+  const [exporting, setExporting] = useState(false);
   const tableContainerRef = useRef(null);
   const rowsPerPage = 10;
   const usesServerPagination = Boolean(serverPagination);
@@ -157,21 +159,31 @@ export default function DataTable({
   };
 
   const handleExport = async () => {
-    const XLSX = await import("xlsx");
-    const exportRows = filteredData.map((row, rowIndex) =>
-      columns.reduce((result, column) => {
-        result[column.label || column.key] = getExportCellValue(
-          row,
-          column,
-          rowIndex
-        );
-        return result;
-      }, {})
-    );
-    const worksheet = XLSX.utils.json_to_sheet(exportRows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Data");
-    XLSX.writeFile(workbook, `${normalizeFilename(exportFilename)}.xlsx`);
+    try {
+      setExporting(true);
+      if (typeof onExport === "function") {
+        await onExport();
+        return;
+      }
+
+      const XLSX = await import("xlsx");
+      const exportRows = filteredData.map((row, rowIndex) =>
+        columns.reduce((result, column) => {
+          result[column.label || column.key] = getExportCellValue(
+            row,
+            column,
+            rowIndex
+          );
+          return result;
+        }, {})
+      );
+      const worksheet = XLSX.utils.json_to_sheet(exportRows);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Data");
+      XLSX.writeFile(workbook, `${normalizeFilename(exportFilename)}.xlsx`);
+    } finally {
+      setExporting(false);
+    }
   };
 
   if (!rows.length) {
@@ -206,9 +218,10 @@ export default function DataTable({
           <button
             type="button"
             onClick={handleExport}
+            disabled={exporting}
             className="inline-flex h-10 w-full items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-emerald-50 hover:text-emerald-700 sm:w-auto"
           >
-            Export Excel
+            {exporting ? "Preparing Excel…" : "Export Excel"}
           </button>
         </div>
       ) : null}

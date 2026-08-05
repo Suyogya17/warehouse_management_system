@@ -37,6 +37,15 @@ const ALLOWED_STATUSES = new Set([
   "OUT_OF_STOCK",
 ]);
 const ALLOWED_MODES = new Set(["ALL", "NORMAL", "OFFERS"]);
+const ALLOWED_PRODUCT_TYPES = new Set(["ALL", "REGULAR", "OFFER"]);
+const ALLOWED_STOCK_FILTERS = new Set(["ALL", "AVAILABLE", "OUT_OF_STOCK"]);
+const ALLOWED_VISIBILITY_FILTERS = new Set(["ALL", "NP", "IN", "BOTH"]);
+const ALLOWED_ACTIVITY = new Set([
+  "ALL",
+  "SOLD_IN_PERIOD",
+  "NO_SALES_IN_PERIOD",
+  "NEVER_ORDERED",
+]);
 const ALLOWED_SORTS = new Set([
   "VELOCITY_DESC",
   "SALES_DESC",
@@ -95,6 +104,27 @@ const getProducts = async (req, res, next) => {
     )
       ? String(req.query.mode || "ALL").toUpperCase()
       : "ALL";
+    const activity = ALLOWED_ACTIVITY.has(
+      String(req.query.activity || "ALL").toUpperCase()
+    )
+      ? String(req.query.activity || "ALL").toUpperCase()
+      : "ALL";
+    const productType = ALLOWED_PRODUCT_TYPES.has(
+      String(req.query.product_type || "ALL").toUpperCase()
+    )
+      ? String(req.query.product_type || "ALL").toUpperCase()
+      : "ALL";
+    const stockFilter = ALLOWED_STOCK_FILTERS.has(
+      String(req.query.stock || "ALL").toUpperCase()
+    )
+      ? String(req.query.stock || "ALL").toUpperCase()
+      : "ALL";
+    const visibilityFilter = ALLOWED_VISIBILITY_FILTERS.has(
+      String(req.query.visibility || "ALL").toUpperCase()
+    )
+      ? String(req.query.visibility || "ALL").toUpperCase()
+      : "ALL";
+    const exportAll = String(req.query.export || "") === "1";
     const sort = ALLOWED_SORTS.has(
       String(req.query.sort || "VELOCITY_DESC").toUpperCase()
     )
@@ -112,11 +142,17 @@ const getProducts = async (req, res, next) => {
       supportsOfferSnapshots,
       supportsInterest,
       supportsSoftDelete,
+      supportsVisibility,
+      supportsCountryCode,
+      supportsPermissions,
     ] = await Promise.all([
       hasColumn("orders", "cancellation_code"),
       hasColumn("order_items", "ordered_from_offer"),
       hasTable("product_interest_events"),
       hasColumn("finished_goods", "is_deleted"),
+      hasColumn("finished_goods", "is_visible"),
+      hasColumn("users", "country_code"),
+      hasTable("user_product_permissions"),
     ]);
 
     if (mode !== "ALL" && !supportsOfferSnapshots) {
@@ -159,6 +195,32 @@ const getProducts = async (req, res, next) => {
       : `0 AS interest_count,
          0 AS interested_user_count,
          NULL AS last_interested_at,`;
+    const visibilityJoin =
+      supportsVisibility && supportsCountryCode && supportsPermissions
+        ? `LEFT JOIN (
+             SELECT country_permission.finished_good_id,
+                    MAX(CASE WHEN UPPER(COALESCE(country_user.country_code, 'NP')) = 'NP' THEN 1 ELSE 0 END) AS open_nepal,
+                    MAX(CASE WHEN UPPER(COALESCE(country_user.country_code, 'NP')) = 'IN' THEN 1 ELSE 0 END) AS open_india
+             FROM user_product_permissions country_permission
+             JOIN users country_user ON country_user.id = country_permission.user_id
+             WHERE country_permission.can_view = 1
+               AND UPPER(country_user.role) IN ('USER', 'MEMBER', 'ELDER')
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM user_product_permissions country_deny
+                 WHERE country_deny.finished_good_id = country_permission.finished_good_id
+                   AND country_deny.user_id = country_permission.user_id
+                   AND country_deny.can_view = 0
+               )
+             GROUP BY country_permission.finished_good_id
+           ) product_visibility ON product_visibility.finished_good_id = fg.id`
+        : "";
+    const visibilityColumns =
+      supportsVisibility && supportsCountryCode && supportsPermissions
+        ? `CASE WHEN fg.is_visible = 1 THEN COALESCE(product_visibility.open_nepal, 0) ELSE 0 END AS open_nepal,
+           CASE WHEN fg.is_visible = 1 THEN COALESCE(product_visibility.open_india, 0) ELSE 0 END AS open_india,`
+        : `0 AS open_nepal,
+           0 AS open_india,`;
 
     const rows = await run(
       `SELECT fg.id, fg.name, fg.article_code, fg.sole_code, fg.color, fg.size,
@@ -176,6 +238,7 @@ const getProducts = async (req, res, next) => {
               last_production.last_production_at,
               last_production.last_produced_quantity,
               ${interestColumns}
+              ${visibilityColumns}
               CASE
                 WHEN fg.offer_enabled = 1
                  AND (fg.offer_ends_at IS NULL OR fg.offer_ends_at >= CURRENT_TIMESTAMP)
@@ -224,6 +287,7 @@ const getProducts = async (req, res, next) => {
          FROM production p
          GROUP BY p.finished_good_id
        ) last_production ON last_production.finished_good_id = fg.id
+       ${visibilityJoin}
        ${interestJoin}
        WHERE ${supportsSoftDelete ? "fg.is_deleted = 0" : "1 = 1"}
        ORDER BY fg.article_code, fg.color`,
@@ -268,6 +332,8 @@ const getProducts = async (req, res, next) => {
           interest_count: number(row.interest_count),
           interested_user_count: number(row.interested_user_count),
           active_offer: number(row.active_offer),
+          open_nepal: number(row.open_nepal),
+          open_india: number(row.open_india),
           pairs_per_carton: pairsPerCarton,
           sales_velocity: velocity,
           projected_7_day_demand: Math.ceil(projectedSevenDays),
@@ -289,7 +355,28 @@ const getProducts = async (req, res, next) => {
           [row.name, row.article_code, row.sole_code, row.color, row.size]
             .map((value) => String(value || "").toLowerCase())
             .some((value) => value.includes(search));
-        return matchesSeries && matchesSearch;
+        const matchesProductType =
+          productType === "ALL" ||
+          (productType === "OFFER" && Number(row.active_offer) === 1) ||
+          (productType === "REGULAR" && Number(row.active_offer) !== 1);
+        const matchesStock =
+          stockFilter === "ALL" ||
+          (stockFilter === "AVAILABLE" && row.available_stock > 0) ||
+          (stockFilter === "OUT_OF_STOCK" && row.available_stock <= 0);
+        const matchesVisibility =
+          visibilityFilter === "ALL" ||
+          (visibilityFilter === "NP" && row.open_nepal === 1) ||
+          (visibilityFilter === "IN" && row.open_india === 1) ||
+          (visibilityFilter === "BOTH" &&
+            row.open_nepal === 1 &&
+            row.open_india === 1);
+        return (
+          matchesSeries &&
+          matchesSearch &&
+          matchesProductType &&
+          matchesStock &&
+          matchesVisibility
+        );
       });
 
     const positiveVelocities = baseProducts
@@ -337,10 +424,34 @@ const getProducts = async (req, res, next) => {
       counts[row.status] = number(counts[row.status]) + 1;
       return counts;
     }, {});
-    const filtered =
+    const statusFiltered =
       status === "ALL"
         ? classified
         : classified.filter((row) => row.status === status);
+    const activityMatchers = {
+      SOLD_IN_PERIOD: (row) => row.total_quantity > 0,
+      NO_SALES_IN_PERIOD: (row) => row.total_quantity <= 0,
+      NEVER_ORDERED: (row) => !row.last_order_at,
+    };
+    const filtered =
+      activity === "ALL"
+        ? statusFiltered
+        : statusFiltered.filter(activityMatchers[activity]);
+    const activityCounts = classified.reduce(
+      (counts, row) => {
+        if (row.total_quantity > 0) counts.sold_in_period += 1;
+        else counts.no_sales_in_period += 1;
+        if (!row.last_order_at) counts.never_ordered += 1;
+        if (row.available_stock <= 0) counts.out_of_stock += 1;
+        return counts;
+      },
+      {
+        sold_in_period: 0,
+        no_sales_in_period: 0,
+        never_ordered: 0,
+        out_of_stock: 0,
+      }
+    );
     const sorters = {
       VELOCITY_DESC: (left, right) =>
         right.sales_velocity - left.sales_velocity,
@@ -358,10 +469,12 @@ const getProducts = async (req, res, next) => {
     };
     filtered.sort(sorters[sort]);
 
-    const pageRows = filtered.slice(
-      pagination.offset,
-      pagination.offset + pagination.pageSize
-    );
+    const pageRows = exportAll
+      ? filtered
+      : filtered.slice(
+          pagination.offset,
+          pagination.offset + pagination.pageSize
+        );
     const summary = filtered.reduce(
       (totals, row) => ({
         product_count: totals.product_count + 1,
@@ -373,6 +486,11 @@ const getProducts = async (req, res, next) => {
         ordered_quantity_cartons:
           totals.ordered_quantity_cartons +
           cartonsForPairs(row.total_quantity, row.pairs_per_carton),
+        delivered_quantity:
+          totals.delivered_quantity + row.delivered_quantity,
+        delivered_quantity_cartons:
+          totals.delivered_quantity_cartons +
+          cartonsForPairs(row.delivered_quantity, row.pairs_per_carton),
         recommended_production_pairs:
           totals.recommended_production_pairs +
           row.recommended_production_pairs,
@@ -404,6 +522,8 @@ const getProducts = async (req, res, next) => {
         available_stock_cartons: 0,
         ordered_quantity: 0,
         ordered_quantity_cartons: 0,
+        delivered_quantity: 0,
+        delivered_quantity_cartons: 0,
         recommended_production_pairs: 0,
         recommended_production_cartons: 0,
         genuine_cancelled_quantity: 0,
@@ -415,6 +535,7 @@ const getProducts = async (req, res, next) => {
     [
       "available_stock_cartons",
       "ordered_quantity_cartons",
+      "delivered_quantity_cartons",
       "recommended_production_cartons",
       "genuine_cancelled_cartons",
       "duplicate_cancelled_cartons",
@@ -427,10 +548,15 @@ const getProducts = async (req, res, next) => {
       data: {
         period_days: days,
         mode,
+        activity,
+        product_type: productType,
+        stock: stockFilter,
+        visibility: visibilityFilter,
         velocity_note:
           "Velocity is non-cancelled ordered pairs divided by calendar days. Availability-aware velocity will use daily stock snapshots in the next phase.",
         summary,
         status_counts: statusCounts,
+        activity_counts: activityCounts,
         thresholds: {
           slow_velocity: slowThreshold,
           fast_velocity: fastThreshold,

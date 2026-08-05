@@ -36,6 +36,7 @@ const OutOfStockPage = lazy(() => import("./pages/OutOfStockPage"));
 const SummaryPage = lazy(() => import("./pages/SummaryPage"));
 const ProductLedgerPage = lazy(() => import("./pages/ProductLedgerPage"));
 const ProductDisplayPage = lazy(() => import("./pages/ProductDisplayPage"));
+const OpenProductsPage = lazy(() => import("./pages/OpenProductsPage"));
 const ProductPercentagePage = lazy(() => import("./pages/ProductPercentagePage"));
 const AdvertisementsPage = lazy(() => import("./pages/AdvertisementsPage"));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage"));
@@ -43,6 +44,7 @@ const ActivityLogPage = lazy(() => import("./pages/ActivityLogPage"));
 const ImportTrackingPage = lazy(() => import("./pages/ImportTrackingPage"));
 const OffersPage = lazy(() => import("./pages/OffersPage"));
 const GalleryPage = lazy(() => import("./pages/GalleryPage"));
+const ChatPage = lazy(() => import("./pages/ChatPage"));
 
 const PageFallback = () => <NepchaLoader />;
 
@@ -263,6 +265,15 @@ export default function App() {
         />
 
         <Route
+          path="chat"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER", "USER", "ELDER"]}>
+              {withSuspense(<ChatPage />)}
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
           path="permissions"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
@@ -276,6 +287,15 @@ export default function App() {
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               {withSuspense(<ProductDisplayPage />)}
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="open-products"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              {withSuspense(<OpenProductsPage />)}
             </ProtectedRoute>
           }
         />

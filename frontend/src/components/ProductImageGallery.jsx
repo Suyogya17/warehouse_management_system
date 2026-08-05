@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
 import { APP_BASE_URL } from "../services/api";
 
@@ -28,9 +29,11 @@ export default function ProductImageGallery({ variants = [], selectedVariant, on
   const hasMultipleImages = galleryVariants.length > 1;
 
   useEffect(() => {
-    document.body.style.overflow = open ? "hidden" : "";
+    if (!open) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = "";
+      document.body.style.overflow = previousOverflow;
     };
   }, [open]);
 
@@ -45,6 +48,7 @@ export default function ProductImageGallery({ variants = [], selectedVariant, on
     if (!open || !hasMultipleImages) return;
 
     const handleKeyDown = (event) => {
+      if (event.key === "Escape") setOpen(false);
       if (event.key === "ArrowLeft") goToGalleryImage(-1);
       if (event.key === "ArrowRight") goToGalleryImage(1);
     };
@@ -103,9 +107,10 @@ export default function ProductImageGallery({ variants = [], selectedVariant, on
         aria-label="Open product image gallery"
       />
 
-      {open && (
+      {open && typeof document !== "undefined"
+        ? createPortal(
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 px-3 py-20 sm:p-4"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 px-3 py-20 sm:p-4"
           style={{ touchAction: "none" }}
           onClick={() => setOpen(false)}
           onTouchStart={(event) => setTouchStartX(event.touches[0].clientX)}
@@ -211,8 +216,10 @@ export default function ProductImageGallery({ variants = [], selectedVariant, on
               </div>
             </div>
           )}
-        </div>
-      )}
+        </div>,
+        document.body
+          )
+        : null}
     </>
   );
 }

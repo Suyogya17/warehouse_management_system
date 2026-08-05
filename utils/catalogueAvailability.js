@@ -147,9 +147,29 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     if (supportsPercentageAllocations) params.push(availabilityUserId);
   }
 
+  const requestedProductId = Math.max(0, Number(options.productId) || 0);
+  const requestedSearch = String(options.search || '').trim();
+  if (requestedProductId) {
+    sql += ' AND id = ?';
+    params.push(requestedProductId);
+  } else if (requestedSearch) {
+    const pattern = `%${requestedSearch}%`;
+    sql += ` AND (
+      name LIKE ? OR article_code LIKE ? OR sole_code LIKE ? OR
+      color LIKE ? OR size LIKE ? OR CAST(id AS CHAR) = ?
+    )`;
+    params.push(pattern, pattern, pattern, pattern, pattern, requestedSearch);
+  }
+
   sql += supportsDisplayOrder
     ? ' ORDER BY (display_order IS NULL), display_order ASC, article_code, color, id'
     : ' ORDER BY article_code, color, id';
+
+  const requestedLimit = Math.min(200, Math.max(0, Number(options.limit) || 0));
+  if (requestedLimit) {
+    sql += ' LIMIT ?';
+    params.push(requestedLimit);
+  }
 
   const products = await query(sql, params);
   const productIds = products.rows.map((product) => product.id);

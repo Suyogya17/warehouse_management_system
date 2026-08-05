@@ -41,6 +41,37 @@ const formatVelocity = (value) =>
 const formatPairsAndCartons = (pairs, cartons) =>
   `${formatNumber(pairs)} pairs / ${formatNumber(cartons)} CTN`;
 
+const getSalesState = (row, days) => {
+  if (!row.last_order_at) {
+    return {
+      label: "Never ordered",
+      tone: "danger",
+      help: "No non-cancelled order exists in the full order history.",
+    };
+  }
+  if (Number(row.total_quantity || 0) <= 0) {
+    return {
+      label: `No order in ${days} days`,
+      tone: "warning",
+      help: `This product was ordered previously, but not during the selected ${days}-day period.`,
+    };
+  }
+  return {
+    label: "Ordered in period",
+    tone: "success",
+    help: `${formatNumber(row.total_quantity)} non-cancelled pairs were ordered during the selected period.`,
+  };
+};
+
+const getVisibilityLabel = (row) => {
+  const nepal = Number(row.open_nepal || 0) === 1;
+  const india = Number(row.open_india || 0) === 1;
+  if (nepal && india) return "Nepal and India";
+  if (nepal) return "Nepal only";
+  if (india) return "India only";
+  return "Not open";
+};
+
 const getStatusMeaning = (status) => {
   switch (status) {
     case "FAST":
@@ -61,6 +92,10 @@ const getStatusMeaning = (status) => {
 export default function ProductIntelligence({ token }) {
   const [days, setDays] = useState("90");
   const [mode, setMode] = useState("ALL");
+  const [productType, setProductType] = useState("ALL");
+  const [stockFilter, setStockFilter] = useState("ALL");
+  const [visibilityFilter, setVisibilityFilter] = useState("ALL");
+  const [activity, setActivity] = useState("ALL");
   const [series, setSeries] = useState("ALL");
   const [status, setStatus] = useState("ALL");
   const [sort, setSort] = useState("VELOCITY_DESC");
@@ -90,6 +125,10 @@ export default function ProductIntelligence({ token }) {
         {
           days,
           mode,
+          product_type: productType,
+          stock: stockFilter,
+          visibility: visibilityFilter,
+          activity,
           series: series === "ALL" ? undefined : series,
           status: status === "ALL" ? undefined : status,
           sort,
@@ -105,7 +144,20 @@ export default function ProductIntelligence({ token }) {
     } finally {
       setLoading(false);
     }
-  }, [days, debouncedSearch, mode, page, series, sort, status, token]);
+  }, [
+    activity,
+    days,
+    debouncedSearch,
+    mode,
+    page,
+    productType,
+    series,
+    sort,
+    stockFilter,
+    status,
+    token,
+    visibilityFilter,
+  ]);
 
   useEffect(() => {
     load();
@@ -128,6 +180,7 @@ export default function ProductIntelligence({ token }) {
   const summary = data?.summary || {};
   const rows = data?.products || [];
   const statusCounts = data?.status_counts || {};
+  const activityCounts = data?.activity_counts || {};
   const selectedSummary = productDetail?.summary || selectedProduct || {};
   const selectedPairsPerCarton = Number(
     selectedProduct?.pairs_per_carton || 0
@@ -158,6 +211,60 @@ export default function ProductIntelligence({ token }) {
     selectedProduct?.duplicate_cancelled_quantity || 0
   );
 
+  const exportProductIntelligence = async () => {
+    const result = await api.getProductIntelligence(
+      {
+        days,
+        mode,
+        product_type: productType,
+        stock: stockFilter,
+        visibility: visibilityFilter,
+        activity,
+        series: series === "ALL" ? undefined : series,
+        status: status === "ALL" ? undefined : status,
+        sort,
+        search: debouncedSearch || undefined,
+        export: 1,
+      },
+      token
+    );
+    const exportRows = (result.data?.products || []).map((row) => {
+      const salesState = getSalesState(row, days);
+      return {
+        Article: row.article_code || "",
+        Product: row.name || "",
+        Series: row.sole_code || "",
+        Color: row.color || "",
+        Size: row.size || "",
+        "Product type": Number(row.active_offer) === 1 ? "Active offer" : "Regular",
+        "Stock status": Number(row.available_stock || 0) > 0 ? "Available" : "Out of stock",
+        "Open for": getVisibilityLabel(row),
+        "Available pairs": Number(row.available_stock || 0),
+        "Available CTN": getCartons(row.available_stock, row.pairs_per_carton),
+        "Reserved pairs": Number(row.reserved_quantity || 0),
+        "Ordered pairs": Number(row.total_quantity || 0),
+        "Ordered CTN": getCartons(row.total_quantity, row.pairs_per_carton),
+        "Delivered pairs": Number(row.delivered_quantity || 0),
+        "Delivered CTN": getCartons(row.delivered_quantity, row.pairs_per_carton),
+        Orders: Number(row.order_count || 0),
+        "Velocity pairs/day": Number(row.sales_velocity || 0),
+        "Last order": formatDate(row.last_order_at),
+        "Last production": formatDate(row.last_production_at),
+        "Order history": salesState.label,
+        Status: String(row.status || "").replace(/_/g, " "),
+        "Why / evidence": row.reason || "",
+      };
+    });
+    const XLSX = await import("xlsx");
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Product Intelligence");
+    XLSX.writeFile(
+      workbook,
+      `product-intelligence-${days}-days-${stockFilter.toLowerCase()}.xlsx`
+    );
+  };
+
   return (
     <div className="space-y-4">
       <SectionCard
@@ -175,7 +282,7 @@ export default function ProductIntelligence({ token }) {
           </Button>
         }
       >
-        <div className="grid gap-3 border-b border-slate-200 p-4 md:grid-cols-2 xl:grid-cols-6">
+        <div className="grid gap-3 border-b border-slate-200 p-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
@@ -204,9 +311,21 @@ export default function ProductIntelligence({ token }) {
             }}
             className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold"
           >
-            <option value="ALL">All orders</option>
-            <option value="NORMAL">Normal orders</option>
-            <option value="OFFERS">Offer orders</option>
+            <option value="ALL">All order sources</option>
+            <option value="NORMAL">Our Products orders</option>
+            <option value="OFFERS">Offer page orders</option>
+          </select>
+          <select
+            value={productType}
+            onChange={(event) => {
+              setProductType(event.target.value);
+              setPage(1);
+            }}
+            className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold"
+          >
+            <option value="ALL">All products</option>
+            <option value="REGULAR">Regular products</option>
+            <option value="OFFER">Active offer products</option>
           </select>
           <select
             value={series}
@@ -238,6 +357,78 @@ export default function ProductIntelligence({ token }) {
             <option value="DEAD_STOCK_RISK">Dead-stock risk</option>
             <option value="OUT_OF_STOCK">Out of stock</option>
           </select>
+          <select
+            value={activity}
+            onChange={(event) => {
+              setActivity(event.target.value);
+              setPage(1);
+            }}
+            className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold"
+          >
+            <option value="ALL">All sales activity</option>
+            <option value="SOLD_IN_PERIOD">Ordered in selected period</option>
+            <option value="NO_SALES_IN_PERIOD">Not ordered in selected period</option>
+            <option value="NEVER_ORDERED">Never ordered ever</option>
+          </select>
+          <select
+            value={stockFilter}
+            onChange={(event) => {
+              setStockFilter(event.target.value);
+              setPage(1);
+            }}
+            className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold"
+          >
+            <option value="ALL">All stock</option>
+            <option value="AVAILABLE">Available products</option>
+            <option value="OUT_OF_STOCK">Out-of-stock products</option>
+          </select>
+          <select
+            value={visibilityFilter}
+            onChange={(event) => {
+              setVisibilityFilter(event.target.value);
+              setPage(1);
+            }}
+            className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold"
+          >
+            <option value="ALL">All country access</option>
+            <option value="NP">Open in Nepal</option>
+            <option value="IN">Open in India</option>
+            <option value="BOTH">Open in both countries</option>
+          </select>
+        </div>
+
+        <div className="grid gap-3 border-b border-slate-100 bg-slate-50/50 p-4 sm:grid-cols-2 xl:grid-cols-4">
+          {[
+            ["Ordered in period", activityCounts.sold_in_period, "activity", "SOLD_IN_PERIOD", "Products with non-cancelled orders during the selected period."],
+            ["Not ordered in period", activityCounts.no_sales_in_period, "activity", "NO_SALES_IN_PERIOD", `No non-cancelled orders during the selected ${days} days.`],
+            ["Never ordered ever", activityCounts.never_ordered, "activity", "NEVER_ORDERED", "No non-cancelled order in the complete order history."],
+            ["Zero available stock", activityCounts.out_of_stock, "stock", "OUT_OF_STOCK", "Physical stock minus reserved stock is zero."],
+          ].map(([label, value, filterType, filterValue, help]) => (
+            <button
+              key={label}
+              type="button"
+              onClick={() => {
+                if (filterType === "stock") setStockFilter(filterValue);
+                else setActivity(filterValue);
+                setPage(1);
+              }}
+              className={`rounded-xl border px-4 py-3 text-left transition ${
+                (filterType === "stock" ? stockFilter : activity) === filterValue
+                  ? "border-indigo-400 bg-indigo-50 ring-4 ring-indigo-100"
+                  : "border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/60"
+              }`}
+            >
+              <span className="text-xs font-semibold uppercase text-slate-500">
+                {label}
+              </span>
+              <strong className="mt-1 block text-xl text-slate-950">
+                {formatNumber(value)}
+              </strong>
+              <span className="mt-1 block text-[11px] leading-snug text-slate-500">
+                {help}
+              </span>
+            </button>
+          ))}
         </div>
 
         <div className="grid gap-3 border-b border-slate-100 p-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -270,7 +461,7 @@ export default function ProductIntelligence({ token }) {
         </div>
       </SectionCard>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
         <StatCard
           label="Products"
           value={formatNumber(summary.product_count)}
@@ -289,6 +480,15 @@ export default function ProductIntelligence({ token }) {
           value={formatPairsAndCartons(
             summary.ordered_quantity,
             summary.ordered_quantity_cartons
+          )}
+          tone="success"
+          icon="orders"
+        />
+        <StatCard
+          label={`Delivered sales · ${days} days`}
+          value={formatPairsAndCartons(
+            summary.delivered_quantity,
+            summary.delivered_quantity_cartons
           )}
           tone="success"
           icon="orders"
@@ -356,7 +556,9 @@ export default function ProductIntelligence({ token }) {
         ) : (
           <DataTable
             rows={rows}
-            showToolbar={false}
+            showToolbar
+            exportFilename="product-intelligence"
+            onExport={exportProductIntelligence}
             wrapCells
             responsiveScroll
             emptyTitle="No matching products"
@@ -400,7 +602,7 @@ export default function ProductIntelligence({ token }) {
               },
               {
                 key: "total_quantity",
-                label: "Ordered",
+                label: `Ordered · ${days} days`,
                 render: (row) => (
                   <div>
                     <strong>{formatNumber(row.total_quantity)} pairs</strong>
@@ -412,6 +614,38 @@ export default function ProductIntelligence({ token }) {
                     </div>
                   </div>
                 ),
+              },
+              {
+                key: "sales_state",
+                label: "Order history",
+                render: (row) => {
+                  const salesState = getSalesState(row, days);
+                  return (
+                    <div className="space-y-1">
+                      <StatusBadge tone={salesState.tone}>
+                        {salesState.label}
+                      </StatusBadge>
+                      <div className="max-w-xs text-xs text-slate-500">
+                        {salesState.help}
+                      </div>
+                    </div>
+                  );
+                },
+              },
+              {
+                key: "country_visibility",
+                label: "Open for",
+                render: (row) => {
+                  const label = getVisibilityLabel(row);
+                  return (
+                    <StatusBadge
+                      tone={label === "Not open" ? "neutral" : "info"}
+                    >
+                      {label}
+                    </StatusBadge>
+                  );
+                },
+                exportValue: getVisibilityLabel,
               },
               {
                 key: "sales_velocity",
