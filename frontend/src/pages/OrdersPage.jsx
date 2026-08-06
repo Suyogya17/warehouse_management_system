@@ -485,10 +485,9 @@ export default function OrdersPage() {
         left.displayOrder - right.displayOrder ||
         left.name.localeCompare(right.name)
     );
-    // The enlarged six-column DN layout fits up to 22 normal product rows on one A4
-    // copy. Browser print overflow is controlled by the fixed print-page size
-    // below, so a warehouse is not split early while space is still available.
-    const rowsPerPage = 22;
+    // Each actual warehouse starts on its own paper. A warehouse only continues
+    // onto another paper when its own item count cannot fit safely on one A4 page.
+    const rowsPerPage = 25;
     const pages = groups.flatMap((group) => {
       const chunks = [];
       for (let index = 0; index < group.rows.length; index += rowsPerPage) {
@@ -529,13 +528,16 @@ export default function OrdersPage() {
           <section class="print-page${pageIndex === pages.length - 1 ? " last" : ""}">
             <div class="page-indicator">Page ${pageIndex + 1} of ${pages.length}</div>
             <div class="header">DELIVERY NOTE</div>
-            <div class="warehouse-title">${escapeHtml(deliveryNoteNumber)} · ${escapeHtml(page.name)}</div>
+            <div class="warehouse-title">
+              ${escapeHtml(deliveryNoteNumber)} · ${escapeHtml(page.name)} · Warehouse Total: ${formatPrintNumber(page.groupCartons)} CTN
+            </div>
             <table class="top-grid">
               <tr>
                 <td width="52%">
                   <strong>Order ID:</strong> #${escapeHtml(preparedOrder.id)}<br/>
                   <strong>Delivery Note No:</strong> ${escapeHtml(deliveryNoteNumber)}<br/>
-                  <strong>Warehouse Group:</strong> ${escapeHtml(page.name)}<br/>
+                  <strong>Warehouse:</strong> ${escapeHtml(page.name)}<br/>
+                  <strong>Created By:</strong> ${escapeHtml(preparedOrder.created_by_name || "-")}<br/>
                   <strong>Printed:</strong> ${escapeHtml(englishDate)} · ${escapeHtml(nepaliDate)} · ${escapeHtml(currentTime)}<br/>
                   <strong>Printed By:</strong> ${escapeHtml(user?.name || "User")}
                 </td>
@@ -998,7 +1000,7 @@ export default function OrdersPage() {
                             size="sm"
                             variant="secondary"
                             className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm"
-                            title="Prepare and print separate Factory Warehouse, Dhalku, and Kalanki copies under the same DN"
+                            title="Prepare one separate paper for each warehouse under the same DN"
                             onClick={() => printDeliveryNote(row)}
                           >
                             🖨️ Warehouse DN

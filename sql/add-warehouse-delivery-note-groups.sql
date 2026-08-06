@@ -1,4 +1,4 @@
-  -- Named warehouse groups and planned allocations for grouped delivery notes.
+  -- Individual warehouse print identities and planned delivery-note allocations.
   -- This migration is safe to run more than once.
 
   CREATE TABLE IF NOT EXISTS warehouse_print_groups (
@@ -23,11 +23,19 @@
       FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
   );
 
+  -- Every operational warehouse prints on its own paper under the same DN.
+  UPDATE warehouse_print_groups
+  SET is_active = 0
+  WHERE code IN ('FACTORY_WAREHOUSE', 'DHALKU', 'KALANKI');
+
   INSERT INTO warehouse_print_groups (code, name, display_order)
   VALUES
-    ('FACTORY_WAREHOUSE', 'Factory Warehouse', 1),
-    ('DHALKU', 'Dhalku', 2),
-    ('KALANKI', 'Kalanki', 3)
+    ('WAREHOUSE_1', 'Warehouse 1', 1),
+    ('WAREHOUSE_2', 'Warehouse 2', 2),
+    ('WAREHOUSE_3', 'Warehouse 3', 3),
+    ('WAREHOUSE_4', 'Dhalku (4)', 4),
+    ('WAREHOUSE_5', 'Kalanki (5)', 5),
+    ('WAREHOUSE_6', 'Dhalku (6)', 6)
   ON DUPLICATE KEY UPDATE
     name = VALUES(name),
     display_order = VALUES(display_order),
@@ -40,33 +48,59 @@
   FROM warehouse_print_group_members members
   JOIN warehouse_print_groups print_group
     ON print_group.id = members.print_group_id
-  WHERE print_group.code IN ('FACTORY_WAREHOUSE', 'DHALKU', 'KALANKI');
+  WHERE print_group.code IN (
+    'FACTORY_WAREHOUSE', 'DHALKU', 'KALANKI',
+    'WAREHOUSE_1', 'WAREHOUSE_2', 'WAREHOUSE_3',
+    'WAREHOUSE_4', 'WAREHOUSE_5', 'WAREHOUSE_6'
+  );
 
-  -- Warehouses 1, 2 and 3 print together as Factory Warehouse.
+  -- Warehouses 1 through 6 each receive their own print identity.
   INSERT INTO warehouse_print_group_members (print_group_id, warehouse_id)
   SELECT print_group.id, warehouse.id
   FROM warehouse_print_groups print_group
   JOIN warehouses warehouse
-    ON LOWER(warehouse.name) REGEXP '^(w|warehouse)[ _-]*[123]([^0-9]|$)'
-  WHERE print_group.code = 'FACTORY_WAREHOUSE'
+    ON LOWER(warehouse.name) REGEXP '^(w|warehouse)[ _>-]*1([^0-9]|$)'
+  WHERE print_group.code = 'WAREHOUSE_1'
   ON DUPLICATE KEY UPDATE print_group_id = VALUES(print_group_id);
 
-  -- Warehouses 4 and 6 print together as Dhalku.
   INSERT INTO warehouse_print_group_members (print_group_id, warehouse_id)
   SELECT print_group.id, warehouse.id
   FROM warehouse_print_groups print_group
   JOIN warehouses warehouse
-    ON LOWER(warehouse.name) REGEXP '^(w|warehouse)[ _-]*[46]([^0-9]|$)'
-  WHERE print_group.code = 'DHALKU'
+    ON LOWER(warehouse.name) REGEXP '^(w|warehouse)[ _>-]*2([^0-9]|$)'
+  WHERE print_group.code = 'WAREHOUSE_2'
   ON DUPLICATE KEY UPDATE print_group_id = VALUES(print_group_id);
 
-  -- Warehouse 5 prints as Kalanki.
   INSERT INTO warehouse_print_group_members (print_group_id, warehouse_id)
   SELECT print_group.id, warehouse.id
   FROM warehouse_print_groups print_group
   JOIN warehouses warehouse
-    ON LOWER(warehouse.name) REGEXP '^(w|warehouse)[ _-]*5([^0-9]|$)'
-  WHERE print_group.code = 'KALANKI'
+    ON LOWER(warehouse.name) REGEXP '^(w|warehouse)[ _>-]*3([^0-9]|$)'
+  WHERE print_group.code = 'WAREHOUSE_3'
+  ON DUPLICATE KEY UPDATE print_group_id = VALUES(print_group_id);
+
+  INSERT INTO warehouse_print_group_members (print_group_id, warehouse_id)
+  SELECT print_group.id, warehouse.id
+  FROM warehouse_print_groups print_group
+  JOIN warehouses warehouse
+    ON LOWER(warehouse.name) REGEXP '^(w|warehouse)[ _>-]*4([^0-9]|$)'
+  WHERE print_group.code = 'WAREHOUSE_4'
+  ON DUPLICATE KEY UPDATE print_group_id = VALUES(print_group_id);
+
+  INSERT INTO warehouse_print_group_members (print_group_id, warehouse_id)
+  SELECT print_group.id, warehouse.id
+  FROM warehouse_print_groups print_group
+  JOIN warehouses warehouse
+    ON LOWER(warehouse.name) REGEXP '^(w|warehouse)[ _>-]*5([^0-9]|$)'
+  WHERE print_group.code = 'WAREHOUSE_5'
+  ON DUPLICATE KEY UPDATE print_group_id = VALUES(print_group_id);
+
+  INSERT INTO warehouse_print_group_members (print_group_id, warehouse_id)
+  SELECT print_group.id, warehouse.id
+  FROM warehouse_print_groups print_group
+  JOIN warehouses warehouse
+    ON LOWER(warehouse.name) REGEXP '^(w|warehouse)[ _>-]*6([^0-9]|$)'
+  WHERE print_group.code = 'WAREHOUSE_6'
   ON DUPLICATE KEY UPDATE print_group_id = VALUES(print_group_id);
 
   SET @add_allocation_status = IF(

@@ -2256,10 +2256,10 @@ const loadDeliveryNoteOrder = async (client, orderId, capabilities) => {
     );
     const normalized = {
       ...allocation,
-      print_group_code_snapshot:
-        allocation.print_group_code_snapshot || printGroup.code,
-      print_group_name_snapshot:
-        allocation.print_group_name_snapshot || printGroup.name,
+      // Always print by the current individual warehouse identity. Older
+      // allocations may still contain the former combined group snapshots.
+      print_group_code_snapshot: printGroup.code,
+      print_group_name_snapshot: printGroup.name,
       print_group_display_order: printGroup.display_order,
     };
     const itemAllocations =
