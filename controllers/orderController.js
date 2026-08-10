@@ -59,6 +59,11 @@ const CANCELLATION_CODES = new Set([
   'DELIVERY_ISSUE',
   'OTHER',
 ]);
+const WAREHOUSE_REMAINDER_ACTIONS = new Set([
+  'DELIVER_LATER',
+  'NOT_FOUND',
+  'FOUND_OTHER_WAREHOUSE',
+]);
 const DUPLICATE_ORDER_WINDOW_HOURS = Math.max(
   1,
   Math.min(168, Number.parseInt(process.env.DUPLICATE_ORDER_WINDOW_HOURS, 10) || 72)
@@ -68,15 +73,36 @@ const FISCAL_DELIVERY_NOTE_START_YEAR = 2083;
 const ORDER_CORRECTION_CO_ADMINS = new Set([
   'suyogya shrestha',
   'suyogya shresth',
-  'suvarna shrestha',
   'hirdaya shrestha',
+]);
+const ORDER_CORRECTION_CO_ADMIN_EMAILS = new Set([
+  'kingarna@nepcha.com',
 ]);
 
 const canCorrectOrders = (user = {}) =>
   String(user.role || '').toUpperCase() === 'CO_ADMIN' &&
-  ORDER_CORRECTION_CO_ADMINS.has(
+  (ORDER_CORRECTION_CO_ADMINS.has(
     String(user.name || '').trim().replace(/\s+/g, ' ').toLowerCase()
-  );
+  ) ||
+    ORDER_CORRECTION_CO_ADMIN_EMAILS.has(
+      String(user.email || '').trim().toLowerCase()
+    ));
+
+const canCorrectWarehouseSource = (user = {}) =>
+  String(user.role || '').toUpperCase() === 'ADMIN' || canCorrectOrders(user);
+
+const getWarehouseSlipNumber = (
+  deliveryNoteNumber,
+  printGroupCode,
+  warehouseId
+) => {
+  const warehouseNumber = String(printGroupCode || '').match(
+    /^WAREHOUSE_(\d+)$/
+  )?.[1];
+  const suffix = warehouseNumber || Number(warehouseId) || 'UNASSIGNED';
+
+  return `${deliveryNoteNumber || 'DN-PENDING'}-W${suffix}`;
+};
 
 const getProductDisplayQuantity = (product) => {
   const value = Number(product?.display_quantity);
@@ -263,14 +289,160 @@ const getNextFiscalDeliveryNoteNumber = async (client, date = new Date()) => {
   return `DN-${nextNumber}`;
 };
 
+const getNextSequencedDeliveryNoteNumber = async (client, date = new Date()) => {
+  const fiscalYear = getNepaliFiscalMeta(date).bs_fiscal_year;
+  const supportsOrderFiscalYear = await hasColumn('orders', 'bs_fiscal_year');
+  const sequenceKey = supportsOrderFiscalYear
+    ? `FY:${fiscalYear}`
+    : 'GLOBAL';
+  const orderResult = await client.query(
+    `SELECT COALESCE(MAX(CAST(SUBSTRING(delivery_note_number, 4) AS UNSIGNED)), 0) AS last_number
+     FROM orders
+     WHERE delivery_note_number REGEXP '^DN-[0-9]+$'
+       ${supportsOrderFiscalYear ? 'AND bs_fiscal_year = ?' : ''}`,
+    supportsOrderFiscalYear ? [fiscalYear] : []
+  );
+  const warehouseResult = await client.query(
+    `SELECT COALESCE(MAX(CAST(SUBSTRING(delivery_note_number, 4) AS UNSIGNED)), 0) AS last_number
+     FROM order_warehouse_delivery_notes
+     WHERE delivery_note_number REGEXP '^DN-[0-9]+$'
+       ${supportsOrderFiscalYear ? 'AND bs_fiscal_year = ?' : ''}`,
+    supportsOrderFiscalYear ? [fiscalYear] : []
+  );
+  const existingMaximum = Math.max(
+    Number(orderResult.rows[0]?.last_number || 0),
+    Number(warehouseResult.rows[0]?.last_number || 0)
+  );
+
+  await client.query(
+    `INSERT INTO delivery_note_sequences (sequence_key, last_number)
+     VALUES (?, ?)
+     ON DUPLICATE KEY UPDATE
+       last_number = GREATEST(last_number, VALUES(last_number))`,
+    [sequenceKey, existingMaximum]
+  );
+  const sequenceResult = await client.query(
+    `SELECT last_number
+     FROM delivery_note_sequences
+     WHERE sequence_key = ?
+     FOR UPDATE`,
+    [sequenceKey]
+  );
+  const nextNumber = Number(sequenceResult.rows[0]?.last_number || 0) + 1;
+  await client.query(
+    `UPDATE delivery_note_sequences
+     SET last_number = ?
+     WHERE sequence_key = ?`,
+    [nextNumber, sequenceKey]
+  );
+
+  return `DN-${String(nextNumber).padStart(4, '0')}`;
+};
+
 const getNextDeliveryNoteNumber = async (client, date = new Date()) =>
-  shouldUseFiscalDeliveryNotes(date)
-    ? getNextFiscalDeliveryNoteNumber(client, date)
-    : getNextLegacyDeliveryNoteNumber(client);
+  (await hasTable('delivery_note_sequences')) &&
+  (await hasTable('order_warehouse_delivery_notes'))
+    ? getNextSequencedDeliveryNoteNumber(client, date)
+    : shouldUseFiscalDeliveryNotes(date)
+      ? getNextFiscalDeliveryNoteNumber(client, date)
+      : getNextLegacyDeliveryNoteNumber(client);
+
+const getDeliveryNoteReclaimDecision = async (client, order) => {
+  const deliveryNoteNumber = String(order.delivery_note_number || '').trim();
+  if (!/^DN-\d+$/.test(deliveryNoteNumber)) {
+    return {
+      reclaim: false,
+      reason: deliveryNoteNumber
+        ? 'The delivery-note format is not eligible for automatic reuse.'
+        : 'This order has no delivery-note number to reclaim.',
+    };
+  }
+
+  const supportsPermanentPrintState =
+    Object.prototype.hasOwnProperty.call(order, 'delivery_note_printed_at') &&
+    Object.prototype.hasOwnProperty.call(order, 'delivery_note_print_count');
+  if (!supportsPermanentPrintState) {
+    return {
+      reclaim: false,
+      reason:
+        'Safe DN reuse requires sql/add-delivery-note-print-state.sql.',
+    };
+  }
+
+  if (
+    Number(order.delivery_note_print_count || 0) > 0 ||
+    order.delivery_note_printed_at
+  ) {
+    return {
+      reclaim: false,
+      reason: 'The delivery note has already been printed.',
+    };
+  }
+
+  const historyResult = await client.query(
+    `SELECT action
+     FROM audit_logs
+     WHERE record_id = ?
+       AND table_name IN ('order', 'orders')
+       AND UPPER(action) IN ('PREPARED', 'PRINTED', 'PACKED', 'DELIVERED')
+     LIMIT 1`,
+    [order.id]
+  );
+  if (historyResult.rows.length) {
+    const action = String(historyResult.rows[0].action || '').toUpperCase();
+    return {
+      reclaim: false,
+      reason:
+        action === 'PRINTED'
+          ? 'The delivery note has already been printed.'
+          : action === 'PREPARED'
+            ? 'Warehouse delivery slips have already been prepared.'
+            : `The order has previously reached ${action.toLowerCase()} status.`,
+    };
+  }
+
+  const orderDate = order.created_at ? new Date(order.created_at) : new Date();
+  const supportsFiscalYear = Object.prototype.hasOwnProperty.call(
+    order,
+    'bs_fiscal_year'
+  );
+  const fiscalYear =
+    shouldUseFiscalDeliveryNotes(orderDate) && supportsFiscalYear
+      ? order.bs_fiscal_year || getNepaliFiscalMeta(orderDate).bs_fiscal_year
+      : null;
+  const latestResult = await client.query(
+    `SELECT id, delivery_note_number
+     FROM orders
+     WHERE delivery_note_number REGEXP '^DN-[0-9]+$'
+       ${fiscalYear ? 'AND bs_fiscal_year = ?' : ''}
+     ORDER BY CAST(SUBSTRING(delivery_note_number, 4) AS UNSIGNED) DESC
+     LIMIT 1
+     FOR UPDATE`,
+    fiscalYear ? [fiscalYear] : []
+  );
+  const latest = latestResult.rows[0];
+  if (
+    !latest ||
+    Number(latest.id) !== Number(order.id) ||
+    String(latest.delivery_note_number) !== deliveryNoteNumber
+  ) {
+    return {
+      reclaim: false,
+      reason: 'A newer delivery-note number already exists.',
+    };
+  }
+
+  return { reclaim: true, reason: 'Latest unused delivery note reclaimed.' };
+};
 
 // ─── RESERVED STOCK ───────────────────────────────
 const getReservedByProduct = async (executor, productIds = []) => {
   if (!productIds.length) return new Map();
+
+  const supportsWarehouseDelivery = await hasColumn(
+    'order_item_warehouse_allocations',
+    'allocation_status'
+  );
 
   const { clause: statusClause, params: statusParams } =
     buildInClause(ACTIVE_RESERVATION_STATUSES);
@@ -279,7 +451,19 @@ const getReservedByProduct = async (executor, productIds = []) => {
 
   const result = await executor(
     `SELECT oi.finished_good_id,
-            COALESCE(SUM(oi.qty_ordered), 0) AS reserved_qty
+            COALESCE(SUM(${
+              supportsWarehouseDelivery
+                ? `GREATEST(
+                    0,
+                    oi.qty_ordered - COALESCE((
+                      SELECT SUM(delivered_allocation.quantity)
+                      FROM order_item_warehouse_allocations delivered_allocation
+                      WHERE delivered_allocation.order_item_id = oi.id
+                        AND delivered_allocation.allocation_status = 'DEDUCTED'
+                    ), 0)
+                  )`
+                : 'oi.qty_ordered'
+            }), 0) AS reserved_qty
      FROM order_items oi
      JOIN orders o ON o.id = oi.order_id
      WHERE o.status IN ${statusClause}
@@ -300,6 +484,13 @@ const getWarehouseAllocationCapabilities = async () => {
     supportsGroupCode,
     supportsGroupName,
     supportsConfiguredGroups,
+    supportsDeliveredBy,
+    supportsDeliveredAt,
+    supportsVerificationStatus,
+    supportsVerifiedQuantity,
+    supportsVerificationNote,
+    supportsVerifiedBy,
+    supportsVerifiedAt,
   ] = await Promise.all([
     hasColumn('order_item_warehouse_allocations', 'allocation_status'),
     hasColumn('order_item_warehouse_allocations', 'packed_quantity'),
@@ -315,6 +506,13 @@ const getWarehouseAllocationCapabilities = async () => {
       hasTable('warehouse_print_groups'),
       hasTable('warehouse_print_group_members'),
     ]).then((values) => values.every(Boolean)),
+    hasColumn('order_item_warehouse_allocations', 'delivered_by'),
+    hasColumn('order_item_warehouse_allocations', 'delivered_at'),
+    hasColumn('order_item_warehouse_allocations', 'verification_status'),
+    hasColumn('order_item_warehouse_allocations', 'verified_quantity'),
+    hasColumn('order_item_warehouse_allocations', 'verification_note'),
+    hasColumn('order_item_warehouse_allocations', 'verified_by'),
+    hasColumn('order_item_warehouse_allocations', 'verified_at'),
   ]);
 
   return {
@@ -323,6 +521,211 @@ const getWarehouseAllocationCapabilities = async () => {
     supportsGroupCode,
     supportsGroupName,
     supportsConfiguredGroups,
+    supportsDeliveredBy,
+    supportsDeliveredAt,
+    supportsVerification:
+      supportsVerificationStatus &&
+      supportsVerifiedQuantity &&
+      supportsVerificationNote &&
+      supportsVerifiedBy &&
+      supportsVerifiedAt,
+  };
+};
+
+const buildWarehouseFulfillments = (
+  order,
+  items = [],
+  configuredGroups = new Map(),
+  warehouseDeliveryNotes = []
+) => {
+  const groups = new Map();
+
+  warehouseDeliveryNotes.forEach((note) => {
+    const warehouseId = Number(note.warehouse_id);
+    const printGroup = resolveWarehousePrintGroup(
+      warehouseId,
+      note.warehouse_name,
+      configuredGroups
+    );
+    groups.set(`warehouse:${warehouseId}`, {
+      code: printGroup.code,
+      name: note.warehouse_name || printGroup.name,
+      display_order: Number(printGroup.display_order || 999),
+      warehouse_id: warehouseId,
+      delivery_note_number: note.delivery_note_number,
+      delivery_note_status: String(note.status || 'ACTIVE').toUpperCase(),
+      reassigned_to_delivery_note_numbers: String(
+        note.reassigned_to_delivery_note_numbers || ''
+      )
+        .split(',')
+        .map((number) => number.trim())
+        .filter(Boolean),
+      pairs: 0,
+      cartons: 0,
+      delivered_pairs: 0,
+      pending_pairs: 0,
+      items: [],
+      allocation_statuses: [],
+      fully_packed: true,
+      delivered_by_name: null,
+      delivered_at: null,
+    });
+  });
+
+  items.forEach((item) => {
+    (item.warehouse_allocations || []).forEach((allocation) => {
+      const printGroup = resolveWarehousePrintGroup(
+        allocation.warehouse_id,
+        allocation.warehouse_name,
+        configuredGroups
+      );
+      const groupKey = `warehouse:${Number(allocation.warehouse_id)}`;
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, {
+          code: printGroup.code,
+          name: printGroup.name,
+          display_order: Number(printGroup.display_order || 999),
+          warehouse_id: Number(allocation.warehouse_id) || null,
+          delivery_note_number: null,
+          delivery_note_status: 'ACTIVE',
+          reassigned_to_delivery_note_numbers: [],
+          pairs: 0,
+          cartons: 0,
+          delivered_pairs: 0,
+          pending_pairs: 0,
+          items: [],
+          allocation_statuses: [],
+          fully_packed: true,
+          delivered_by_name: allocation.delivered_by_name || null,
+          delivered_at: allocation.delivered_at || null,
+        });
+      }
+
+      const group = groups.get(groupKey);
+      const quantity = Number(allocation.quantity || 0);
+      const pairsPerCarton = Number(item.inner_boxes_per_outer_box || 0);
+      const allocationStatus = String(
+        allocation.allocation_status || 'DEDUCTED'
+      ).toUpperCase();
+
+      group.pairs += quantity;
+      group.cartons += pairsPerCarton > 0 ? quantity / pairsPerCarton : 0;
+      if (allocationStatus === 'DEDUCTED') {
+        group.delivered_pairs += quantity;
+      } else if (allocationStatus === 'PLANNED') {
+        group.pending_pairs += quantity;
+      }
+      group.items.push({
+        allocation_id: Number(allocation.id),
+        order_item_id: Number(item.id),
+        finished_good_id: Number(item.finished_good_id),
+        product_name: item.product_name,
+        article_code: item.article_code || null,
+        color: item.color || null,
+        size: item.size || null,
+        unit: item.unit || 'pairs',
+        pairs_per_carton: pairsPerCarton,
+        quantity,
+        allocation_status: allocationStatus,
+        verification_status: allocation.verification_status || null,
+        verified_quantity:
+          allocation.verified_quantity === null ||
+          allocation.verified_quantity === undefined
+            ? null
+            : Number(allocation.verified_quantity),
+        verification_note: allocation.verification_note || null,
+        verified_at: allocation.verified_at || null,
+      });
+      group.allocation_statuses.push(allocationStatus);
+      group.fully_packed =
+        group.fully_packed &&
+        (allocationStatus === 'DEDUCTED' ||
+          Number(allocation.packed_quantity || 0) + 0.001 >= quantity);
+      if (allocation.delivered_by_name) {
+        group.delivered_by_name = allocation.delivered_by_name;
+      }
+      if (
+        allocation.delivered_at &&
+        (!group.delivered_at ||
+          new Date(allocation.delivered_at) > new Date(group.delivered_at))
+      ) {
+        group.delivered_at = allocation.delivered_at;
+      }
+    });
+  });
+
+  const fulfillments = [...groups.values()]
+    .sort((left, right) => left.display_order - right.display_order)
+    .map((group) => {
+      const inactive = ['VOID', 'REASSIGNED'].includes(
+        group.delivery_note_status
+      );
+      const delivered = !inactive && group.allocation_statuses.length > 0 && group.allocation_statuses.every(
+        (status) => status === 'DEDUCTED'
+      );
+      const partiallyDelivered =
+        !delivered &&
+        group.allocation_statuses.some((status) => status === 'DEDUCTED');
+
+      return {
+        code: group.code,
+        name: group.name,
+        display_order: group.display_order,
+        warehouse_id: group.warehouse_id,
+        delivery_note_number: group.delivery_note_number || null,
+        warehouse_slip_number:
+          group.delivery_note_number ||
+          getWarehouseSlipNumber(
+            order.delivery_note_number,
+            group.code,
+            group.warehouse_id
+          ),
+        status: inactive
+          ? group.delivery_note_status
+          : delivered
+          ? 'DELIVERED'
+          : partiallyDelivered
+            ? 'PARTIALLY DELIVERED'
+          : group.allocation_statuses.length === 0
+            ? 'PLANNED'
+          : group.fully_packed
+            ? 'PACKED'
+            : 'PLANNED',
+        pairs: group.pairs,
+        cartons: group.cartons,
+        delivered_pairs: group.delivered_pairs,
+        pending_pairs: group.pending_pairs,
+        reassigned_to_delivery_note_numbers:
+          group.reassigned_to_delivery_note_numbers || [],
+        items: group.items,
+        delivered_by_name: delivered ? group.delivered_by_name : null,
+        delivered_at: delivered ? group.delivered_at : null,
+      };
+    });
+
+  const deliveredCount = fulfillments.filter(
+    (fulfillment) => fulfillment.status === 'DELIVERED'
+  ).length;
+  const activeFulfillments = fulfillments.filter(
+    (fulfillment) => !['VOID', 'REASSIGNED'].includes(fulfillment.status)
+  );
+  const hasPartialDelivery = fulfillments.some(
+    (fulfillment) =>
+      fulfillment.status === 'PARTIALLY DELIVERED' ||
+      Number(fulfillment.delivered_pairs || 0) > 0
+  );
+  const fulfillmentStatus =
+    activeFulfillments.length > 0 && deliveredCount === activeFulfillments.length
+      ? 'DELIVERED'
+      : deliveredCount > 0 || hasPartialDelivery
+        ? 'PARTIALLY DELIVERED'
+        : String(order.status || '').toUpperCase();
+
+  return {
+    fulfillments,
+    fulfillmentStatus,
+    deliveredCount,
+    totalCount: activeFulfillments.length,
   };
 };
 
@@ -383,9 +786,18 @@ const insertWarehouseAllocation = async (
   );
 };
 
-const recordWarehouseOrderMovement = async (
+const recordWarehouseMovement = async (
   client,
-  { item, warehouseId, quantity, userId }
+  {
+    finishedGoodId,
+    warehouseId,
+    quantity,
+    movementType,
+    referenceType,
+    referenceId,
+    notes,
+    userId,
+  }
 ) => {
   const movementInsert = await appendFiscalInsertFields(
     'finished_good_warehouse_movements',
@@ -400,13 +812,13 @@ const recordWarehouseOrderMovement = async (
       'created_by',
     ],
     [
-      item.finished_good_id,
+      finishedGoodId,
       warehouseId,
       quantity,
-      'ORDER_OUT',
-      'order',
-      item.order_id,
-      `Delivered order #${item.order_id}`,
+      movementType,
+      referenceType,
+      referenceId,
+      notes,
       userId,
     ]
   );
@@ -417,6 +829,21 @@ const recordWarehouseOrderMovement = async (
     movementInsert.values
   );
 };
+
+const recordWarehouseOrderMovement = async (
+  client,
+  { item, warehouseId, quantity, userId, notes }
+) =>
+  recordWarehouseMovement(client, {
+    finishedGoodId: item.finished_good_id,
+    warehouseId,
+    quantity,
+    movementType: 'ORDER_OUT',
+    referenceType: 'order',
+    referenceId: item.order_id,
+    notes: notes || `Delivered order #${item.order_id}`,
+    userId,
+  });
 
 const releasePlannedWarehouseAllocations = async (client, orderId, remove = false) => {
   const capabilities = await getWarehouseAllocationCapabilities();
@@ -473,24 +900,30 @@ const ensurePlannedWarehouseAllocations = async (client, orderId, userId) => {
   const itemIds = itemsResult.rows.map((item) => Number(item.id));
   const { clause: itemClause, params: itemParams } = buildInClause(itemIds);
   const existingResult = await client.query(
-    `SELECT order_item_id, COALESCE(SUM(quantity), 0) AS allocated_quantity
+    `SELECT order_item_id,
+            COALESCE(SUM(CASE WHEN allocation_status = 'PLANNED' THEN quantity ELSE 0 END), 0) AS planned_quantity,
+            COALESCE(SUM(CASE WHEN allocation_status = 'DEDUCTED' THEN quantity ELSE 0 END), 0) AS delivered_quantity
      FROM order_item_warehouse_allocations
      WHERE order_item_id IN ${itemClause}
-       AND allocation_status = 'PLANNED'
+       AND allocation_status IN ('PLANNED', 'DEDUCTED')
      GROUP BY order_item_id`,
     itemParams
   );
   const existingByItem = new Map(
     existingResult.rows.map((row) => [
       Number(row.order_item_id),
-      Number(row.allocated_quantity || 0),
+      {
+        planned: Number(row.planned_quantity || 0),
+        delivered: Number(row.delivered_quantity || 0),
+      },
     ])
   );
   const hasCompletePlan = itemsResult.rows.every(
     (item) =>
       Math.abs(
         Number(item.qty_ordered || 0) -
-          Number(existingByItem.get(Number(item.id)) || 0)
+          (Number(existingByItem.get(Number(item.id))?.planned || 0) +
+            Number(existingByItem.get(Number(item.id))?.delivered || 0))
       ) < 0.001
   );
 
@@ -504,6 +937,15 @@ const ensurePlannedWarehouseAllocations = async (client, orderId, userId) => {
   );
 
   for (const item of itemsResult.rows) {
+    const deliveredQuantity = Number(
+      existingByItem.get(Number(item.id))?.delivered || 0
+    );
+    let remaining = Math.max(
+      0,
+      Number(item.qty_ordered || 0) - deliveredQuantity
+    );
+    if (remaining <= 0.001) continue;
+
     const stockResult = await client.query(
       `SELECT stock.id, stock.warehouse_id, stock.quantity,
               stock.updated_at, warehouse.name AS warehouse_name
@@ -536,7 +978,6 @@ const ensurePlannedWarehouseAllocations = async (client, orderId, userId) => {
       ])
     );
 
-    let remaining = Number(item.qty_ordered || 0);
     const availableTotal = stockResult.rows.reduce(
       (sum, stock) =>
         sum +
@@ -555,7 +996,7 @@ const ensurePlannedWarehouseAllocations = async (client, orderId, userId) => {
       error.statusCode = 422;
       error.shortage = {
         product_name: item.product_name,
-        ordered_qty: Number(item.qty_ordered || 0),
+        ordered_qty: remaining,
         warehouse_stock: availableTotal,
       };
       throw error;
@@ -592,6 +1033,150 @@ const ensurePlannedWarehouseAllocations = async (client, orderId, userId) => {
   }
 };
 
+const loadWarehouseDeliveryNotes = async (client, orderIds = []) => {
+  if (
+    !orderIds.length ||
+    !(await hasTable('order_warehouse_delivery_notes'))
+  ) {
+    return [];
+  }
+  const { clause, params } = buildInClause(orderIds.map(Number));
+  const supportsReassignment = await hasTable(
+    'order_warehouse_dn_reassignments'
+  );
+  const result = await client.query(
+    `SELECT note.*, warehouse.name AS warehouse_name${
+      supportsReassignment
+        ? `, GROUP_CONCAT(DISTINCT destination.delivery_note_number
+             ORDER BY destination.id SEPARATOR ', ') AS reassigned_to_delivery_note_numbers`
+        : ''
+    }
+     FROM order_warehouse_delivery_notes note
+     JOIN warehouses warehouse ON warehouse.id = note.warehouse_id
+     ${
+       supportsReassignment
+         ? `LEFT JOIN order_warehouse_dn_reassignments reassignment
+              ON reassignment.source_delivery_note_id = note.id
+            LEFT JOIN order_warehouse_delivery_notes destination
+              ON destination.id = reassignment.destination_delivery_note_id`
+         : ''
+     }
+     WHERE note.order_id IN ${clause}
+     ${supportsReassignment ? 'GROUP BY note.id, warehouse.name' : ''}
+     ORDER BY note.assigned_at, note.id`,
+    params
+  );
+  return result.rows;
+};
+
+const ensureWarehouseDeliveryNotes = async (client, order, userId) => {
+  if (
+    order.delivery_note_number ||
+    !(await hasTable('order_warehouse_delivery_notes')) ||
+    !(await hasTable('delivery_note_sequences'))
+  ) {
+    return [];
+  }
+  const supportsReassignment = await hasTable(
+    'order_warehouse_dn_reassignments'
+  );
+
+  const allocationResult = await client.query(
+    `SELECT allocation.warehouse_id,
+            SUM(CASE WHEN allocation.allocation_status = 'PLANNED' THEN 1 ELSE 0 END) AS planned_count
+     FROM order_item_warehouse_allocations allocation
+     JOIN order_items item ON item.id = allocation.order_item_id
+     WHERE item.order_id = ?
+       AND allocation.allocation_status IN ('PLANNED', 'DEDUCTED')
+     GROUP BY allocation.warehouse_id
+     ORDER BY allocation.warehouse_id`,
+    [order.id]
+  );
+  const activeWarehouses = new Map(
+    allocationResult.rows.map((row) => [
+      Number(row.warehouse_id),
+      Number(row.planned_count || 0),
+    ])
+  );
+  const existingResult = await client.query(
+    `SELECT *
+     FROM order_warehouse_delivery_notes
+     WHERE order_id = ?
+     ORDER BY id
+     FOR UPDATE`,
+    [order.id]
+  );
+  const existingByWarehouse = new Map(
+    existingResult.rows.map((note) => [Number(note.warehouse_id), note])
+  );
+  const fiscalYear = shouldUseFiscalDeliveryNotes(
+    order.created_at ? new Date(order.created_at) : new Date()
+  )
+    ? order.bs_fiscal_year ||
+      getNepaliFiscalMeta(
+        order.created_at ? new Date(order.created_at) : new Date()
+      ).bs_fiscal_year
+    : null;
+
+  for (const [warehouseId, plannedCount] of activeWarehouses) {
+    const existing = existingByWarehouse.get(warehouseId);
+    if (existing) {
+      const existingStatus = String(existing.status || '').toUpperCase();
+      if (
+        existingStatus === 'VOID' ||
+        existingStatus === 'REASSIGNED' ||
+        (existingStatus === 'DELIVERED' && plannedCount > 0)
+      ) {
+        await client.query(
+          `UPDATE order_warehouse_delivery_notes
+           SET status = 'ACTIVE', voided_at = NULL, void_reason = NULL
+           WHERE id = ?`,
+          [existing.id]
+        );
+        if (supportsReassignment && existingStatus === 'REASSIGNED') {
+          await client.query(
+            `DELETE FROM order_warehouse_dn_reassignments
+             WHERE source_delivery_note_id = ?`,
+            [existing.id]
+          );
+        }
+      }
+      continue;
+    }
+    const deliveryNoteNumber = await getNextDeliveryNoteNumber(
+      client,
+      order.created_at ? new Date(order.created_at) : new Date()
+    );
+    await client.query(
+      `INSERT INTO order_warehouse_delivery_notes
+        (order_id, warehouse_id, delivery_note_number, status,
+         bs_fiscal_year, assigned_by, assigned_at)
+       VALUES (?, ?, ?, 'ACTIVE', ?, ?, NOW())`,
+      [order.id, warehouseId, deliveryNoteNumber, fiscalYear, userId]
+    );
+  }
+
+  for (const existing of existingResult.rows) {
+    if (
+      !activeWarehouses.has(Number(existing.warehouse_id)) &&
+      !['VOID', 'REASSIGNED'].includes(
+        String(existing.status || '').toUpperCase()
+      )
+    ) {
+      await client.query(
+        `UPDATE order_warehouse_delivery_notes
+         SET status = 'VOID',
+             voided_at = NOW(),
+             void_reason = 'All products moved to another warehouse'
+         WHERE id = ?`,
+        [existing.id]
+      );
+    }
+  }
+
+  return loadWarehouseDeliveryNotes(client, [order.id]);
+};
+
 const allocateWarehouseStockForDelivery = async (client, item, userId) => {
   const capabilities = await getWarehouseAllocationCapabilities();
   const configuredGroups = await loadWarehousePrintGroupMap(
@@ -603,9 +1188,19 @@ const allocateWarehouseStockForDelivery = async (client, item, userId) => {
 
   if (capabilities.supportsPlanning) {
     const plannedResult = await client.query(
-      `SELECT allocation.*, warehouse.name AS warehouse_name
+      `SELECT allocation.*, warehouse.name AS warehouse_name,
+              ${
+                capabilities.supportsDeliveredBy
+                  ? 'delivered_user.name'
+                  : 'NULL'
+              } AS delivered_by_name
        FROM order_item_warehouse_allocations allocation
        JOIN warehouses warehouse ON warehouse.id = allocation.warehouse_id
+       ${
+         capabilities.supportsDeliveredBy
+           ? 'LEFT JOIN users delivered_user ON delivered_user.id = allocation.delivered_by'
+           : ''
+       }
        WHERE allocation.order_item_id = ?
          AND allocation.allocation_status = 'PLANNED'
        ORDER BY allocation.id
@@ -654,9 +1249,14 @@ const allocateWarehouseStockForDelivery = async (client, item, userId) => {
              capabilities.supportsPackedQuantity
                ? ', packed_quantity = quantity'
                : ''
+           }${capabilities.supportsDeliveredBy ? ', delivered_by = ?' : ''}${
+             capabilities.supportsDeliveredAt ? ', delivered_at = NOW()' : ''
            }
            WHERE id = ?`,
-          [allocation.id]
+          [
+            ...(capabilities.supportsDeliveredBy ? [userId] : []),
+            allocation.id,
+          ]
         );
         await recordWarehouseOrderMovement(client, {
           item,
@@ -742,6 +1342,30 @@ const allocateWarehouseStockForDelivery = async (client, item, userId) => {
       printGroup,
       capabilities,
     });
+    if (capabilities.supportsDeliveredBy || capabilities.supportsDeliveredAt) {
+      await client.query(
+        `UPDATE order_item_warehouse_allocations
+         SET ${[
+           capabilities.supportsDeliveredBy ? 'delivered_by = ?' : null,
+           capabilities.supportsDeliveredAt ? 'delivered_at = NOW()' : null,
+         ]
+           .filter(Boolean)
+           .join(', ')}
+         WHERE order_item_id = ?
+           AND warehouse_id = ?
+           AND allocation_status = 'DEDUCTED'
+           AND ${
+             capabilities.supportsDeliveredAt
+               ? 'delivered_at IS NULL'
+               : 'delivered_by IS NULL'
+           }`,
+        [
+          ...(capabilities.supportsDeliveredBy ? [userId] : []),
+          item.id,
+          stock.warehouse_id,
+        ]
+      );
+    }
     await recordWarehouseOrderMovement(client, {
       item,
       warehouseId: stock.warehouse_id,
@@ -772,6 +1396,9 @@ const getAll = async (req, res, next) => {
       supportsUnitPriceSnapshot,
       supportsPriceCurrencySnapshot,
       supportsWarehouseAllocationStatus,
+      supportsWarehouseDeliveredBy,
+      supportsWarehouseDeliveredAt,
+      supportsPerWarehouseDeliveryNotes,
     ] =
       await Promise.all([
         hasColumn('orders', 'cancellation_code'),
@@ -779,6 +1406,9 @@ const getAll = async (req, res, next) => {
         hasColumn('order_items', 'unit_price_snapshot'),
         hasColumn('order_items', 'price_currency_snapshot'),
         hasColumn('order_item_warehouse_allocations', 'allocation_status'),
+        hasColumn('order_item_warehouse_allocations', 'delivered_by'),
+        hasColumn('order_item_warehouse_allocations', 'delivered_at'),
+        hasTable('order_warehouse_delivery_notes'),
       ]);
     const params = [];
     const conditions = [];
@@ -811,6 +1441,15 @@ const getAll = async (req, res, next) => {
         OR o.customer_name LIKE ?
         OR o.customer_phone LIKE ?
         OR o.delivery_note_number LIKE ?
+        ${
+          supportsPerWarehouseDeliveryNotes
+            ? `OR EXISTS (
+                SELECT 1 FROM order_warehouse_delivery_notes search_dn
+                WHERE search_dn.order_id = o.id
+                  AND search_dn.delivery_note_number LIKE ?
+              )`
+            : ''
+        }
         OR o.status LIKE ?
         OR EXISTS (
           SELECT 1
@@ -822,6 +1461,7 @@ const getAll = async (req, res, next) => {
       params.push(
         search,
         likeSearch,
+        ...(supportsPerWarehouseDeliveryNotes ? [likeSearch] : []),
         likeSearch,
         likeSearch,
         likeSearch,
@@ -928,9 +1568,19 @@ const getAll = async (req, res, next) => {
       const { clause, params: itemParams } = buildInClause(itemIds);
       const allocationResult = await query(
         `SELECT oiwa.*,
-                w.name AS warehouse_name
+                w.name AS warehouse_name,
+                ${
+                  supportsWarehouseDeliveredBy
+                    ? 'delivered_user.name'
+                    : 'NULL'
+                } AS delivered_by_name
          FROM order_item_warehouse_allocations oiwa
          JOIN warehouses w ON w.id = oiwa.warehouse_id
+         ${
+           supportsWarehouseDeliveredBy
+             ? 'LEFT JOIN users delivered_user ON delivered_user.id = oiwa.delivered_by'
+             : ''
+         }
          WHERE oiwa.order_item_id IN ${clause}
            ${
              supportsWarehouseAllocationStatus
@@ -958,10 +1608,42 @@ const getAll = async (req, res, next) => {
       acc[item.order_id].push(item);
       return acc;
     }, {});
+    const warehouseDeliveryNotes = supportsPerWarehouseDeliveryNotes
+      ? await loadWarehouseDeliveryNotes({ query }, orderIds)
+      : [];
+    const deliveryNotesByOrder = warehouseDeliveryNotes.reduce((acc, note) => {
+      const orderNotes = acc.get(Number(note.order_id)) || [];
+      orderNotes.push(note);
+      acc.set(Number(note.order_id), orderNotes);
+      return acc;
+    }, new Map());
+
+    const ordersWithFulfillments = orders.rows.map((order) => {
+      const orderItems = grouped[order.id] || [];
+      const orderDeliveryNotes =
+        deliveryNotesByOrder.get(Number(order.id)) || [];
+      const summary = buildWarehouseFulfillments(
+        order,
+        orderItems,
+        new Map(),
+        orderDeliveryNotes
+      );
+      return {
+        ...order,
+        items: orderItems,
+        warehouse_delivery_note_numbers: orderDeliveryNotes.map(
+          (note) => note.delivery_note_number
+        ),
+        warehouse_fulfillments: summary.fulfillments,
+        fulfillment_status: summary.fulfillmentStatus,
+        delivered_warehouse_count: summary.deliveredCount,
+        warehouse_fulfillment_count: summary.totalCount,
+      };
+    });
 
     return res.json({
       success: true,
-      data: orders.rows.map((o) => ({ ...o, items: grouped[o.id] || [] })),
+      data: ordersWithFulfillments,
       ...(pagination.enabled
         ? {
             pagination: getPaginationMeta(
@@ -1756,6 +2438,13 @@ const correctItems = async (req, res, next) => {
       const insert = await appendFiscalInsertFields('order_items', columns, values);
       await client.query(`INSERT INTO order_items (${insert.columns.join(', ')}) VALUES (${insert.columns.map(() => '?').join(', ')})`, insert.values);
     }
+    if (
+      String(order.status || '').toUpperCase() === 'CONFIRMED' &&
+      (await hasTable('order_warehouse_delivery_notes'))
+    ) {
+      await ensurePlannedWarehouseAllocations(client, order.id, req.user.id);
+      await ensureWarehouseDeliveryNotes(client, order, req.user.id);
+    }
     await client.query('UPDATE orders SET updated_at = NOW() WHERE id = ?', [order.id]);
     await client.query('COMMIT');
     clearCache();
@@ -1819,6 +2508,10 @@ const updateStatus = async (req, res, next) => {
     }
 
     const order = orderRes.rows[0];
+    const supportsPerWarehouseDeliveryNotes = await hasTable(
+      'order_warehouse_delivery_notes'
+    );
+    let statusWarehouseDeliveryNotes = [];
 
     if (['DELIVERED', 'CANCELLED'].includes(order.status)) {
       await client.query('ROLLBACK');
@@ -1826,6 +2519,57 @@ const updateStatus = async (req, res, next) => {
         success: false,
         message: `Cannot change a ${order.status.toLowerCase()} order`,
       });
+    }
+
+    const currentStatus = String(order.status || '').toUpperCase();
+    const allowedTransitions = {
+      PENDING: ['CONFIRMED', 'CANCELLED'],
+      CONFIRMED: ['PACKED', 'CANCELLED'],
+      PACKED: ['DELIVERED', 'CANCELLED'],
+    };
+    if (!(allowedTransitions[currentStatus] || []).includes(status)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: `Order must follow the workflow: Pending → Confirmed → Packed → Delivered. Cannot change ${currentStatus || 'UNKNOWN'} directly to ${status}.`,
+      });
+    }
+
+    const supportsWarehouseAllocationStatus = await hasColumn(
+      'order_item_warehouse_allocations',
+      'allocation_status'
+    );
+    if (
+      supportsWarehouseAllocationStatus &&
+      ['CANCELLED', 'DELIVERED'].includes(status)
+    ) {
+      const deliveredAllocationResult = await client.query(
+        `SELECT COUNT(*) AS delivered_allocations
+         FROM order_item_warehouse_allocations allocation
+         JOIN order_items item ON item.id = allocation.order_item_id
+         WHERE item.order_id = ?
+           AND allocation.allocation_status = 'DEDUCTED'`,
+        [order.id]
+      );
+      const hasPartialDelivery =
+        Number(deliveredAllocationResult.rows[0]?.delivered_allocations || 0) > 0;
+
+      if (hasPartialDelivery && status === 'CANCELLED') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message:
+            'A warehouse slip has already been delivered. The master order cannot be cancelled; deliver or separately resolve the remaining warehouse slips.',
+        });
+      }
+      if (hasPartialDelivery && status === 'DELIVERED') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message:
+            'This order is partially delivered. Use the Deliver button on each remaining warehouse slip.',
+        });
+      }
     }
 
     // Track who performed each action
@@ -1843,7 +2587,7 @@ const updateStatus = async (req, res, next) => {
       if (!order.confirmed_at) {
         updateFields.push('confirmed_at = NOW()');
       }
-      if (!order.delivery_note_number) {
+      if (!order.delivery_note_number && !supportsPerWarehouseDeliveryNotes) {
         const nextDN = await getNextDeliveryNoteNumber(client, order.created_at ? new Date(order.created_at) : new Date());
         updateFields.push('delivery_note_number = ?');
         updateParams.push(nextDN);
@@ -1854,7 +2598,11 @@ const updateStatus = async (req, res, next) => {
       updateFields.push('packed_by = ?', 'packed_at = NOW()');
       updateParams.push(req.user.id);
     } else if (status === 'DELIVERED' && !order.delivered_by) {
-      updateFields.push('delivered_by = ?', 'delivered_at = NOW()');
+      updateFields.push(
+        'delivered_by = ?',
+        'delivered_at = NOW()',
+        'stock_deducted = 1'
+      );
       updateParams.push(req.user.id);
     }
     if (status === 'CANCELLED') {
@@ -1915,10 +2663,34 @@ const updateStatus = async (req, res, next) => {
           [order.id]
         );
       }
+      statusWarehouseDeliveryNotes = await ensureWarehouseDeliveryNotes(
+        client,
+        order,
+        req.user.id
+      );
+    }
+
+    if (status === 'CONFIRMED' && supportsPerWarehouseDeliveryNotes) {
+      await ensurePlannedWarehouseAllocations(client, order.id, req.user.id);
+      statusWarehouseDeliveryNotes = await ensureWarehouseDeliveryNotes(
+        client,
+        order,
+        req.user.id
+      );
     }
 
     if (status === 'CANCELLED') {
       await releasePlannedWarehouseAllocations(client, order.id);
+      if (supportsPerWarehouseDeliveryNotes) {
+        await client.query(
+          `UPDATE order_warehouse_delivery_notes
+           SET status = 'VOID',
+               voided_at = NOW(),
+               void_reason = ?
+           WHERE order_id = ? AND status <> 'VOID'`,
+          [`Order cancelled: ${cancellationReason}`.slice(0, 500), order.id]
+        );
+      }
     }
 
     // Deduct physical stock on delivery
@@ -2013,10 +2785,21 @@ const updateStatus = async (req, res, next) => {
             ? duplicateOfOrderId
             : undefined,
         delivery_note_number: order.delivery_note_number,
+        warehouse_delivery_note_numbers: statusWarehouseDeliveryNotes.map(
+          (note) => note.delivery_note_number
+        ),
       },
     });
 
-    return res.json({ success: true, message: 'Status updated' });
+    return res.json({
+      success: true,
+      message: statusWarehouseDeliveryNotes.length
+        ? `Status updated. Warehouse DNs: ${statusWarehouseDeliveryNotes.map((note) => note.delivery_note_number).join(', ')}.`
+        : 'Status updated',
+      warehouse_delivery_note_numbers: statusWarehouseDeliveryNotes.map(
+        (note) => note.delivery_note_number
+      ),
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     next(err);
@@ -2051,7 +2834,18 @@ const assignDeliveryNote = async (req, res, next) => {
     }
 
     let deliveryNoteNumber = order.delivery_note_number;
-    if (!deliveryNoteNumber) {
+    let warehouseDeliveryNotes = [];
+    const supportsPerWarehouseDeliveryNotes = await hasTable(
+      'order_warehouse_delivery_notes'
+    );
+    if (!deliveryNoteNumber && supportsPerWarehouseDeliveryNotes) {
+      await ensurePlannedWarehouseAllocations(client, order.id, req.user.id);
+      warehouseDeliveryNotes = await ensureWarehouseDeliveryNotes(
+        client,
+        order,
+        req.user.id
+      );
+    } else if (!deliveryNoteNumber) {
       deliveryNoteNumber = await getNextDeliveryNoteNumber(
         client,
         order.created_at ? new Date(order.created_at) : new Date()
@@ -2077,18 +2871,266 @@ const assignDeliveryNote = async (req, res, next) => {
       entity_type: 'order',
       entity_id: order.id,
       entityName: getOrderEntityName(order),
-      description: `Assigned ${deliveryNoteNumber} to ${getOrderEntityName(order)}`,
+      description: warehouseDeliveryNotes.length
+        ? `Assigned warehouse delivery notes ${warehouseDeliveryNotes.map((note) => note.delivery_note_number).join(', ')} to ${getOrderEntityName(order)}`
+        : `Assigned ${deliveryNoteNumber} to ${getOrderEntityName(order)}`,
       metadata: {
         order_number: order.id,
         status: order.status,
         delivery_note_number: deliveryNoteNumber,
+        warehouse_delivery_notes: warehouseDeliveryNotes,
       },
     });
 
     return res.json({
       success: true,
-      message: `${deliveryNoteNumber} assigned successfully.`,
-      data: { id: order.id, delivery_note_number: deliveryNoteNumber },
+      message: warehouseDeliveryNotes.length
+        ? `${warehouseDeliveryNotes.map((note) => note.delivery_note_number).join(', ')} assigned by warehouse.`
+        : `${deliveryNoteNumber} assigned successfully.`,
+      data: {
+        id: order.id,
+        delivery_note_number: deliveryNoteNumber,
+        warehouse_delivery_notes: warehouseDeliveryNotes,
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+// Correct warehouse DNs that were assigned from the historical GLOBAL maximum.
+// Permanent/printed DNs are intentionally excluded from this correction path.
+const correctWarehouseDeliveryNoteNumbers = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    if (!canCorrectWarehouseSource(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to correct warehouse DNs.',
+      });
+    }
+
+    const orderId = Number(req.params.id);
+    const reason = String(req.body?.reason || '').trim().slice(0, 500);
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid order.' });
+    }
+    if (!reason) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter why these DN numbers need correction.',
+      });
+    }
+    if (
+      !(await hasTable('order_warehouse_delivery_notes')) ||
+      !(await hasTable('order_warehouse_delivery_note_corrections')) ||
+      !(await hasTable('delivery_note_sequences')) ||
+      !(await hasColumn('orders', 'bs_fiscal_year'))
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: 'Fiscal warehouse-DN correction is not available in this database.',
+      });
+    }
+
+    await client.query('START TRANSACTION');
+    const orderResult = await client.query(
+      'SELECT * FROM orders WHERE id = ? FOR UPDATE',
+      [orderId]
+    );
+    const order = orderResult.rows[0];
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+    if (String(order.status || '').toUpperCase() !== 'CONFIRMED') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'DN numbers can only be corrected while the order is confirmed and not yet packed.',
+      });
+    }
+    const noteResult = await client.query(
+      `SELECT *
+       FROM order_warehouse_delivery_notes
+       WHERE order_id = ?
+       ORDER BY assigned_at, id
+       FOR UPDATE`,
+      [orderId]
+    );
+    const notes = noteResult.rows;
+    if (!notes.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'This order has no warehouse DNs to correct.',
+      });
+    }
+    if (
+      notes.some(
+        (note) =>
+          String(note.status || '').toUpperCase() !== 'ACTIVE'
+      )
+    ) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Only active warehouse DNs can be corrected.',
+      });
+    }
+
+    const deliveredResult = await client.query(
+      `SELECT COUNT(*) AS delivered_count
+       FROM order_item_warehouse_allocations allocation
+       JOIN order_items item ON item.id = allocation.order_item_id
+       WHERE item.order_id = ?
+         AND allocation.allocation_status = 'DEDUCTED'`,
+      [orderId]
+    );
+    if (Number(deliveredResult.rows[0]?.delivered_count || 0) > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Delivered warehouse DNs are permanent and cannot be renumbered.',
+      });
+    }
+
+    const orderDate = order.created_at ? new Date(order.created_at) : new Date();
+    const fiscalYear =
+      order.bs_fiscal_year || getNepaliFiscalMeta(orderDate).bs_fiscal_year;
+    const legacyMaximumResult = await client.query(
+      `SELECT COALESCE(MAX(CAST(SUBSTRING(delivery_note_number, 4) AS UNSIGNED)), 0) AS last_number
+       FROM orders
+       WHERE id <> ?
+         AND bs_fiscal_year = ?
+         AND delivery_note_number REGEXP '^DN-[0-9]+$'`,
+      [orderId, fiscalYear]
+    );
+    const warehouseMaximumResult = await client.query(
+      `SELECT COALESCE(MAX(CAST(SUBSTRING(delivery_note_number, 4) AS UNSIGNED)), 0) AS last_number
+       FROM order_warehouse_delivery_notes
+       WHERE order_id <> ?
+         AND bs_fiscal_year = ?
+         AND delivery_note_number REGEXP '^DN-[0-9]+$'`,
+      [orderId, fiscalYear]
+    );
+    const previousMaximum = Math.max(
+      Number(legacyMaximumResult.rows[0]?.last_number || 0),
+      Number(warehouseMaximumResult.rows[0]?.last_number || 0)
+    );
+    const oldNumbers = notes.map((note) => note.delivery_note_number);
+    const hadPrintedCopies =
+      Number(order.delivery_note_print_count || 0) > 0 ||
+      Boolean(order.delivery_note_printed_at) ||
+      notes.some(
+        (note) => Number(note.print_count || 0) > 0 || note.printed_at
+      );
+    const correctedNumbers = notes.map(
+      (_, index) => `DN-${String(previousMaximum + index + 1).padStart(4, '0')}`
+    );
+    if (
+      oldNumbers.every(
+        (number, index) => String(number) === correctedNumbers[index]
+      )
+    ) {
+      await client.query('ROLLBACK');
+      return res.json({
+        success: true,
+        message: `Warehouse DNs are already correct: ${correctedNumbers.join(', ')}.`,
+        warehouse_delivery_note_numbers: correctedNumbers,
+      });
+    }
+
+    for (let index = 0; index < notes.length; index += 1) {
+      const note = notes[index];
+      const correctedNumber = correctedNumbers[index];
+      await client.query(
+        `INSERT INTO order_warehouse_delivery_note_corrections
+          (order_id, warehouse_id, old_delivery_note_number,
+           new_delivery_note_number, old_printed_at, old_print_count,
+           reason, corrected_by, corrected_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [
+          orderId,
+          note.warehouse_id,
+          note.delivery_note_number,
+          correctedNumber,
+          note.printed_at || order.delivery_note_printed_at || null,
+          Number(note.print_count || 0),
+          reason,
+          req.user.id,
+        ]
+      );
+      await client.query(
+        `UPDATE order_warehouse_delivery_notes
+         SET delivery_note_number = ?
+         WHERE id = ?`,
+        [`TEMP-${orderId}-${note.id}-${Date.now()}`, note.id]
+      );
+    }
+    for (let index = 0; index < notes.length; index += 1) {
+      await client.query(
+        `UPDATE order_warehouse_delivery_notes
+         SET delivery_note_number = ?,
+             bs_fiscal_year = ?,
+             printed_at = NULL,
+             print_count = 0
+         WHERE id = ?`,
+        [correctedNumbers[index], fiscalYear, notes[index].id]
+      );
+    }
+    await client.query(
+      `UPDATE orders
+       SET delivery_note_printed_at = NULL,
+           delivery_note_print_count = 0,
+           updated_at = NOW()
+       WHERE id = ?`,
+      [orderId]
+    );
+
+    const sequenceKey = `FY:${fiscalYear}`;
+    await client.query(
+      `INSERT INTO delivery_note_sequences (sequence_key, last_number)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE last_number = VALUES(last_number)`,
+      [sequenceKey, previousMaximum + notes.length]
+    );
+
+    await client.query('COMMIT');
+    clearCache();
+
+    try {
+      await auditLog({
+        ...getActor(req),
+        actionType: 'CORRECTED',
+        module: 'orders',
+        entity_type: 'warehouse_delivery_note',
+        entity_id: orderId,
+        entityName: getOrderEntityName(order),
+        description: `Corrected warehouse DN sequence for ${getOrderEntityName(order)}`,
+        metadata: {
+          order_number: orderId,
+          fiscal_year: fiscalYear,
+          old_delivery_note_numbers: oldNumbers,
+          new_delivery_note_numbers: correctedNumbers,
+          old_printed_copies_invalidated: hadPrintedCopies,
+          reason,
+        },
+      });
+    } catch (auditError) {
+      console.error('Warehouse DN correction audit failed:', auditError);
+    }
+
+    return res.json({
+      success: true,
+      message: hadPrintedCopies
+        ? `Warehouse DNs corrected: ${correctedNumbers.join(', ')}. Destroy or mark the old printed copies (${oldNumbers.join(', ')}) INVALID.`
+        : `Warehouse DNs corrected: ${correctedNumbers.join(', ')}.`,
+      warehouse_delivery_note_numbers: correctedNumbers,
     });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -2140,6 +3182,25 @@ const reopenPacking = async (req, res, next) => {
       });
     }
 
+    if (await hasColumn('order_item_warehouse_allocations', 'allocation_status')) {
+      const deliveredAllocationResult = await client.query(
+        `SELECT COUNT(*) AS delivered_allocations
+         FROM order_item_warehouse_allocations allocation
+         JOIN order_items item ON item.id = allocation.order_item_id
+         WHERE item.order_id = ?
+           AND allocation.allocation_status = 'DEDUCTED'`,
+        [order.id]
+      );
+      if (Number(deliveredAllocationResult.rows[0]?.delivered_allocations || 0) > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message:
+            'Packing cannot be reopened after any warehouse slip has been delivered.',
+        });
+      }
+    }
+
     await releasePlannedWarehouseAllocations(client, order.id);
 
     await client.query(
@@ -2184,6 +3245,1300 @@ const reopenPacking = async (req, res, next) => {
     });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+// ─── UNDO CONFIRMED ORDER ──────────────────────────────────────────────────
+const undoConfirmation = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    if (!canCorrectOrders(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to undo order confirmation.',
+      });
+    }
+
+    await client.query('START TRANSACTION');
+
+    const reason = String(req.body.reason || '').trim();
+    if (!reason) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Undo-confirmation reason is required.',
+      });
+    }
+
+    const orderResult = await client.query(
+      'SELECT * FROM orders WHERE id = ? FOR UPDATE',
+      [req.params.id]
+    );
+    const order = orderResult.rows[0];
+
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+
+    if (String(order.status || '').toUpperCase() !== 'CONFIRMED') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Only confirmed orders can be returned to pending.',
+      });
+    }
+
+    if (Number(order.stock_deducted || 0) === 1) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'This order has already affected physical stock and cannot be returned to pending.',
+      });
+    }
+
+    const deliveryNoteDecision = await getDeliveryNoteReclaimDecision(
+      client,
+      order
+    );
+
+    await releasePlannedWarehouseAllocations(client, order.id);
+
+    await client.query(
+      `UPDATE orders
+       SET status = 'PENDING',
+           confirmed_by = NULL,
+           confirmed_at = NULL,
+           delivery_note_number = ?,
+           updated_at = NOW()
+       WHERE id = ?`,
+      [deliveryNoteDecision.reclaim ? null : order.delivery_note_number, order.id]
+    );
+
+    await client.query('COMMIT');
+    clearCache();
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'UPDATE',
+      module: 'orders',
+      entity_type: 'order',
+      entity_id: order.id,
+      entityName: getOrderEntityName(order),
+      description: `Returned ${getOrderEntityName(order)} from confirmed to pending: ${reason}`,
+      metadata: {
+        reason,
+        previous_status: 'CONFIRMED',
+        status: 'PENDING',
+        delivery_note_number: order.delivery_note_number,
+        delivery_note_reclaimed: deliveryNoteDecision.reclaim,
+        delivery_note_decision: deliveryNoteDecision.reason,
+        previous_confirmed_by: order.confirmed_by,
+        previous_confirmed_at: order.confirmed_at,
+        reserved_stock_preserved: true,
+        planned_warehouse_allocations_released: true,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: deliveryNoteDecision.reclaim
+        ? `Order returned to pending. ${order.delivery_note_number} was released for the next confirmed order.`
+        : `Order returned to pending. ${order.delivery_note_number || 'Its delivery note number'} was preserved: ${deliveryNoteDecision.reason}`,
+      data: {
+        id: order.id,
+        status: 'PENDING',
+        delivery_note_number: deliveryNoteDecision.reclaim
+          ? null
+          : order.delivery_note_number,
+        delivery_note_reclaimed: deliveryNoteDecision.reclaim,
+        delivery_note_decision: deliveryNoteDecision.reason,
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+// Save the storekeeper's physical count without deducting stock. Delivery is a
+// separate action so the saved quantities can be reviewed first.
+const verifyWarehouseFulfillment = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    const orderId = Number(req.params.id);
+    const warehouseId = Number(req.params.warehouseId);
+    const requestedItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (
+      !Number.isInteger(orderId) ||
+      orderId <= 0 ||
+      !Number.isInteger(warehouseId) ||
+      warehouseId <= 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Select a valid order and warehouse slip.',
+      });
+    }
+
+    const capabilities = await getWarehouseAllocationCapabilities();
+    if (!capabilities.supportsPlanning || !capabilities.supportsVerification) {
+      return res.status(409).json({
+        success: false,
+        message:
+          'Warehouse product verification requires sql/add-warehouse-pick-verification.sql.',
+      });
+    }
+
+    await client.query('START TRANSACTION');
+    const orderResult = await client.query(
+      'SELECT * FROM orders WHERE id = ? FOR UPDATE',
+      [orderId]
+    );
+    const order = orderResult.rows[0];
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+    if (String(order.status || '').toUpperCase() !== 'PACKED') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Pack the master order before checking warehouse products.',
+      });
+    }
+
+    const allocationResult = await client.query(
+      `SELECT allocation.id AS allocation_id,
+              allocation.quantity,
+              allocation.order_item_id,
+              allocation.created_by AS allocation_created_by,
+              item.finished_good_id,
+              product.name AS product_name
+       FROM order_item_warehouse_allocations allocation
+       JOIN order_items item ON item.id = allocation.order_item_id
+       JOIN finished_goods product ON product.id = item.finished_good_id
+       WHERE item.order_id = ?
+         AND allocation.warehouse_id = ?
+         AND allocation.allocation_status = 'PLANNED'
+       ORDER BY allocation.id
+       FOR UPDATE`,
+      [orderId, warehouseId]
+    );
+    if (!allocationResult.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'This warehouse slip has no products waiting for delivery.',
+      });
+    }
+
+    const requestedByAllocation = new Map();
+    for (const item of requestedItems) {
+      const allocationId = Number(item.allocation_id);
+      if (
+        !Number.isInteger(allocationId) ||
+        allocationId <= 0 ||
+        requestedByAllocation.has(allocationId)
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Every warehouse product must be checked exactly once.',
+        });
+      }
+      requestedByAllocation.set(allocationId, item);
+    }
+    if (
+      requestedByAllocation.size !== allocationResult.rows.length ||
+      allocationResult.rows.some(
+        (allocation) =>
+          !requestedByAllocation.has(Number(allocation.allocation_id))
+      )
+    ) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message:
+          'The warehouse slip changed while it was open. Refresh and check every pending product again.',
+      });
+    }
+
+    const verificationItems = [];
+    const configuredGroups = await loadWarehousePrintGroupMap(
+      client,
+      capabilities.supportsConfiguredGroups
+    );
+    for (const allocation of allocationResult.rows) {
+      const requested = requestedByAllocation.get(
+        Number(allocation.allocation_id)
+      );
+      const plannedQuantity = Number(allocation.quantity || 0);
+      const verifiedQuantity = Number(requested.deliver_quantity);
+      const remainingQuantity = Math.max(0, plannedQuantity - verifiedQuantity);
+      const remainderAction = String(
+        requested.remainder_action || 'DELIVER_LATER'
+      ).toUpperCase();
+      const note = String(requested.note || '').trim().slice(0, 500);
+      const targetWarehouseId = Number(requested.target_warehouse_id || 0);
+      if (
+        !Number.isFinite(verifiedQuantity) ||
+        verifiedQuantity < 0 ||
+        verifiedQuantity > plannedQuantity + 0.001
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Enter a valid found quantity for ${allocation.product_name}.`,
+        });
+      }
+      if (
+        remainingQuantity > 0.001 &&
+        !WAREHOUSE_REMAINDER_ACTIONS.has(remainderAction)
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Choose deliver later or not found for ${allocation.product_name}.`,
+        });
+      }
+      if (
+        remainderAction === 'FOUND_OTHER_WAREHOUSE' &&
+        (remainingQuantity <= 0.001 ||
+          !Number.isInteger(targetWarehouseId) ||
+          targetWarehouseId <= 0 ||
+          targetWarehouseId === warehouseId)
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Select a different warehouse for the remaining ${allocation.product_name}.`,
+        });
+      }
+
+      const verificationStatus =
+        remainingQuantity <= 0.001 ? 'FOUND' : remainderAction;
+      const verificationRecord = {
+        allocation_id: Number(allocation.allocation_id),
+        finished_good_id: Number(allocation.finished_good_id),
+        product_name: allocation.product_name,
+        planned_quantity: plannedQuantity,
+        verified_quantity: verifiedQuantity,
+        remaining_quantity: remainingQuantity,
+        remainder_action: remainingQuantity > 0.001 ? remainderAction : null,
+        note: note || null,
+      };
+
+      if (remainderAction === 'FOUND_OTHER_WAREHOUSE') {
+        const targetResult = await client.query(
+          `SELECT warehouse.id, warehouse.name, warehouse.is_active,
+                  COALESCE(stock.quantity, 0) AS stock_quantity
+           FROM warehouses warehouse
+           LEFT JOIN finished_good_warehouse_stock stock
+             ON stock.warehouse_id = warehouse.id
+            AND stock.finished_good_id = ?
+           WHERE warehouse.id = ?
+             AND warehouse.deleted_at IS NULL
+           FOR UPDATE`,
+          [allocation.finished_good_id, targetWarehouseId]
+        );
+        const targetWarehouse = targetResult.rows[0];
+        if (!targetWarehouse || Number(targetWarehouse.is_active) !== 1) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Select an active destination warehouse.',
+          });
+        }
+
+        const reservedResult = await client.query(
+          `SELECT COALESCE(SUM(quantity), 0) AS reserved_quantity
+           FROM order_item_warehouse_allocations
+           WHERE finished_good_id = ?
+             AND warehouse_id = ?
+             AND allocation_status = 'PLANNED'
+             AND id <> ?`,
+          [
+            allocation.finished_good_id,
+            targetWarehouseId,
+            allocation.allocation_id,
+          ]
+        );
+        const availableQuantity = Math.max(
+          0,
+          Number(targetWarehouse.stock_quantity || 0) -
+            Number(reservedResult.rows[0]?.reserved_quantity || 0)
+        );
+        if (availableQuantity + 0.001 < remainingQuantity) {
+          await client.query('ROLLBACK');
+          return res.status(422).json({
+            success: false,
+            message: `${targetWarehouse.name} has only ${availableQuantity} unallocated pairs of ${allocation.product_name}. Correct or transfer the warehouse stock first.`,
+          });
+        }
+
+        if (verifiedQuantity > 0.001) {
+          await client.query(
+            `UPDATE order_item_warehouse_allocations
+             SET quantity = ?,
+                 packed_quantity = ?,
+                 verified_quantity = ?,
+                 verification_status = 'FOUND',
+                 verification_note = ?,
+                 verified_by = ?,
+                 verified_at = NOW()
+             WHERE id = ? AND allocation_status = 'PLANNED'`,
+            [
+              verifiedQuantity,
+              verifiedQuantity,
+              verifiedQuantity,
+              note || null,
+              req.user.id,
+              allocation.allocation_id,
+            ]
+          );
+        } else {
+          await client.query(
+            `UPDATE order_item_warehouse_allocations
+             SET allocation_status = 'RELEASED',
+                 packed_quantity = 0,
+                 verified_quantity = 0,
+                 verification_status = 'FOUND_OTHER_WAREHOUSE',
+                 verification_note = ?,
+                 verified_by = ?,
+                 verified_at = NOW()
+             WHERE id = ? AND allocation_status = 'PLANNED'`,
+            [note || null, req.user.id, allocation.allocation_id]
+          );
+        }
+
+        const printGroup = resolveWarehousePrintGroup(
+          targetWarehouse.id,
+          targetWarehouse.name,
+          configuredGroups
+        );
+        const targetInsert = await appendFiscalInsertFields(
+          'order_item_warehouse_allocations',
+          [
+            'order_item_id',
+            'finished_good_id',
+            'warehouse_id',
+            'quantity',
+            'allocation_status',
+            'packed_quantity',
+            'print_group_code_snapshot',
+            'print_group_name_snapshot',
+            'verification_status',
+            'verified_quantity',
+            'verification_note',
+            'verified_by',
+            'verified_at',
+            'created_by',
+          ],
+          [
+            allocation.order_item_id,
+            allocation.finished_good_id,
+            targetWarehouseId,
+            remainingQuantity,
+            'PLANNED',
+            remainingQuantity,
+            printGroup.code,
+            printGroup.name,
+            'FOUND',
+            remainingQuantity,
+            note || `Found in ${targetWarehouse.name}`,
+            req.user.id,
+            new Date(),
+            allocation.allocation_created_by || req.user.id,
+          ]
+        );
+        await client.query(
+          `INSERT INTO order_item_warehouse_allocations (${targetInsert.columns.join(', ')})
+           VALUES (${targetInsert.columns.map(() => '?').join(', ')})`,
+          targetInsert.values
+        );
+        verificationRecord.target_warehouse_id = targetWarehouseId;
+        verificationRecord.target_warehouse_name = targetWarehouse.name;
+        verificationRecord.reassigned_quantity = remainingQuantity;
+      } else {
+        await client.query(
+          `UPDATE order_item_warehouse_allocations
+           SET verified_quantity = ?,
+               verification_status = ?,
+               verification_note = ?,
+               verified_by = ?,
+               verified_at = NOW()
+           WHERE id = ? AND allocation_status = 'PLANNED'`,
+          [
+            verifiedQuantity,
+            verificationStatus,
+            note || null,
+            req.user.id,
+            allocation.allocation_id,
+          ]
+        );
+      }
+      verificationItems.push(verificationRecord);
+    }
+
+    let warehouseDeliveryNotes = await ensureWarehouseDeliveryNotes(
+      client,
+      order,
+      req.user.id
+    );
+    const reassignedWarehouseIds = [
+      ...new Set(
+        verificationItems
+          .map((item) => Number(item.target_warehouse_id))
+          .filter((id) => Number.isInteger(id) && id > 0)
+      ),
+    ];
+    const sourceDeliveryNote = warehouseDeliveryNotes.find(
+      (note) => Number(note.warehouse_id) === warehouseId
+    );
+    if (
+      reassignedWarehouseIds.length > 0 &&
+      String(sourceDeliveryNote?.status || '').toUpperCase() === 'VOID' &&
+      (await hasTable('order_warehouse_dn_reassignments'))
+    ) {
+      for (const destinationWarehouseId of reassignedWarehouseIds) {
+        const destinationDeliveryNote = warehouseDeliveryNotes.find(
+          (note) =>
+            Number(note.warehouse_id) === destinationWarehouseId &&
+            Number(note.id) !== Number(sourceDeliveryNote.id)
+        );
+        if (!destinationDeliveryNote) continue;
+        await client.query(
+          `INSERT INTO order_warehouse_dn_reassignments
+            (source_delivery_note_id, destination_delivery_note_id,
+             reassigned_by, reassigned_at)
+           VALUES (?, ?, ?, NOW())
+           ON DUPLICATE KEY UPDATE
+             reassigned_by = VALUES(reassigned_by),
+             reassigned_at = VALUES(reassigned_at)`,
+          [sourceDeliveryNote.id, destinationDeliveryNote.id, req.user.id]
+        );
+      }
+      await client.query(
+        `UPDATE order_warehouse_delivery_notes
+         SET status = 'REASSIGNED',
+             voided_at = NULL,
+             void_reason = NULL
+         WHERE id = ?`,
+        [sourceDeliveryNote.id]
+      );
+      warehouseDeliveryNotes = await loadWarehouseDeliveryNotes(client, [
+        orderId,
+      ]);
+    }
+    const deliveryNoteByWarehouse = new Map(
+      warehouseDeliveryNotes.map((note) => [
+        Number(note.warehouse_id),
+        note.delivery_note_number,
+      ])
+    );
+    verificationItems.forEach((item) => {
+      if (!item.target_warehouse_id) return;
+      item.source_delivery_note_number =
+        deliveryNoteByWarehouse.get(warehouseId) ||
+        order.delivery_note_number ||
+        null;
+      item.target_delivery_note_number =
+        deliveryNoteByWarehouse.get(Number(item.target_warehouse_id)) || null;
+    });
+
+    const preparedOrder = await loadDeliveryNoteOrder(
+      client,
+      orderId,
+      capabilities
+    );
+    const fulfillment = preparedOrder.warehouse_fulfillments.find(
+      (entry) => Number(entry.warehouse_id) === warehouseId
+    );
+    await client.query('COMMIT');
+    clearCache();
+
+    try {
+      await auditLog({
+        ...getActor(req),
+        actionType: 'VERIFIED',
+        module: 'orders',
+        entity_type: 'warehouse_delivery_slip',
+        entity_id: orderId,
+        entityName:
+          fulfillment?.warehouse_slip_number || getOrderEntityName(order),
+        description: `Checked products for ${fulfillment?.warehouse_slip_number || `warehouse ${warehouseId}`} on ${getOrderEntityName(order)}`,
+        metadata: {
+          order_number: orderId,
+          delivery_note_number: order.delivery_note_number,
+          warehouse_id: warehouseId,
+          warehouse_name: fulfillment?.name,
+          verification_items: verificationItems,
+        },
+      });
+    } catch (auditError) {
+      console.error('Warehouse verification audit failed:', auditError);
+    }
+
+    return res.json({
+      success: true,
+      message:
+        'Product check saved. Stock has not been deducted; use Deliver verified products when ready.',
+      data: preparedOrder,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+// Deliver only one warehouse slip. The master order remains PACKED while any
+// other warehouse still has planned stock, and becomes DELIVERED only when all
+// warehouse allocations have been deducted.
+const deliverWarehouseFulfillment = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    const orderId = Number(req.params.id);
+    const warehouseId = Number(req.params.warehouseId);
+    if (!Number.isInteger(orderId) || orderId <= 0 ||
+        !Number.isInteger(warehouseId) || warehouseId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Select a valid order and warehouse slip.',
+      });
+    }
+
+    const capabilities = await getWarehouseAllocationCapabilities();
+    if (
+      !capabilities.supportsPlanning ||
+      !capabilities.supportsDeliveredBy ||
+      !capabilities.supportsDeliveredAt
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          'Partial warehouse delivery requires sql/add-partial-warehouse-delivery.sql.',
+      });
+    }
+    const requestedVerification = Array.isArray(req.body?.items)
+      ? req.body.items
+      : null;
+    if (!capabilities.supportsVerification) {
+      return res.status(409).json({
+        success: false,
+        message:
+          'Warehouse product verification requires sql/add-warehouse-pick-verification.sql.',
+      });
+    }
+
+    await client.query('START TRANSACTION');
+    const orderResult = await client.query(
+      'SELECT * FROM orders WHERE id = ? FOR UPDATE',
+      [orderId]
+    );
+    const order = orderResult.rows[0];
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+
+    if (String(order.status || '').toUpperCase() !== 'PACKED') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message:
+          String(order.status || '').toUpperCase() === 'DELIVERED'
+            ? 'This order is already fully delivered.'
+            : 'Pack the master order before delivering a warehouse slip.',
+      });
+    }
+
+    const allocationResult = await client.query(
+      `SELECT allocation.id AS allocation_id,
+              allocation.quantity AS allocated_quantity,
+              allocation.allocation_status,
+              allocation.created_by AS allocation_created_by,
+              allocation.print_group_code_snapshot,
+              allocation.print_group_name_snapshot,
+              allocation.verified_quantity,
+              allocation.verification_status,
+              allocation.verification_note,
+              allocation.verified_at,
+              item.id AS order_item_id,
+              item.order_id,
+              item.finished_good_id,
+              product.name AS product_name,
+              product.quantity AS physical_stock,
+              warehouse.name AS warehouse_name
+       FROM order_item_warehouse_allocations allocation
+       JOIN order_items item ON item.id = allocation.order_item_id
+       JOIN finished_goods product ON product.id = item.finished_good_id
+       JOIN warehouses warehouse ON warehouse.id = allocation.warehouse_id
+       WHERE item.order_id = ?
+         AND allocation.warehouse_id = ?
+         AND allocation.allocation_status <> 'RELEASED'
+       ORDER BY allocation.id
+       FOR UPDATE`,
+      [orderId, warehouseId]
+    );
+
+    if (!allocationResult.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        message: 'This order has no allocation for the selected warehouse.',
+      });
+    }
+
+    const plannedAllocations = allocationResult.rows.filter(
+      (allocation) =>
+        String(allocation.allocation_status || '').toUpperCase() === 'PLANNED'
+    );
+    if (!plannedAllocations.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'This warehouse slip has already been delivered.',
+      });
+    }
+
+    const verificationByAllocation = new Map();
+    if (requestedVerification) {
+      for (const requestedItem of requestedVerification) {
+        const allocationId = Number(requestedItem.allocation_id);
+        if (!Number.isInteger(allocationId) || allocationId <= 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Every verified product must include a valid allocation.',
+          });
+        }
+        if (verificationByAllocation.has(allocationId)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'A warehouse product was submitted more than once.',
+          });
+        }
+        verificationByAllocation.set(allocationId, requestedItem);
+      }
+      const missingAllocation = plannedAllocations.find(
+        (allocation) =>
+          !verificationByAllocation.has(Number(allocation.allocation_id))
+      );
+      const unrelatedAllocation = [...verificationByAllocation.keys()].find(
+        (allocationId) =>
+          !plannedAllocations.some(
+            (allocation) => Number(allocation.allocation_id) === allocationId
+          )
+      );
+      if (missingAllocation || unrelatedAllocation) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message:
+            'The warehouse slip changed while it was open. Refresh and verify every pending product again.',
+        });
+      }
+    }
+
+    let deliveredPairs = 0;
+    const verificationItems = [];
+    for (const allocation of plannedAllocations) {
+      const allocatedQuantity = Number(allocation.allocated_quantity || 0);
+      const requestedItem = verificationByAllocation.get(
+        Number(allocation.allocation_id)
+      );
+      const quantity = requestedItem
+        ? Number(requestedItem.deliver_quantity)
+        : allocatedQuantity;
+      const remainder = Math.max(0, allocatedQuantity - quantity);
+      const remainderAction = String(
+        requestedItem?.remainder_action || 'DELIVER_LATER'
+      ).toUpperCase();
+      const verificationNote = String(requestedItem?.note || '')
+        .trim()
+        .slice(0, 500);
+
+      if (
+        requestedVerification &&
+        (!allocation.verified_at ||
+          allocation.verified_quantity === null ||
+          Math.abs(Number(allocation.verified_quantity) - quantity) > 0.001)
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: `The saved product check for ${allocation.product_name} is missing or changed. Check the products again before delivery.`,
+        });
+      }
+
+      if (
+        !Number.isFinite(quantity) ||
+        quantity < 0 ||
+        quantity > allocatedQuantity + 0.001
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Enter a valid deliver-now quantity for ${allocation.product_name}.`,
+        });
+      }
+      if (remainder > 0.001 && !WAREHOUSE_REMAINDER_ACTIONS.has(remainderAction)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Choose deliver later or not found for the remaining ${allocation.product_name}.`,
+        });
+      }
+
+      verificationItems.push({
+        allocation_id: Number(allocation.allocation_id),
+        finished_good_id: Number(allocation.finished_good_id),
+        product_name: allocation.product_name,
+        planned_quantity: allocatedQuantity,
+        delivered_quantity: quantity,
+        remaining_quantity: remainder,
+        remainder_action: remainder > 0.001 ? remainderAction : null,
+        note: verificationNote || null,
+      });
+
+      if (quantity <= 0.001) {
+        await client.query(
+          `UPDATE order_item_warehouse_allocations
+           SET packed_quantity = 0,
+               verified_quantity = 0,
+               verification_status = ?,
+               verification_note = ?,
+               verified_by = ?,
+               verified_at = NOW()
+           WHERE id = ? AND allocation_status = 'PLANNED'`,
+          [
+            remainderAction,
+            verificationNote || null,
+            req.user.id,
+            allocation.allocation_id,
+          ]
+        );
+        continue;
+      }
+
+      const warehouseStockResult = await client.query(
+        `SELECT id, quantity
+         FROM finished_good_warehouse_stock
+         WHERE finished_good_id = ? AND warehouse_id = ?
+         FOR UPDATE`,
+        [allocation.finished_good_id, warehouseId]
+      );
+      const warehouseStock = warehouseStockResult.rows[0];
+      if (!warehouseStock || Number(warehouseStock.quantity || 0) + 0.001 < quantity) {
+        await client.query('ROLLBACK');
+        return res.status(422).json({
+          success: false,
+          message: `The planned stock for ${allocation.product_name} is no longer available in ${allocation.warehouse_name}.`,
+          shortages: [
+            {
+              product_name: allocation.product_name,
+              ordered_qty: quantity,
+              warehouse_stock: Number(warehouseStock?.quantity || 0),
+              warehouse_name: allocation.warehouse_name,
+            },
+          ],
+        });
+      }
+      if (Number(allocation.physical_stock || 0) + 0.001 < quantity) {
+        await client.query('ROLLBACK');
+        return res.status(422).json({
+          success: false,
+          message: `Not enough physical stock remains for ${allocation.product_name}.`,
+        });
+      }
+
+      const warehouseDeduction = await client.query(
+        `UPDATE finished_good_warehouse_stock
+         SET quantity = quantity - ?, updated_by = ?
+         WHERE id = ? AND quantity >= ?`,
+        [quantity, req.user.id, warehouseStock.id, quantity]
+      );
+      if (Number(warehouseDeduction.affectedRows || 0) !== 1) {
+        const error = new Error(
+          `The stock for ${allocation.product_name} changed while this warehouse slip was being delivered. Refresh and try again.`
+        );
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const productDeduction = await client.query(
+        `UPDATE finished_goods
+         SET quantity = quantity - ?
+         WHERE id = ? AND quantity >= ?`,
+        [quantity, allocation.finished_good_id, quantity]
+      );
+      if (Number(productDeduction.affectedRows || 0) !== 1) {
+        const error = new Error(
+          `The total stock for ${allocation.product_name} changed while this warehouse slip was being delivered. Refresh and try again.`
+        );
+        error.statusCode = 409;
+        throw error;
+      }
+      if (remainder > 0.001) {
+        await client.query(
+          `UPDATE order_item_warehouse_allocations
+           SET quantity = ?,
+               packed_quantity = 0,
+               verified_quantity = 0,
+               verification_status = ?,
+               verification_note = ?,
+               verified_by = ?,
+               verified_at = NOW()
+           WHERE id = ? AND allocation_status = 'PLANNED'`,
+          [
+            remainder,
+            remainderAction,
+            verificationNote || null,
+            req.user.id,
+            allocation.allocation_id,
+          ]
+        );
+        const deliveredInsert = await appendFiscalInsertFields(
+          'order_item_warehouse_allocations',
+          [
+            'order_item_id',
+            'finished_good_id',
+            'warehouse_id',
+            'quantity',
+            'allocation_status',
+            'packed_quantity',
+            'print_group_code_snapshot',
+            'print_group_name_snapshot',
+            'delivered_by',
+            'delivered_at',
+            'verification_status',
+            'verified_quantity',
+            'verification_note',
+            'verified_by',
+            'verified_at',
+            'created_by',
+          ],
+          [
+            allocation.order_item_id,
+            allocation.finished_good_id,
+            warehouseId,
+            quantity,
+            'DEDUCTED',
+            quantity,
+            allocation.print_group_code_snapshot || null,
+            allocation.print_group_name_snapshot || allocation.warehouse_name,
+            req.user.id,
+            new Date(),
+            'FOUND',
+            quantity,
+            verificationNote || null,
+            req.user.id,
+            new Date(),
+            allocation.allocation_created_by || req.user.id,
+          ]
+        );
+        await client.query(
+          `INSERT INTO order_item_warehouse_allocations (${deliveredInsert.columns.join(', ')})
+           VALUES (${deliveredInsert.columns.map(() => '?').join(', ')})`,
+          deliveredInsert.values
+        );
+      } else {
+        await client.query(
+          `UPDATE order_item_warehouse_allocations
+           SET allocation_status = 'DEDUCTED',
+               packed_quantity = quantity,
+               delivered_by = ?,
+               delivered_at = NOW(),
+               verification_status = 'FOUND',
+               verified_quantity = quantity,
+               verification_note = ?,
+               verified_by = ?,
+               verified_at = NOW()
+           WHERE id = ? AND allocation_status = 'PLANNED'`,
+          [
+            req.user.id,
+            verificationNote || null,
+            req.user.id,
+            allocation.allocation_id,
+          ]
+        );
+      }
+      await recordWarehouseOrderMovement(client, {
+        item: {
+          order_id: orderId,
+          finished_good_id: allocation.finished_good_id,
+        },
+        warehouseId,
+        quantity,
+        userId: req.user.id,
+      });
+      deliveredPairs += quantity;
+    }
+
+    const remainingResult = await client.query(
+      `SELECT COUNT(*) AS remaining_allocations
+       FROM order_item_warehouse_allocations allocation
+       JOIN order_items item ON item.id = allocation.order_item_id
+       WHERE item.order_id = ?
+         AND allocation.allocation_status = 'PLANNED'`,
+      [orderId]
+    );
+    if (await hasTable('order_warehouse_delivery_notes')) {
+      const warehouseRemainingResult = await client.query(
+        `SELECT COUNT(*) AS remaining_allocations
+         FROM order_item_warehouse_allocations allocation
+         JOIN order_items item ON item.id = allocation.order_item_id
+         WHERE item.order_id = ?
+           AND allocation.warehouse_id = ?
+           AND allocation.allocation_status = 'PLANNED'`,
+        [orderId, warehouseId]
+      );
+      if (
+        deliveredPairs > 0 &&
+        Number(
+          warehouseRemainingResult.rows[0]?.remaining_allocations || 0
+        ) === 0
+      ) {
+        await client.query(
+          `UPDATE order_warehouse_delivery_notes
+           SET status = 'DELIVERED'
+           WHERE order_id = ? AND warehouse_id = ? AND status <> 'VOID'`,
+          [orderId, warehouseId]
+        );
+      }
+    }
+    const fullyDelivered = deliveredPairs > 0 &&
+      Number(remainingResult.rows[0]?.remaining_allocations || 0) === 0;
+
+    if (fullyDelivered) {
+      await client.query(
+        `UPDATE orders
+         SET status = 'DELIVERED',
+             delivered_by = ?,
+             delivered_at = NOW(),
+             stock_deducted = 1,
+             updated_at = NOW()
+         WHERE id = ?`,
+        [req.user.id, orderId]
+      );
+    } else {
+      await client.query(
+        'UPDATE orders SET updated_at = NOW() WHERE id = ?',
+        [orderId]
+      );
+    }
+
+    const preparedOrder = await loadDeliveryNoteOrder(
+      client,
+      orderId,
+      capabilities
+    );
+    const deliveredFulfillment = preparedOrder.warehouse_fulfillments.find(
+      (fulfillment) => Number(fulfillment.warehouse_id) === warehouseId
+    );
+
+    await client.query('COMMIT');
+    clearCache();
+
+    try {
+      await auditLog({
+        ...getActor(req),
+        actionType: deliveredPairs > 0 ? 'DELIVERED' : 'VERIFIED',
+        module: 'orders',
+        entity_type: 'warehouse_delivery_slip',
+        entity_id: orderId,
+        entityName:
+          deliveredFulfillment?.warehouse_slip_number ||
+          getOrderEntityName(order),
+        description:
+          deliveredPairs > 0
+            ? `Verified and delivered ${deliveredFulfillment?.warehouse_slip_number || `warehouse ${warehouseId}`} for ${getOrderEntityName(order)}`
+            : `Verified ${deliveredFulfillment?.warehouse_slip_number || `warehouse ${warehouseId}`} for ${getOrderEntityName(order)}; all products remain pending`,
+        metadata: {
+          order_number: orderId,
+          delivery_note_number: order.delivery_note_number,
+          warehouse_id: warehouseId,
+          warehouse_name: deliveredFulfillment?.name,
+          warehouse_slip_number: deliveredFulfillment?.warehouse_slip_number,
+          delivered_pairs: deliveredPairs,
+          master_order_status: fullyDelivered ? 'DELIVERED' : 'PACKED',
+          fulfillment_status: fullyDelivered
+            ? 'DELIVERED'
+            : deliveredPairs > 0
+              ? 'PARTIALLY DELIVERED'
+              : 'PACKED',
+          verification_items: verificationItems,
+        },
+      });
+    } catch (auditError) {
+      // Delivery is already committed. Do not report it as failed and invite a
+      // dangerous retry merely because the secondary audit write failed.
+      console.error('Warehouse delivery audit failed:', auditError);
+    }
+
+    return res.json({
+      success: true,
+      message: fullyDelivered
+        ? `${deliveredFulfillment?.warehouse_slip_number || 'Warehouse slip'} delivered. The master order is now fully delivered.`
+        : deliveredPairs > 0
+          ? `${deliveredPairs} pairs delivered now. Remaining products stay pending for later delivery.`
+          : 'Warehouse check saved. No stock was deducted; all selected products remain pending.',
+      data: preparedOrder,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+// Reverse a mistakenly delivered warehouse slip without deleting its stock
+// history. Restored allocations return to PLANNED in the same warehouse so the
+// slip remains visible and must be physically checked again before redelivery.
+const undoWarehouseFulfillmentDelivery = async (req, res, next) => {
+  if (!canCorrectWarehouseSource(req.user)) {
+    return res.status(403).json({
+      success: false,
+      message: 'You do not have permission to reverse warehouse deliveries.',
+    });
+  }
+
+  const orderId = Number(req.params.id);
+  const warehouseId = Number(req.params.warehouseId);
+  const reason = String(req.body?.reason || '').trim();
+  if (
+    !Number.isInteger(orderId) ||
+    orderId <= 0 ||
+    !Number.isInteger(warehouseId) ||
+    warehouseId <= 0
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: 'Select a valid order and warehouse slip.',
+    });
+  }
+  if (reason.length < 3) {
+    return res.status(400).json({
+      success: false,
+      message: 'Enter why this warehouse delivery must be reversed.',
+    });
+  }
+
+  const client = await getClient();
+  let committed = false;
+  let auditPayload = null;
+
+  try {
+    const capabilities = await getWarehouseAllocationCapabilities();
+    if (
+      !capabilities.supportsPlanning ||
+      !capabilities.supportsDeliveredBy ||
+      !capabilities.supportsDeliveredAt
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          'Warehouse delivery reversal requires sql/add-partial-warehouse-delivery.sql.',
+      });
+    }
+
+    await client.query('START TRANSACTION');
+    const orderResult = await client.query(
+      'SELECT * FROM orders WHERE id = ? FOR UPDATE',
+      [orderId]
+    );
+    const order = orderResult.rows[0];
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+
+    const status = String(order.status || '').toUpperCase();
+    if (!['PACKED', 'DELIVERED'].includes(status)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Only a packed or delivered order can have a warehouse delivery reversed.',
+      });
+    }
+
+    const allocationResult = await client.query(
+      `SELECT allocation.id AS allocation_id,
+              allocation.quantity,
+              allocation.finished_good_id,
+              item.id AS order_item_id,
+              product.name AS product_name,
+              warehouse.name AS warehouse_name
+       FROM order_item_warehouse_allocations allocation
+       JOIN order_items item ON item.id = allocation.order_item_id
+       JOIN finished_goods product ON product.id = allocation.finished_good_id
+       JOIN warehouses warehouse ON warehouse.id = allocation.warehouse_id
+       WHERE item.order_id = ?
+         AND allocation.warehouse_id = ?
+         AND allocation.allocation_status = 'DEDUCTED'
+       ORDER BY allocation.id
+       FOR UPDATE`,
+      [orderId, warehouseId]
+    );
+
+    if (!allocationResult.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'This warehouse slip is not delivered or has already been reversed.',
+      });
+    }
+
+    let restoredPairs = 0;
+    for (const allocation of allocationResult.rows) {
+      const quantity = Number(allocation.quantity || 0);
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        const error = new Error(
+          `Invalid delivered quantity found for ${allocation.product_name}.`
+        );
+        error.statusCode = 422;
+        throw error;
+      }
+
+      await client.query(
+        `INSERT INTO finished_good_warehouse_stock
+          (finished_good_id, warehouse_id, quantity, created_by, updated_by)
+         VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           quantity = quantity + VALUES(quantity),
+           updated_by = VALUES(updated_by)`,
+        [
+          allocation.finished_good_id,
+          warehouseId,
+          quantity,
+          req.user.id,
+          req.user.id,
+        ]
+      );
+      await client.query(
+        `UPDATE finished_goods
+         SET quantity = quantity + ?
+         WHERE id = ?`,
+        [quantity, allocation.finished_good_id]
+      );
+      await client.query(
+        `UPDATE order_item_warehouse_allocations
+         SET allocation_status = 'PLANNED',
+             packed_quantity = quantity,
+             delivered_by = NULL,
+             delivered_at = NULL
+             ${
+               capabilities.supportsVerification
+                 ? `, verified_quantity = NULL,
+                      verification_status = NULL,
+                      verification_note = ?,
+                      verified_by = NULL,
+                      verified_at = NULL`
+                 : ''
+             }
+         WHERE id = ? AND allocation_status = 'DEDUCTED'`,
+        [
+          ...(capabilities.supportsVerification
+            ? [`Delivery reversed: ${reason}`.slice(0, 500)]
+            : []),
+          allocation.allocation_id,
+        ]
+      );
+      await recordWarehouseMovement(client, {
+        finishedGoodId: allocation.finished_good_id,
+        warehouseId,
+        quantity,
+        movementType: 'DELIVERY_REVERSAL',
+        referenceType: 'order',
+        referenceId: orderId,
+        notes: `Reversed warehouse delivery for order #${orderId}: ${reason}`,
+        userId: req.user.id,
+      });
+      restoredPairs += quantity;
+    }
+
+    await client.query(
+      `UPDATE orders
+       SET status = 'PACKED',
+           delivered_by = NULL,
+           delivered_at = NULL,
+           stock_deducted = 0,
+           updated_at = NOW()
+       WHERE id = ?`,
+      [orderId]
+    );
+    if (await hasTable('order_warehouse_delivery_notes')) {
+      await client.query(
+        `UPDATE order_warehouse_delivery_notes
+         SET status = 'ACTIVE'
+         WHERE order_id = ? AND warehouse_id = ? AND status = 'DELIVERED'`,
+        [orderId, warehouseId]
+      );
+    }
+
+    const preparedOrder = await loadDeliveryNoteOrder(
+      client,
+      orderId,
+      capabilities
+    );
+    await client.query('COMMIT');
+    committed = true;
+    clearCache();
+
+    auditPayload = {
+      ...getActor(req),
+      actionType: 'REVERSED',
+      module: 'orders',
+      entity_type: 'warehouse_delivery_slip',
+      entity_id: orderId,
+      entityName: order.delivery_note_number || getOrderEntityName(order),
+      description: `Reversed the delivered warehouse slip for ${allocationResult.rows[0].warehouse_name} on ${getOrderEntityName(order)}`,
+      metadata: {
+        order_number: orderId,
+        delivery_note_number: order.delivery_note_number,
+        warehouse_id: warehouseId,
+        warehouse_name: allocationResult.rows[0].warehouse_name,
+        restored_pairs: restoredPairs,
+        reason,
+        previous_order_status: status,
+        new_order_status: 'PACKED',
+        restored_allocation_status: 'PLANNED',
+        requires_product_recheck: true,
+      },
+    };
+
+    try {
+      await auditLog(auditPayload);
+    } catch (auditError) {
+      console.error('Warehouse delivery reversal audit failed:', auditError);
+    }
+
+    return res.json({
+      success: true,
+      message: `${allocationResult.rows[0].warehouse_name} delivery was reversed and ${restoredPairs} pairs were restored. The warehouse slip is pending again; check its products before redelivery.`,
+      data: preparedOrder,
+    });
+  } catch (err) {
+    if (!committed) await client.query('ROLLBACK').catch(() => {});
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({
+        success: false,
+        message: err.message,
+      });
+    }
     next(err);
   } finally {
     client.release();
@@ -2272,28 +4627,27 @@ const loadDeliveryNoteOrder = async (client, orderId, capabilities) => {
     ...item,
     warehouse_allocations: allocationsByItem.get(Number(item.id)) || [],
   }));
-  const groups = new Map();
-  items.forEach((item) => {
-    item.warehouse_allocations.forEach((allocation) => {
-      const code = allocation.print_group_code_snapshot;
-      if (!groups.has(code)) {
-        groups.set(code, {
-          code,
-          name: allocation.print_group_name_snapshot,
-          display_order: Number(allocation.print_group_display_order || 999),
-          pairs: 0,
-        });
-      }
-      groups.get(code).pairs += Number(allocation.quantity || 0);
-    });
-  });
+  const warehouseDeliveryNotes = await loadWarehouseDeliveryNotes(client, [
+    order.id,
+  ]);
+  const warehouseSummary = buildWarehouseFulfillments(
+    order,
+    items,
+    configuredGroups,
+    warehouseDeliveryNotes
+  );
 
   return {
     ...order,
     items,
-    warehouse_print_groups: [...groups.values()].sort(
-      (left, right) => left.display_order - right.display_order
+    warehouse_delivery_note_numbers: warehouseDeliveryNotes.map(
+      (note) => note.delivery_note_number
     ),
+    warehouse_print_groups: warehouseSummary.fulfillments,
+    warehouse_fulfillments: warehouseSummary.fulfillments,
+    fulfillment_status: warehouseSummary.fulfillmentStatus,
+    delivered_warehouse_count: warehouseSummary.deliveredCount,
+    warehouse_fulfillment_count: warehouseSummary.totalCount,
   };
 };
 
@@ -2325,7 +4679,10 @@ const prepareDeliveryNote = async (req, res, next) => {
     }
 
     let deliveryNoteNumber = order.delivery_note_number;
-    if (!deliveryNoteNumber) {
+    const supportsPerWarehouseDeliveryNotes = await hasTable(
+      'order_warehouse_delivery_notes'
+    );
+    if (!deliveryNoteNumber && !supportsPerWarehouseDeliveryNotes) {
       deliveryNoteNumber = await getNextDeliveryNoteNumber(
         client,
         order.created_at ? new Date(order.created_at) : new Date()
@@ -2354,6 +4711,9 @@ const prepareDeliveryNote = async (req, res, next) => {
           [order.id]
         );
       }
+      if (supportsPerWarehouseDeliveryNotes) {
+        await ensureWarehouseDeliveryNotes(client, order, req.user.id);
+      }
     }
     const preparedOrder = await loadDeliveryNoteOrder(
       client,
@@ -2374,11 +4734,17 @@ const prepareDeliveryNote = async (req, res, next) => {
         ...order,
         delivery_note_number: deliveryNoteNumber,
       }),
-      description: `Prepared grouped delivery note ${deliveryNoteNumber}`,
+      description: `Prepared warehouse delivery notes for ${
+        preparedOrder.warehouse_delivery_note_numbers?.join(', ') ||
+        deliveryNoteNumber ||
+        `order #${order.id}`
+      }`,
       metadata: {
         order_number: order.id,
         delivery_note_number: deliveryNoteNumber,
-        warehouse_groups: preparedOrder.warehouse_print_groups,
+        warehouse_delivery_note_numbers:
+          preparedOrder.warehouse_delivery_note_numbers || [],
+        warehouse_slips: preparedOrder.warehouse_fulfillments,
       },
     });
 
@@ -2399,19 +4765,71 @@ const prepareDeliveryNote = async (req, res, next) => {
 };
 
 const logPrint = async (req, res, next) => {
+  const [supportsPrintedAt, supportsPrintCount] = await Promise.all([
+    hasColumn('orders', 'delivery_note_printed_at'),
+    hasColumn('orders', 'delivery_note_print_count'),
+  ]);
+  const client = await getClient();
+
   try {
-    const orderRows = await query(
+    await client.query('START TRANSACTION');
+    const orderRows = await client.query(
       `SELECT id, customer_name, status, delivery_note_number
        FROM orders
-       WHERE id = ?`,
+       WHERE id = ?
+       FOR UPDATE`,
       [req.params.id]
     );
 
     if (!orderRows.rows.length) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
     const order = orderRows.rows[0];
+    if (!['CONFIRMED', 'PACKED', 'DELIVERED'].includes(String(order.status || '').toUpperCase())) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Only confirmed, packed, or delivered orders can be printed.',
+      });
+    }
+    if (!supportsPrintedAt || !supportsPrintCount) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Delivery-note printing requires sql/add-delivery-note-print-state.sql.',
+      });
+    }
+
+    await client.query(
+      `UPDATE orders
+       SET delivery_note_printed_at = COALESCE(delivery_note_printed_at, NOW()),
+           delivery_note_print_count = delivery_note_print_count + 1,
+           updated_at = NOW()
+       WHERE id = ?`,
+      [order.id]
+    );
+    if (await hasTable('order_warehouse_delivery_notes')) {
+      const printedNumbers = (Array.isArray(req.body?.warehouse_slips)
+        ? req.body.warehouse_slips
+        : []
+      )
+        .map((slip) => String(slip?.slip_number || '').trim())
+        .filter(Boolean);
+      if (printedNumbers.length) {
+        const { clause, params } = buildInClause(printedNumbers);
+        await client.query(
+          `UPDATE order_warehouse_delivery_notes
+           SET printed_at = COALESCE(printed_at, NOW()),
+               print_count = print_count + 1
+           WHERE order_id = ?
+             AND delivery_note_number IN ${clause}`,
+          [order.id, ...params]
+        );
+      }
+    }
+    await client.query('COMMIT');
 
     await auditLog({
       ...getActor(req),
@@ -2430,13 +4848,19 @@ const logPrint = async (req, res, next) => {
         warehouse_groups: Array.isArray(req.body?.warehouse_groups)
           ? req.body.warehouse_groups
           : [],
+        warehouse_slips: Array.isArray(req.body?.warehouse_slips)
+          ? req.body.warehouse_slips
+          : [],
       },
     });
 
     return res.json({ success: true });
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     next(err);
+  } finally {
+    client.release();
   }
 };
 
-module.exports = { getAll, getAvailability, getOfferPurchases, create, correctItems, updateStatus, assignDeliveryNote, reopenPacking, prepareDeliveryNote, logPrint };
+module.exports = { getAll, getAvailability, getOfferPurchases, create, correctItems, updateStatus, assignDeliveryNote, correctWarehouseDeliveryNoteNumbers, reopenPacking, undoConfirmation, verifyWarehouseFulfillment, deliverWarehouseFulfillment, undoWarehouseFulfillmentDelivery, prepareDeliveryNote, logPrint };

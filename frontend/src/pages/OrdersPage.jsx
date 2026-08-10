@@ -31,6 +31,7 @@ const statusTone = {
   PACKED: "neutral",
   DELIVERED: "success",
   CANCELLED: "danger",
+  "PARTIALLY DELIVERED": "warning",
 };
 
 const PRINTABLE_DELIVERY_STATUSES = ["CONFIRMED", "PACKED", "DELIVERED"];
@@ -52,15 +53,20 @@ const cancellationLabel = (value) =>
 const ORDER_CORRECTION_CO_ADMINS = new Set([
   "suyogya shrestha",
   "suyogya shresth",
-  "suvarna shrestha",
   "hirdaya shrestha",
+]);
+const ORDER_CORRECTION_CO_ADMIN_EMAILS = new Set([
+  "kingarna@nepcha.com",
 ]);
 
 const canUseOrderCorrection = (user = {}) =>
   String(user.role || "").toUpperCase() === "CO_ADMIN" &&
-  ORDER_CORRECTION_CO_ADMINS.has(
+  (ORDER_CORRECTION_CO_ADMINS.has(
     String(user.name || "").trim().replace(/\s+/g, " ").toLowerCase()
-  );
+  ) ||
+    ORDER_CORRECTION_CO_ADMIN_EMAILS.has(
+      String(user.email || "").trim().toLowerCase()
+    ));
 
 export default function OrdersPage() {
   const [orderSearch, setOrderSearch] = useState("");
@@ -69,6 +75,8 @@ export default function OrdersPage() {
   const { showToast } = useToast();
   const canManageOrders = hasRole(user?.role, ["ADMIN", "CO_ADMIN"]);
   const canCorrectOrders = canUseOrderCorrection(user);
+  const canCorrectWarehouseSource =
+    String(user?.role || "").toUpperCase() === "ADMIN" || canCorrectOrders;
   const [orders, setOrders] = useState([]);
   const [orderPage, setOrderPage] = useState(1);
   const [orderPagination, setOrderPagination] = useState({
@@ -79,6 +87,7 @@ export default function OrdersPage() {
   });
   const [debouncedOrderSearch, setDebouncedOrderSearch] = useState("");
   const [availability, setAvailability] = useState([]);
+  const [warehouses, setWarehouses] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [correctionOrder, setCorrectionOrder] = useState(null);
@@ -90,6 +99,15 @@ export default function OrdersPage() {
   const [cancellationReason, setCancellationReason] = useState("");
   const [duplicateOfOrderId, setDuplicateOfOrderId] = useState("");
   const [savingCancellation, setSavingCancellation] = useState(false);
+  const [expandedWarehouseOrders, setExpandedWarehouseOrders] = useState(
+    () => new Set()
+  );
+  const [deliveringWarehouseKey, setDeliveringWarehouseKey] = useState("");
+  const [verifyingWarehouseKey, setVerifyingWarehouseKey] = useState("");
+  const [reversingWarehouseKey, setReversingWarehouseKey] = useState("");
+  const [correctingDnOrderId, setCorrectingDnOrderId] = useState(null);
+  const [verificationWarehouse, setVerificationWarehouse] = useState(null);
+  const [verificationItems, setVerificationItems] = useState([]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -118,10 +136,12 @@ export default function OrdersPage() {
   }, [debouncedOrderSearch, orderPage, statusFilter, token]);
 
   const loadReferenceData = useCallback(async () => {
-    const availabilityResult = await api.getAvailability(token, {
-      includeHidden: canManageOrders,
-    });
+    const [availabilityResult, warehouseResult] = await Promise.all([
+      api.getAvailability(token, { includeHidden: canManageOrders }),
+      api.getWarehouses(token),
+    ]);
     setAvailability(availabilityResult.data || []);
+    setWarehouses(warehouseResult.data || []);
   }, [canManageOrders, token]);
 
   const load = useCallback(
@@ -241,6 +261,235 @@ export default function OrdersPage() {
     }
   };
 
+  const checkWarehouseProducts = (order, fulfillment) => {
+    const pendingItems = (fulfillment.items || []).filter(
+      (item) => item.allocation_status === "PLANNED"
+    );
+    if (!pendingItems.length) {
+      showToast({
+        tone: "error",
+        title: "Nothing pending",
+        message: "This warehouse slip has no products waiting for delivery.",
+      });
+      return;
+    }
+    setVerificationWarehouse({ order, fulfillment });
+    setVerificationItems(
+      pendingItems.map((item) => ({
+        ...item,
+        deliver_quantity:
+          item.verified_quantity === null || item.verified_quantity === undefined
+            ? Number(item.quantity || 0)
+            : Number(item.verified_quantity),
+        remainder_action: ["DELIVER_LATER", "NOT_FOUND"].includes(item.verification_status)
+          ? item.verification_status
+          : "DELIVER_LATER",
+        target_warehouse_id: "",
+        note: item.verification_note || "",
+      }))
+    );
+  };
+
+  const updateVerificationItem = (allocationId, key, value) => {
+    setVerificationItems((current) =>
+      current.map((item) =>
+        Number(item.allocation_id) === Number(allocationId)
+          ? { ...item, [key]: value }
+          : item
+      )
+    );
+  };
+
+  const submitWarehouseVerification = async (event) => {
+    event.preventDefault();
+    if (!verificationWarehouse) return;
+    const { order, fulfillment } = verificationWarehouse;
+    const invalidItem = verificationItems.find((item) => {
+      const quantity = Number(item.deliver_quantity);
+      return !Number.isFinite(quantity) || quantity < 0 || quantity > Number(item.quantity);
+    });
+    if (invalidItem) {
+      showToast({
+        tone: "error",
+        title: "Invalid quantity",
+        message: `Check the deliver-now quantity for ${invalidItem.product_name}.`,
+      });
+      return;
+    }
+    const invalidWarehouseMove = verificationItems.find(
+      (item) =>
+        item.remainder_action === "FOUND_OTHER_WAREHOUSE" &&
+        (!Number(item.target_warehouse_id) ||
+          Number(item.target_warehouse_id) ===
+            Number(verificationWarehouse.fulfillment.warehouse_id))
+    );
+    if (invalidWarehouseMove) {
+      showToast({
+        tone: "error",
+        title: "Destination warehouse required",
+        message: `Select where ${invalidWarehouseMove.product_name} was found.`,
+      });
+      return;
+    }
+
+    const warehouseKey = `${order.id}:${fulfillment.warehouse_id}`;
+    setVerifyingWarehouseKey(warehouseKey);
+    try {
+      const result = await api.verifyOrderWarehouse(
+        order.id,
+        fulfillment.warehouse_id,
+        verificationItems.map((item) => ({
+          allocation_id: Number(item.allocation_id),
+          deliver_quantity: Number(item.deliver_quantity),
+          remainder_action: item.remainder_action,
+          target_warehouse_id: Number(item.target_warehouse_id) || null,
+          note: item.note.trim(),
+        })),
+        token
+      );
+      setVerificationWarehouse(null);
+      setVerificationItems([]);
+      await load();
+      announceDataRefresh("orders");
+      showToast({
+        tone: "success",
+        title: "Product check saved",
+        message: result.message,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Product check failed",
+        message: error.message,
+      });
+    } finally {
+      setVerifyingWarehouseKey("");
+    }
+  };
+
+  const deliverWarehouse = async (order, fulfillment) => {
+    const pendingItems = (fulfillment.items || []).filter(
+      (item) => item.allocation_status === "PLANNED"
+    );
+    if (!pendingItems.length) return;
+    if (pendingItems.some((item) => !item.verified_at || item.verified_quantity === null)) {
+      showToast({
+        tone: "error",
+        title: "Check products first",
+        message: "Save the physical product check before delivery.",
+      });
+      return;
+    }
+    const readyPairs = pendingItems.reduce(
+      (sum, item) => sum + Number(item.verified_quantity || 0),
+      0
+    );
+    if (readyPairs <= 0) {
+      showToast({
+        tone: "error",
+        title: "Nothing ready",
+        message: "No verified product quantity is ready to deliver.",
+      });
+      return;
+    }
+    const confirmed = window.confirm(
+      [
+        `Deliver verified products from ${fulfillment.warehouse_slip_number}?`,
+        `${formatNumber(readyPairs)} pairs will be deducted from stock.`,
+        "Products marked for later or not found will remain pending.",
+      ].join("\n\n")
+    );
+    if (!confirmed) return;
+
+    const warehouseKey = `${order.id}:${fulfillment.warehouse_id}`;
+    setDeliveringWarehouseKey(warehouseKey);
+    try {
+      const result = await api.deliverOrderWarehouse(
+        order.id,
+        fulfillment.warehouse_id,
+        pendingItems.map((item) => ({
+          allocation_id: Number(item.allocation_id),
+          deliver_quantity: Number(item.verified_quantity || 0),
+          remainder_action: ["DELIVER_LATER", "NOT_FOUND"].includes(item.verification_status)
+            ? item.verification_status
+            : "DELIVER_LATER",
+          note: item.verification_note || "",
+        })),
+        token
+      );
+      await load();
+      announceDataRefresh("orders");
+      showToast({
+        tone: "success",
+        title: "Warehouse products delivered",
+        message: result.message,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Warehouse delivery failed",
+        message: error.message,
+      });
+    } finally {
+      setDeliveringWarehouseKey("");
+    }
+  };
+
+  const undoWarehouseDelivery = async (order, fulfillment) => {
+    const reason = window.prompt(
+      [
+        `Undo delivery of ${fulfillment.warehouse_slip_number}?`,
+        `${fulfillment.name}: ${formatNumber(fulfillment.cartons)} CTN / ${formatNumber(fulfillment.pairs)} pairs`,
+        "Stock will be restored and the original delivery movement will remain in history with a reversal entry.",
+        "Enter the correction reason:",
+      ].join("\n\n")
+    );
+    if (reason === null) return;
+    if (reason.trim().length < 3) {
+      showToast({
+        tone: "error",
+        title: "Reason required",
+        message: "Enter why this warehouse delivery must be reversed.",
+      });
+      return;
+    }
+
+    const warehouseKey = `${order.id}:${fulfillment.warehouse_id}`;
+    setReversingWarehouseKey(warehouseKey);
+    try {
+      const result = await api.undoOrderWarehouseDelivery(
+        order.id,
+        fulfillment.warehouse_id,
+        reason.trim(),
+        token
+      );
+      await load();
+      announceDataRefresh("orders");
+      showToast({
+        tone: "success",
+        title: "Warehouse delivery reversed",
+        message: result.message,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Could not reverse delivery",
+        message: error.message,
+      });
+    } finally {
+      setReversingWarehouseKey("");
+    }
+  };
+
+  const toggleWarehouseSlips = (orderId) => {
+    setExpandedWarehouseOrders((current) => {
+      const next = new Set(current);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  };
+
   const openCancellation = (order) => {
     setCancelOrder(order);
     setCancellationCode("DUPLICATE_ORDER");
@@ -285,9 +534,9 @@ export default function OrdersPage() {
     }
   };
 
-  const reopenPacking = async (order) => {
+  const correctWarehouseDeliveryNotes = async (order) => {
     const reason = window.prompt(
-      `Why are you reopening packing for Order #${order.id}?\n\nThe existing delivery note number will remain unchanged.`
+      `Why are you correcting the warehouse DNs for Order #${order.id}?\n\nThis is allowed only before packing, printing, or delivery.`
     );
     if (reason === null) return;
     const trimmedReason = reason.trim();
@@ -295,9 +544,59 @@ export default function OrdersPage() {
       showToast({
         tone: "error",
         title: "Reason required",
-        message: "Enter why this packed order needs to be corrected.",
+        message: "Enter why these DN numbers need correction.",
       });
       return;
+    }
+    const existingNumbers = (order.warehouse_delivery_note_numbers || []).join(
+      ", "
+    );
+    if (
+      !window.confirm(
+        `Correct ${existingNumbers || "these warehouse DNs"}?\n\nAny previously printed copies will become INVALID and must be destroyed or clearly marked invalid. This is allowed only before packing or delivery.`
+      )
+    ) {
+      return;
+    }
+
+    setCorrectingDnOrderId(Number(order.id));
+    try {
+      const result = await api.correctOrderWarehouseDeliveryNotes(
+        order.id,
+        trimmedReason,
+        token
+      );
+      await load();
+      announceDataRefresh("orders");
+      showToast({
+        tone: "success",
+        title: "Warehouse DNs corrected",
+        message: result.message,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Could not correct DNs",
+        message: error.message,
+      });
+    } finally {
+      setCorrectingDnOrderId(null);
+    }
+  };
+
+  const reopenPacking = async (order) => {
+    const reason = window.prompt(
+      `Why are you reopening packing for Order #${order.id}?\n\nThe existing delivery note number will remain unchanged.`
+    );
+    if (reason === null) return false;
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      showToast({
+        tone: "error",
+        title: "Reason required",
+        message: "Enter why this packed order needs to be corrected.",
+      });
+      return false;
     }
 
     try {
@@ -309,8 +608,58 @@ export default function OrdersPage() {
         title: "Packing reopened",
         message: result.message || `${order.delivery_note_number || "Delivery note"} was preserved. You can now correct CTN.`,
       });
+      return true;
     } catch (error) {
       showToast({ tone: "error", title: "Could not reopen packing", message: error.message });
+      return false;
+    }
+  };
+
+  const reopenFromVerification = async () => {
+    if (!verificationWarehouse) return;
+    const order = verificationWarehouse.order;
+    setVerificationWarehouse(null);
+    setVerificationItems([]);
+    const reopened = await reopenPacking(order);
+    if (reopened) openCorrection({ ...order, status: "CONFIRMED" });
+  };
+
+  const undoConfirmation = async (order) => {
+    const reason = window.prompt(
+      `Why are you returning Order #${order.id} to pending?\n\nReserved stock will remain. ${order.delivery_note_number || "The assigned delivery note"} will be reclaimed only if it is the latest DN and has never been prepared, printed, packed, or delivered.`
+    );
+    if (reason === null) return;
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      showToast({
+        tone: "error",
+        title: "Reason required",
+        message: "Enter why this confirmed order must return to pending.",
+      });
+      return;
+    }
+
+    try {
+      const result = await api.undoOrderConfirmation(
+        order.id,
+        trimmedReason,
+        token
+      );
+      await load();
+      announceDataRefresh("orders");
+      showToast({
+        tone: "success",
+        title: "Confirmation undone",
+        message:
+          result.message ||
+          `Order #${order.id} is pending and its reserved stock was preserved.`,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Could not undo confirmation",
+        message: error.message,
+      });
     }
   };
 
@@ -414,10 +763,26 @@ export default function OrdersPage() {
       preparedOrder = prepared.data;
     } catch (error) {
       printWindow.close();
+      const shortages = Array.isArray(error.data?.shortages)
+        ? error.data.shortages
+        : [];
+      const shortageDetails = shortages
+        .map((shortage) => {
+          const required = Number(
+            shortage.ordered_qty ?? shortage.requested ?? 0
+          );
+          const available = Number(
+            shortage.warehouse_stock ?? shortage.available ?? 0
+          );
+          return `${shortage.product_name || "Product"}: requires ${formatNumber(required)} pairs, ${formatNumber(available)} pairs can currently be allocated`;
+        })
+        .join(" · ");
       showToast({
         tone: "error",
         title: "Could not prepare DN",
-        message: error.message,
+        message: shortageDetails
+          ? `${error.message} ${shortageDetails}`
+          : error.message,
       });
       return;
     }
@@ -428,8 +793,15 @@ export default function OrdersPage() {
     const currentTime = now.toLocaleTimeString();
     const deliveryNoteNumber =
       preparedOrder.delivery_note_number ||
+      (preparedOrder.warehouse_delivery_note_numbers || []).join(", ") ||
       deliveryNoteNumbersByOrderId.get(Number(preparedOrder.id)) ||
       "-";
+    const preparedFulfillments = new Map(
+      (preparedOrder.warehouse_fulfillments || []).map((fulfillment) => [
+        Number(fulfillment.warehouse_id),
+        fulfillment,
+      ])
+    );
 
     const groupedRows = new Map();
     (preparedOrder.items || []).forEach((item) => {
@@ -455,11 +827,22 @@ export default function OrdersPage() {
       printableAllocations.forEach((allocation) => {
         const groupCode =
           allocation.print_group_code_snapshot || "LEGACY_UNALLOCATED";
-        if (!groupedRows.has(groupCode)) {
-          groupedRows.set(groupCode, {
+        const groupKey = `warehouse:${allocation.warehouse_id || "UNASSIGNED"}`;
+        if (!groupedRows.has(groupKey)) {
+          const fulfillment = preparedFulfillments.get(
+            Number(allocation.warehouse_id)
+          );
+          const warehouseNumber = groupCode.match(/^WAREHOUSE_(\d+)$/)?.[1];
+          groupedRows.set(groupKey, {
             code: groupCode,
             name:
-              allocation.print_group_name_snapshot || "Legacy / Unallocated",
+              fulfillment?.name ||
+              allocation.print_group_name_snapshot ||
+              "Legacy / Unallocated",
+            warehouseSlipNumber:
+              fulfillment?.warehouse_slip_number ||
+              `${deliveryNoteNumber}-W${warehouseNumber || allocation.warehouse_id || "UNASSIGNED"}`,
+            status: fulfillment?.status || "PLANNED",
             displayOrder: Number(
               allocation.print_group_display_order || 999
             ),
@@ -467,7 +850,7 @@ export default function OrdersPage() {
           });
         }
         const pairs = Number(allocation.quantity || 0);
-        groupedRows.get(groupCode).rows.push({
+        groupedRows.get(groupKey).rows.push({
           finishedGoodId: item.finished_good_id || "-",
           articleCode: item.article_code || "-",
           productName: item.product_name || "-",
@@ -484,6 +867,11 @@ export default function OrdersPage() {
       (left, right) =>
         left.displayOrder - right.displayOrder ||
         left.name.localeCompare(right.name)
+    );
+    const overallCartons = groups.reduce(
+      (total, group) =>
+        total + group.rows.reduce((sum, row) => sum + row.cartons, 0),
+      0
     );
     // Each actual warehouse starts on its own paper. A warehouse only continues
     // onto another paper when its own item count cannot fit safely on one A4 page.
@@ -516,6 +904,7 @@ export default function OrdersPage() {
               <tr>
                 <td>${page.groupPage === 1 ? index + 1 : page.groupPage * rowsPerPage - rowsPerPage + index + 1}</td>
                 <td>${escapeHtml(item.finishedGoodId)}</td>
+                <td class="nowrap">${escapeHtml(item.size)}</td>
                 <td>${escapeHtml(item.productName)}</td>
                 <td>${escapeHtml(item.warehouseName)}</td>
                 <td class="number">${formatPrintNumber(item.cartons)}</td>
@@ -529,14 +918,16 @@ export default function OrdersPage() {
             <div class="page-indicator">Page ${pageIndex + 1} of ${pages.length}</div>
             <div class="header">DELIVERY NOTE</div>
             <div class="warehouse-title">
-              ${escapeHtml(deliveryNoteNumber)} · ${escapeHtml(page.name)} · Warehouse Total: ${formatPrintNumber(page.groupCartons)} CTN
+              ${escapeHtml(page.warehouseSlipNumber)} · ${escapeHtml(page.name)} · Overall Total: ${formatPrintNumber(overallCartons)} CTN
             </div>
             <table class="top-grid">
               <tr>
                 <td width="52%">
                   <strong>Order ID:</strong> #${escapeHtml(preparedOrder.id)}<br/>
-                  <strong>Delivery Note No:</strong> ${escapeHtml(deliveryNoteNumber)}<br/>
+                  ${preparedOrder.delivery_note_number ? `<strong>Master DN:</strong> ${escapeHtml(deliveryNoteNumber)}<br/>` : ""}
+                  <strong>Delivery Note:</strong> ${escapeHtml(page.warehouseSlipNumber)}<br/>
                   <strong>Warehouse:</strong> ${escapeHtml(page.name)}<br/>
+                  <strong>Warehouse Status:</strong> ${escapeHtml(page.status)}<br/>
                   <strong>Created By:</strong> ${escapeHtml(preparedOrder.created_by_name || "-")}<br/>
                   <strong>Printed:</strong> ${escapeHtml(englishDate)} · ${escapeHtml(nepaliDate)} · ${escapeHtml(currentTime)}<br/>
                   <strong>Printed By:</strong> ${escapeHtml(user?.name || "User")}
@@ -553,7 +944,7 @@ export default function OrdersPage() {
             <table class="items">
               <thead>
                 <tr>
-                  <th>S.No</th><th>F.G. ID</th><th>Description of Goods</th>
+                  <th>S.No</th><th>F.G. ID</th><th>Size</th><th>Description of Goods</th>
                   <th>Warehouse</th><th>Carton</th><th>Pairs</th>
                 </tr>
               </thead>
@@ -572,10 +963,27 @@ export default function OrdersPage() {
       })
       .join("");
 
-    api.logOrderPrint(preparedOrder.id, token, {
-      print_type: "grouped_delivery_note",
-      warehouse_groups: groups.map((group) => group.name),
-    }).catch(() => {});
+    try {
+      await api.logOrderPrint(preparedOrder.id, token, {
+        print_type: "warehouse_delivery_slips",
+        warehouse_groups: groups.map((group) => group.name),
+        warehouse_slips: groups.map((group) => ({
+          warehouse: group.name,
+          slip_number: group.warehouseSlipNumber,
+          status: group.status,
+          cartons: group.rows.reduce((sum, row) => sum + row.cartons, 0),
+          pairs: group.rows.reduce((sum, row) => sum + row.pairs, 0),
+        })),
+      });
+    } catch (error) {
+      printWindow.close();
+      showToast({
+        tone: "error",
+        title: "Could not record DN print",
+        message: error.message,
+      });
+      return;
+    }
 
     printWindow.document.open();
     printWindow.document.write(`
@@ -599,11 +1007,12 @@ export default function OrdersPage() {
             .items th { background: #eee; text-align: left; font-size: 16px; }
             .items td { font-size: 16px; }
             .items th:nth-child(1) { width: 6%; }
-            .items th:nth-child(2) { width: 9%; }
-            .items th:nth-child(3) { width: 44%; }
-            .items th:nth-child(4) { width: 23%; }
-            .items th:nth-child(5), .items th:nth-child(6) { width: 9%; }
-            .items td:first-child, .items td:nth-child(2), .number { text-align: center; }
+            .items th:nth-child(2) { width: 8%; }
+            .items th:nth-child(3) { width: 10%; }
+            .items th:nth-child(4) { width: 38%; }
+            .items th:nth-child(5) { width: 20%; }
+            .items th:nth-child(6), .items th:nth-child(7) { width: 9%; }
+            .items td:first-child, .items td:nth-child(2), .items td:nth-child(3), .number { text-align: center; }
             .items tbody td { vertical-align: middle; }
             .nowrap { white-space: nowrap; }
             .totals { margin-top: 4px; }
@@ -933,9 +1342,22 @@ export default function OrdersPage() {
               label: "Status",
               width: "7%",
               align: "center",
-              render: (row) => (
-                <StatusBadge tone={statusTone[row.status]}>{row.status}</StatusBadge>
-              ),
+              render: (row) => {
+                const displayStatus = row.fulfillment_status || row.status;
+                return (
+                  <div className="space-y-1">
+                    <StatusBadge tone={statusTone[displayStatus] || statusTone[row.status]}>
+                      {displayStatus}
+                    </StatusBadge>
+                    {Number(row.warehouse_fulfillment_count || 0) > 0 ? (
+                      <div className="text-xs text-slate-500">
+                        {formatNumber(row.delivered_warehouse_count || 0)} of{" "}
+                        {formatNumber(row.warehouse_fulfillment_count)} warehouses delivered
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              },
             },
             {
               key: "cancellation_reason",
@@ -1019,7 +1441,7 @@ export default function OrdersPage() {
                                 Confirm
                               </Button>
                             ) : null}
-                            {["PENDING", "CONFIRMED"].includes(row.status) ? (
+                            {row.status === "CONFIRMED" ? (
                               <Button
                                 size="sm"
                                 variant="secondary"
@@ -1029,28 +1451,22 @@ export default function OrdersPage() {
                                 Pack
                               </Button>
                             ) : null}
-                            <Button
-                              size="sm"
-                              icon="check"
-                              className="h-auto min-h-9 whitespace-normal px-2 py-1.5 text-sm"
-                              onClick={() => {
-                                const confirmed = window.confirm(
-                                  `Are you sure you want to mark Order #${row.id} as delivered?\n\nCustomer: ${row.customer_name}\nThis action cannot be undone.`
-                                );
-                                if (!confirmed) return;
-                                changeStatus(row.id, "DELIVERED");
-                              }}
-                            >
-                              Deliver
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="danger"
-                              className="h-auto min-h-9 whitespace-normal px-2 py-1.5 text-sm"
-                              onClick={() => openCancellation(row)}
-                            >
-                              Cancel
-                            </Button>
+                            {row.status === "PACKED" &&
+                            Number(row.delivered_warehouse_count || 0) === 0 ? (
+                              <div className="rounded-lg bg-indigo-50 px-2 py-1.5 text-xs font-semibold text-indigo-700">
+                                Deliver from the individual warehouse DNs.
+                              </div>
+                            ) : null}
+                            {Number(row.delivered_warehouse_count || 0) === 0 ? (
+                              <Button
+                                size="sm"
+                                variant="danger"
+                                className="h-auto min-h-9 whitespace-normal px-2 py-1.5 text-sm"
+                                onClick={() => openCancellation(row)}
+                              >
+                                Cancel
+                              </Button>
+                            ) : null}
                           </>
                         ) : null}
                       </div>
@@ -1064,19 +1480,193 @@ export default function OrdersPage() {
               width: "11%",
               align: "center",
               render: (row) => {
+                const warehouseDeliveryNoteNumbers =
+                  row.warehouse_delivery_note_numbers || [];
                 const deliveryNoteNumber =
-  row.delivery_note_number ||
-  deliveryNoteNumbersByOrderId.get(Number(row.id)) ||
-  "-";
+                  row.delivery_note_number ||
+                  deliveryNoteNumbersByOrderId.get(Number(row.id)) ||
+                  "-";
+                const warehouseFulfillments = row.warehouse_fulfillments || [];
+                const warehouseSlipsExpanded = expandedWarehouseOrders.has(
+                  Number(row.id)
+                );
                 return (
                   <div className="space-y-1">
                     {row.confirmed_by_name || "-"}
                     <br />
-                    <small style={{ color: "#666" }}>{deliveryNoteNumber}</small>
-                    {!row.delivery_note_number && ["CONFIRMED", "PACKED", "DELIVERED"].includes(row.status) ? (
+                    <small className="font-semibold text-slate-600">
+                      {row.delivery_note_number
+                        ? `Master: ${deliveryNoteNumber}`
+                        : warehouseDeliveryNoteNumbers.length
+                          ? `DNs: ${warehouseDeliveryNoteNumbers.join(", ")}`
+                          : "DNs: Not assigned"}
+                    </small>
+                    {canCorrectWarehouseSource &&
+                    !row.delivery_note_number &&
+                    warehouseDeliveryNoteNumbers.length > 0 &&
+                    row.status === "CONFIRMED" ? (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm"
+                        disabled={correctingDnOrderId === Number(row.id)}
+                        onClick={() => correctWarehouseDeliveryNotes(row)}
+                      >
+                        {correctingDnOrderId === Number(row.id)
+                          ? "Correcting DNs…"
+                          : "Correct DNs"}
+                      </Button>
+                    ) : null}
+                    {!row.delivery_note_number && !warehouseDeliveryNoteNumbers.length && ["CONFIRMED", "PACKED", "DELIVERED"].includes(row.status) ? (
                       <Button size="sm" variant="secondary" className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm" onClick={() => assignDeliveryNote(row)}>
                         Assign DN
                       </Button>
+                    ) : null}
+                    {warehouseFulfillments.length ? (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-auto min-h-8 w-full whitespace-normal px-2 py-1 text-xs"
+                          onClick={() => toggleWarehouseSlips(Number(row.id))}
+                        >
+                          {warehouseSlipsExpanded ? "Hide" : "View"} warehouse slips ({warehouseFulfillments.length})
+                        </Button>
+                        {warehouseSlipsExpanded ? (
+                          <div className="mt-2 grid min-w-[220px] gap-2 text-left">
+                            {warehouseFulfillments.map((fulfillment) => {
+                              const warehouseKey = `${row.id}:${fulfillment.warehouse_id}`;
+                              const isDelivered = fulfillment.status === "DELIVERED";
+                              const isPartiallyDelivered = fulfillment.status === "PARTIALLY DELIVERED";
+                              const isVoid = fulfillment.status === "VOID";
+                              const isReassigned = fulfillment.status === "REASSIGNED";
+                              const isInactive = isVoid || isReassigned;
+                              const pendingWarehouseItems = (fulfillment.items || []).filter(
+                                (item) => item.allocation_status === "PLANNED"
+                              );
+                              const productsChecked =
+                                pendingWarehouseItems.length > 0 &&
+                                pendingWarehouseItems.every(
+                                  (item) => item.verified_at && item.verified_quantity !== null
+                                );
+                              const verifiedReadyPairs = pendingWarehouseItems.reduce(
+                                (sum, item) => sum + Number(item.verified_quantity || 0),
+                                0
+                              );
+                              return (
+                                <div
+                                  key={warehouseKey}
+                                  className={`rounded-xl border p-2 ${
+                                    isInactive
+                                      ? "border-slate-300 bg-slate-100"
+                                      : isDelivered
+                                      ? "border-emerald-200 bg-emerald-50"
+                                      : isPartiallyDelivered
+                                        ? "border-sky-200 bg-sky-50"
+                                        : "border-amber-200 bg-amber-50"
+                                  }`}
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div>
+                                      <div className="font-bold text-slate-900">
+                                        {fulfillment.warehouse_slip_number}
+                                      </div>
+                                      <div className="text-xs text-slate-600">
+                                        {fulfillment.name}
+                                      </div>
+                                    </div>
+                                    <StatusBadge tone={isDelivered ? "success" : isInactive ? "neutral" : isPartiallyDelivered ? "info" : "warning"}>
+                                      {fulfillment.status}
+                                    </StatusBadge>
+                                  </div>
+                                  <div className="mt-1 text-xs font-semibold text-slate-700">
+                                    {formatNumber(fulfillment.cartons)} CTN / {formatNumber(fulfillment.pairs)} pairs
+                                  </div>
+                                  {Number(fulfillment.delivered_pairs || 0) > 0 && !isDelivered ? (
+                                    <div className="mt-1 text-xs text-sky-700">
+                                      {formatNumber(fulfillment.delivered_pairs)} delivered · {formatNumber(fulfillment.pending_pairs)} pending
+                                    </div>
+                                  ) : null}
+                                  {isReassigned ? (
+                                    <div className="mt-1 text-xs font-semibold text-slate-600">
+                                      Products moved to {(
+                                        fulfillment.reassigned_to_delivery_note_numbers || []
+                                      ).join(", ") || "another warehouse DN"}. No delivery action is available on this DN.
+                                    </div>
+                                  ) : isVoid ? (
+                                    <div className="mt-1 text-xs font-semibold text-slate-600">
+                                      Void — this delivery note is inactive.
+                                    </div>
+                                  ) : isDelivered ? (
+                                    <>
+                                      <div className="mt-1 text-xs text-emerald-700">
+                                        {fulfillment.delivered_by_name
+                                          ? `By ${fulfillment.delivered_by_name}`
+                                          : "Delivered"}
+                                        {fulfillment.delivered_at
+                                          ? ` · ${formatEnglishDate(fulfillment.delivered_at)}`
+                                          : ""}
+                                      </div>
+                                      {canCorrectWarehouseSource ? (
+                                        <Button
+                                          size="sm"
+                                          variant="danger"
+                                          className="mt-2 h-auto min-h-8 w-full whitespace-normal px-2 py-1 text-xs"
+                                          disabled={reversingWarehouseKey === warehouseKey}
+                                          onClick={() => undoWarehouseDelivery(row, fulfillment)}
+                                        >
+                                          {reversingWarehouseKey === warehouseKey
+                                            ? "Reversing…"
+                                            : "Undo warehouse delivery"}
+                                        </Button>
+                                      ) : null}
+                                    </>
+                                  ) : canManageOrders && row.status === "PACKED" ? (
+                                    <div className="mt-2 grid gap-1.5">
+                                      <Button
+                                        size="sm"
+                                        variant="secondary"
+                                        className="h-auto min-h-8 w-full whitespace-normal px-2 py-1 text-xs"
+                                        disabled={verifyingWarehouseKey === warehouseKey}
+                                        onClick={() => checkWarehouseProducts(row, fulfillment)}
+                                      >
+                                        {verifyingWarehouseKey === warehouseKey
+                                          ? "Saving check…"
+                                          : productsChecked
+                                            ? "Recheck products"
+                                            : "Check products"}
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        icon="check"
+                                        className="h-auto min-h-8 w-full whitespace-normal px-2 py-1 text-xs"
+                                        disabled={
+                                          deliveringWarehouseKey === warehouseKey ||
+                                          !productsChecked ||
+                                          verifiedReadyPairs <= 0
+                                        }
+                                        onClick={() => deliverWarehouse(row, fulfillment)}
+                                      >
+                                        {deliveringWarehouseKey === warehouseKey
+                                          ? "Delivering…"
+                                          : productsChecked
+                                            ? `Deliver ${formatNumber(verifiedReadyPairs)} verified pairs`
+                                            : "Deliver verified products"}
+                                      </Button>
+                                    </div>
+                                  ) : (
+                                    <div className="mt-1 text-xs text-amber-700">
+                                      {row.status === "PACKED"
+                                        ? "Waiting for warehouse delivery."
+                                        : "Waiting for packing."}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </>
                     ) : null}
                   </div>
                 );
@@ -1091,13 +1681,34 @@ export default function OrdersPage() {
                   render: (row) => {
                     if (!canCorrectOrders) return <span className="text-slate-400">-</span>;
                     if (row.status === "PACKED") {
+                      if ((row.warehouse_fulfillments || []).some(
+                        (fulfillment) => Number(fulfillment.delivered_pairs || 0) > 0
+                      )) {
+                        return (
+                          <span className="text-xs font-semibold text-slate-500">
+                            Locked after partial delivery
+                          </span>
+                        );
+                      }
                       return (
                         <Button size="sm" variant="secondary" className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm" onClick={() => reopenPacking(row)}>
                           Reopen packing
                         </Button>
                       );
                     }
-                    if (["PENDING", "CONFIRMED"].includes(row.status)) {
+                    if (row.status === "CONFIRMED") {
+                      return (
+                        <div className="grid gap-1">
+                          <Button size="sm" variant="secondary" className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm" onClick={() => undoConfirmation(row)}>
+                            Undo confirmation
+                          </Button>
+                          <Button size="sm" variant="secondary" className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm" onClick={() => openCorrection(row)}>
+                            Correct CTN
+                          </Button>
+                        </div>
+                      );
+                    }
+                    if (row.status === "PENDING") {
                       return (
                         <Button size="sm" variant="secondary" className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm" onClick={() => openCorrection(row)}>
                           Correct CTN
@@ -1250,6 +1861,187 @@ export default function OrdersPage() {
             <div className="flex justify-end gap-2">
               <Button type="button" variant="secondary" disabled={savingCorrection} onClick={() => setCorrectionOrder(null)}>Cancel</Button>
               <Button type="submit" disabled={savingCorrection || !correctionItems.length}>{savingCorrection ? "Saving..." : "Save correction"}</Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {verificationWarehouse ? (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          onMouseDown={() => !verifyingWarehouseKey && setVerificationWarehouse(null)}
+        >
+          <form
+            onSubmit={submitWarehouseVerification}
+            onMouseDown={(event) => event.stopPropagation()}
+            className="max-h-[92vh] w-full max-w-4xl space-y-5 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"
+          >
+            <div>
+              <h2 className="text-lg font-bold text-slate-950">
+                Verify {verificationWarehouse.fulfillment.warehouse_slip_number}
+              </h2>
+              <p className="text-sm text-slate-500">
+                Enter the quantity physically found and save the check. No stock will be deducted until you use the separate Deliver button.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              {verificationItems.map((item) => {
+                const planned = Number(item.quantity || 0);
+                const deliverNow = Number(item.deliver_quantity || 0);
+                const remaining = Math.max(0, planned - deliverNow);
+                return (
+                  <div key={item.allocation_id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <div className="font-bold text-slate-950">
+                          {item.article_code || item.product_name}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {[item.product_name, item.color, item.size].filter(Boolean).join(" · ")}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-white px-3 py-1 text-sm font-semibold text-slate-700">
+                        Planned: {formatNumber(planned)} pairs
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-[1fr_1fr_1.4fr]">
+                      <Field label="Found and ready (pairs)">
+                        <TextInput
+                          type="number"
+                          min="0"
+                          max={planned}
+                          step="1"
+                          required
+                          value={item.deliver_quantity}
+                          onChange={(event) =>
+                            updateVerificationItem(item.allocation_id, "deliver_quantity", event.target.value)
+                          }
+                        />
+                      </Field>
+                      <Field label={`Remaining (${formatNumber(remaining)})`}>
+                        <SelectInput
+                          value={item.remainder_action}
+                          disabled={remaining <= 0}
+                          onChange={(event) =>
+                            updateVerificationItem(item.allocation_id, "remainder_action", event.target.value)
+                          }
+                        >
+                          <option value="DELIVER_LATER">Deliver later</option>
+                          <option value="NOT_FOUND">Not found / out of stock</option>
+                          <option value="FOUND_OTHER_WAREHOUSE">Found in another warehouse</option>
+                        </SelectInput>
+                      </Field>
+                      <Field label="Warehouse note">
+                        <TextInput
+                          value={item.note}
+                          maxLength={500}
+                          onChange={(event) =>
+                            updateVerificationItem(item.allocation_id, "note", event.target.value)
+                          }
+                          placeholder="Optional physical-count note"
+                        />
+                      </Field>
+                    </div>
+                    {remaining > 0 && item.remainder_action === "FOUND_OTHER_WAREHOUSE" ? (
+                      <div className="mt-3 max-w-sm">
+                        <Field label="Found in warehouse">
+                          <SelectInput
+                            required
+                            value={item.target_warehouse_id}
+                            onChange={(event) =>
+                              updateVerificationItem(item.allocation_id, "target_warehouse_id", event.target.value)
+                            }
+                          >
+                            <option value="">Select destination warehouse</option>
+                            {warehouses
+                              .filter(
+                                (warehouse) =>
+                                  Number(warehouse.id) !==
+                                    Number(verificationWarehouse.fulfillment.warehouse_id) &&
+                                  Number(warehouse.is_active) !== 0
+                              )
+                              .map((warehouse) => (
+                                <option key={warehouse.id} value={warehouse.id}>
+                                  {warehouse.name}
+                                </option>
+                              ))}
+                          </SelectInput>
+                        </Field>
+                      </div>
+                    ) : null}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => updateVerificationItem(item.allocation_id, "deliver_quantity", planned)}
+                      >
+                        All found
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          updateVerificationItem(item.allocation_id, "deliver_quantity", 0);
+                          updateVerificationItem(item.allocation_id, "remainder_action", "DELIVER_LATER");
+                        }}
+                      >
+                        Deliver later
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="danger"
+                        onClick={() => {
+                          updateVerificationItem(item.allocation_id, "deliver_quantity", 0);
+                          updateVerificationItem(item.allocation_id, "remainder_action", "NOT_FOUND");
+                        }}
+                      >
+                        Not found
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          updateVerificationItem(item.allocation_id, "deliver_quantity", 0);
+                          updateVerificationItem(item.allocation_id, "remainder_action", "FOUND_OTHER_WAREHOUSE");
+                        }}
+                      >
+                        Found in another warehouse
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              Need to remove or replace a missing product? Reopen packing before delivering anything, then use the existing order correction window. Once any quantity is delivered, the original order is locked for audit safety.
+            </div>
+
+            <div className="flex flex-wrap justify-between gap-2">
+              <div>
+                {canCorrectOrders &&
+                !(verificationWarehouse.order.warehouse_fulfillments || []).some(
+                  (fulfillment) => Number(fulfillment.delivered_pairs || 0) > 0
+                ) ? (
+                  <Button type="button" variant="secondary" disabled={Boolean(verifyingWarehouseKey)} onClick={reopenFromVerification}>
+                    Reopen & change products
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="secondary" disabled={Boolean(verifyingWarehouseKey)} onClick={() => setVerificationWarehouse(null)}>
+                  Cancel
+                </Button>
+                <Button type="submit" icon="check" disabled={Boolean(verifyingWarehouseKey)}>
+                  {verifyingWarehouseKey ? "Saving check…" : "Save product check"}
+                </Button>
+              </div>
             </div>
           </form>
         </div>

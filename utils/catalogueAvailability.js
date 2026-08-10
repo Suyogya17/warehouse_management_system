@@ -31,13 +31,30 @@ const getProductDisplayQuantity = (product) => {
 const getReservedByProduct = async (productIds = []) => {
   if (!productIds.length) return new Map();
 
+  const supportsWarehouseDelivery = await hasColumn(
+    'order_item_warehouse_allocations',
+    'allocation_status'
+  );
+
   const { clause: statusClause, params: statusParams } =
     buildInClause(ACTIVE_RESERVATION_STATUSES);
   const { clause: productClause, params: productParams } =
     buildInClause(productIds);
   const result = await query(
     `SELECT oi.finished_good_id,
-            COALESCE(SUM(oi.qty_ordered), 0) AS reserved_qty
+            COALESCE(SUM(${
+              supportsWarehouseDelivery
+                ? `GREATEST(
+                    0,
+                    oi.qty_ordered - COALESCE((
+                      SELECT SUM(delivered_allocation.quantity)
+                      FROM order_item_warehouse_allocations delivered_allocation
+                      WHERE delivered_allocation.order_item_id = oi.id
+                        AND delivered_allocation.allocation_status = 'DEDUCTED'
+                    ), 0)
+                  )`
+                : 'oi.qty_ordered'
+            }), 0) AS reserved_qty
      FROM order_items oi
      JOIN orders o ON o.id = oi.order_id
      WHERE o.status IN ${statusClause}

@@ -145,6 +145,7 @@ const getProducts = async (req, res, next) => {
       supportsVisibility,
       supportsCountryCode,
       supportsPermissions,
+      supportsWarehouseDelivery,
     ] = await Promise.all([
       hasColumn("orders", "cancellation_code"),
       hasColumn("order_items", "ordered_from_offer"),
@@ -153,6 +154,7 @@ const getProducts = async (req, res, next) => {
       hasColumn("finished_goods", "is_visible"),
       hasColumn("users", "country_code"),
       hasTable("user_product_permissions"),
+      hasColumn("order_item_warehouse_allocations", "allocation_status"),
     ]);
 
     if (mode !== "ALL" && !supportsOfferSnapshots) {
@@ -176,6 +178,17 @@ const getProducts = async (req, res, next) => {
     const duplicateCancellationCondition = supportsCancellationCode
       ? "o.status = 'CANCELLED' AND o.cancellation_code = 'DUPLICATE_ORDER'"
       : "FALSE";
+    const activeQuantityExpression = supportsWarehouseDelivery
+      ? `GREATEST(
+           0,
+           oi.qty_ordered - COALESCE((
+             SELECT SUM(delivered_allocation.quantity)
+             FROM order_item_warehouse_allocations delivered_allocation
+             WHERE delivered_allocation.order_item_id = oi.id
+               AND delivered_allocation.allocation_status = 'DEDUCTED'
+           ), 0)
+         )`
+      : "oi.qty_ordered";
     const interestJoin = supportsInterest
       ? `LEFT JOIN (
            SELECT finished_good_id,
@@ -249,7 +262,7 @@ const getProducts = async (req, res, next) => {
          SELECT oi.finished_good_id,
                 COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED' THEN oi.qty_ordered ELSE 0 END), 0) AS total_quantity,
                 COALESCE(SUM(CASE WHEN o.status = 'DELIVERED' THEN oi.qty_ordered ELSE 0 END), 0) AS delivered_quantity,
-                COALESCE(SUM(CASE WHEN o.status IN ('PENDING', 'CONFIRMED', 'PACKED') THEN oi.qty_ordered ELSE 0 END), 0) AS active_quantity,
+                COALESCE(SUM(CASE WHEN o.status IN ('PENDING', 'CONFIRMED', 'PACKED') THEN ${activeQuantityExpression} ELSE 0 END), 0) AS active_quantity,
                 COALESCE(SUM(CASE WHEN ${genuineCancellationCondition} THEN oi.qty_ordered ELSE 0 END), 0) AS genuine_cancelled_quantity,
                 COALESCE(SUM(CASE WHEN ${duplicateCancellationCondition} THEN oi.qty_ordered ELSE 0 END), 0) AS duplicate_cancelled_quantity,
                 COUNT(DISTINCT CASE WHEN o.status <> 'CANCELLED' THEN o.id END) AS order_count,
@@ -270,7 +283,7 @@ const getProducts = async (req, res, next) => {
        ) last_sale ON last_sale.finished_good_id = fg.id
        LEFT JOIN (
          SELECT finished_good_id,
-                SUM(qty_ordered) AS reserved_quantity
+                SUM(${activeQuantityExpression}) AS reserved_quantity
          FROM order_items oi
          JOIN orders o ON o.id = oi.order_id
          WHERE o.status IN ('PENDING', 'CONFIRMED', 'PACKED')

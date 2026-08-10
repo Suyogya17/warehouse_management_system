@@ -662,10 +662,38 @@ export const api = {
   assignOrderDeliveryNote: (id, token) =>
     apiRequest(`/orders/${id}/delivery-note`, { method: "PUT" }, token),
 
+  correctOrderWarehouseDeliveryNotes: (id, reason, token) =>
+    apiRequest(
+      `/orders/${id}/delivery-note/correct-numbers`,
+      { method: "PUT", body: JSON.stringify({ reason }) },
+      token
+    ),
+
   prepareOrderDeliveryNote: (id, token) =>
     apiRequest(
       `/orders/${id}/delivery-note/prepare`,
       { method: "POST" },
+      token
+    ),
+
+  verifyOrderWarehouse: (id, warehouseId, items, token) =>
+    apiRequest(
+      `/orders/${id}/warehouse-fulfillments/${warehouseId}/verify`,
+      { method: "PUT", body: JSON.stringify({ items }) },
+      token
+    ),
+
+  deliverOrderWarehouse: (id, warehouseId, items, token) =>
+    apiRequest(
+      `/orders/${id}/warehouse-fulfillments/${warehouseId}/deliver`,
+      { method: "PUT", body: JSON.stringify({ items }) },
+      token
+    ),
+
+  undoOrderWarehouseDelivery: (id, warehouseId, reason, token) =>
+    apiRequest(
+      `/orders/${id}/warehouse-fulfillments/${warehouseId}/undo-delivery`,
+      { method: "PUT", body: JSON.stringify({ reason }) },
       token
     ),
 
@@ -679,6 +707,13 @@ export const api = {
   reopenOrderPacking: (id, reason, token) =>
     apiRequest(
       `/orders/${id}/reopen-packing`,
+      { method: "PUT", body: JSON.stringify({ reason }) },
+      token
+    ),
+
+  undoOrderConfirmation: (id, reason, token) =>
+    apiRequest(
+      `/orders/${id}/undo-confirmation`,
       { method: "PUT", body: JSON.stringify({ reason }) },
       token
     ),

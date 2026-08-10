@@ -67,8 +67,26 @@ const run = async (sql, params = []) => {
 const productLabel = (row) =>
   [row.article_code || row.name, row.color, row.size].filter(Boolean).join(" / ");
 
+const getActiveReservationExpression = async (itemAlias = "oi") =>
+  (await hasColumn(
+    "order_item_warehouse_allocations",
+    "allocation_status"
+  ))
+    ? `GREATEST(
+         0,
+         ${itemAlias}.qty_ordered - COALESCE((
+           SELECT SUM(delivered_allocation.quantity)
+           FROM order_item_warehouse_allocations delivered_allocation
+           WHERE delivered_allocation.order_item_id = ${itemAlias}.id
+             AND delivered_allocation.allocation_status = 'DEDUCTED'
+         ), 0)
+       )`
+    : `${itemAlias}.qty_ordered`;
+
 const getSupport = async (req, res, next) => {
   try {
+    const activeReservationExpression =
+      await getActiveReservationExpression("oi");
     const [productSignals, materialRisks] = await Promise.all([
       run(
         `SELECT fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit,
@@ -81,7 +99,7 @@ const getSupport = async (req, res, next) => {
                 last_order.last_order_at
          FROM finished_goods fg
          LEFT JOIN (
-           SELECT oi.finished_good_id, SUM(oi.qty_ordered) AS reserved_quantity
+           SELECT oi.finished_good_id, SUM(${activeReservationExpression}) AS reserved_quantity
            FROM order_items oi
            JOIN orders o ON o.id = oi.order_id
            WHERE o.status IN (${activeStatusPlaceholders})
@@ -220,6 +238,8 @@ const getSupport = async (req, res, next) => {
 
 const getDashboard = async (req, res, next) => {
   try {
+    const activeReservationExpression =
+      await getActiveReservationExpression("oi");
     const [
       rawMaterialTotal,
       finishedGoodsTotal,
@@ -246,7 +266,7 @@ const getDashboard = async (req, res, next) => {
          WHERE created_at >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')`
       ),
       run(
-        `SELECT COALESCE(SUM(oi.qty_ordered), 0) AS total_quantity
+        `SELECT COALESCE(SUM(${activeReservationExpression}), 0) AS total_quantity
          FROM order_items oi
          JOIN orders o ON o.id = oi.order_id
          WHERE o.status IN (${activeStatusPlaceholders})`,
@@ -426,6 +446,8 @@ const getDashboard = async (req, res, next) => {
 
 const getInventory = async (req, res, next) => {
   try {
+    const activeReservationExpression =
+      await getActiveReservationExpression("oi");
     const hasWarehouseStock = await hasTable("finished_good_warehouse_stock");
     const hasWarehouses = await hasTable("warehouses");
     const hasWarehouseInventory = hasWarehouseStock && hasWarehouses;
@@ -481,7 +503,7 @@ const getInventory = async (req, res, next) => {
          LEFT JOIN order_items oi ON oi.finished_good_id = fg.id
          LEFT JOIN orders o ON o.id = oi.order_id
          LEFT JOIN (
-           SELECT oi.finished_good_id, SUM(oi.qty_ordered) AS reserved_quantity
+           SELECT oi.finished_good_id, SUM(${activeReservationExpression}) AS reserved_quantity
            FROM order_items oi
            JOIN orders o ON o.id = oi.order_id
            WHERE o.status IN (${activeStatusPlaceholders})
@@ -514,7 +536,7 @@ const getInventory = async (req, res, next) => {
          LEFT JOIN order_items oi ON oi.finished_good_id = fg.id
          LEFT JOIN orders o ON o.id = oi.order_id
          LEFT JOIN (
-           SELECT oi.finished_good_id, SUM(oi.qty_ordered) AS reserved_quantity
+           SELECT oi.finished_good_id, SUM(${activeReservationExpression}) AS reserved_quantity
            FROM order_items oi
            JOIN orders o ON o.id = oi.order_id
            WHERE o.status IN (${activeStatusPlaceholders})
@@ -555,7 +577,7 @@ const getInventory = async (req, res, next) => {
       ),
       run(
         `SELECT fg.id, fg.name, fg.article_code, fg.color, fg.size, fg.unit,
-                COALESCE(SUM(oi.qty_ordered), 0) AS reserved_quantity
+                COALESCE(SUM(${activeReservationExpression}), 0) AS reserved_quantity
          FROM order_items oi
          JOIN orders o ON o.id = oi.order_id
          JOIN finished_goods fg ON fg.id = oi.finished_good_id
