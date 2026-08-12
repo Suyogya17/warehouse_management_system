@@ -43,6 +43,7 @@ const {
   getEffectiveOfferPrice,
   loadUserSeriesOfferAdjustments,
 } = require('../utils/offerPricing');
+const { getIndiaPriceFromNepalPrice } = require('../utils/priceConversion');
 const {
   loadWarehousePrintGroupMap,
   resolveWarehousePrintGroup,
@@ -62,6 +63,7 @@ const CANCELLATION_CODES = new Set([
 const WAREHOUSE_REMAINDER_ACTIONS = new Set([
   'DELIVER_LATER',
   'NOT_FOUND',
+  'OUT_OF_STOCK',
   'FOUND_OTHER_WAREHOUSE',
 ]);
 const DUPLICATE_ORDER_WINDOW_HOURS = Math.max(
@@ -564,6 +566,7 @@ const buildWarehouseFulfillments = (
       cartons: 0,
       delivered_pairs: 0,
       pending_pairs: 0,
+      out_of_stock_pairs: 0,
       items: [],
       allocation_statuses: [],
       fully_packed: true,
@@ -593,6 +596,7 @@ const buildWarehouseFulfillments = (
           cartons: 0,
           delivered_pairs: 0,
           pending_pairs: 0,
+          out_of_stock_pairs: 0,
           items: [],
           allocation_statuses: [],
           fully_packed: true,
@@ -614,6 +618,8 @@ const buildWarehouseFulfillments = (
         group.delivered_pairs += quantity;
       } else if (allocationStatus === 'PLANNED') {
         group.pending_pairs += quantity;
+      } else if (allocationStatus === 'OUT_OF_STOCK') {
+        group.out_of_stock_pairs += quantity;
       }
       group.items.push({
         allocation_id: Number(allocation.id),
@@ -663,8 +669,20 @@ const buildWarehouseFulfillments = (
       const delivered = !inactive && group.allocation_statuses.length > 0 && group.allocation_statuses.every(
         (status) => status === 'DEDUCTED'
       );
+      const hasOutOfStock = group.allocation_statuses.some(
+        (status) => status === 'OUT_OF_STOCK'
+      );
+      const allOutOfStock =
+        group.allocation_statuses.length > 0 &&
+        group.allocation_statuses.every((status) => status === 'OUT_OF_STOCK');
+      const deliveredWithShortage =
+        !inactive &&
+        hasOutOfStock &&
+        group.allocation_statuses.some((status) => status === 'DEDUCTED') &&
+        !group.allocation_statuses.some((status) => status === 'PLANNED');
       const partiallyDelivered =
         !delivered &&
+        !deliveredWithShortage &&
         group.allocation_statuses.some((status) => status === 'DEDUCTED');
 
       return {
@@ -682,6 +700,10 @@ const buildWarehouseFulfillments = (
           ),
         status: inactive
           ? group.delivery_note_status
+          : allOutOfStock
+            ? 'OUT OF STOCK'
+          : deliveredWithShortage
+            ? 'DELIVERED WITH SHORTAGE'
           : delivered
           ? 'DELIVERED'
           : partiallyDelivered
@@ -695,16 +717,22 @@ const buildWarehouseFulfillments = (
         cartons: group.cartons,
         delivered_pairs: group.delivered_pairs,
         pending_pairs: group.pending_pairs,
+        out_of_stock_pairs: group.out_of_stock_pairs,
         reassigned_to_delivery_note_numbers:
           group.reassigned_to_delivery_note_numbers || [],
         items: group.items,
-        delivered_by_name: delivered ? group.delivered_by_name : null,
-        delivered_at: delivered ? group.delivered_at : null,
+        delivered_by_name:
+          delivered || deliveredWithShortage ? group.delivered_by_name : null,
+        delivered_at:
+          delivered || deliveredWithShortage ? group.delivered_at : null,
       };
     });
 
-  const deliveredCount = fulfillments.filter(
-    (fulfillment) => fulfillment.status === 'DELIVERED'
+  const completedCount = fulfillments.filter(
+    (fulfillment) =>
+      ['DELIVERED', 'DELIVERED WITH SHORTAGE', 'OUT OF STOCK'].includes(
+        fulfillment.status
+      )
   ).length;
   const activeFulfillments = fulfillments.filter(
     (fulfillment) => !['VOID', 'REASSIGNED'].includes(fulfillment.status)
@@ -715,16 +743,16 @@ const buildWarehouseFulfillments = (
       Number(fulfillment.delivered_pairs || 0) > 0
   );
   const fulfillmentStatus =
-    activeFulfillments.length > 0 && deliveredCount === activeFulfillments.length
+    activeFulfillments.length > 0 && completedCount === activeFulfillments.length
       ? 'DELIVERED'
-      : deliveredCount > 0 || hasPartialDelivery
+      : completedCount > 0 || hasPartialDelivery
         ? 'PARTIALLY DELIVERED'
         : String(order.status || '').toUpperCase();
 
   return {
     fulfillments,
     fulfillmentStatus,
-    deliveredCount,
+    deliveredCount: completedCount,
     totalCount: activeFulfillments.length,
   };
 };
@@ -1399,6 +1427,8 @@ const getAll = async (req, res, next) => {
       supportsWarehouseDeliveredBy,
       supportsWarehouseDeliveredAt,
       supportsPerWarehouseDeliveryNotes,
+      supportsOrderBsDate,
+      supportsOrderFiscalYear,
     ] =
       await Promise.all([
         hasColumn('orders', 'cancellation_code'),
@@ -1409,6 +1439,8 @@ const getAll = async (req, res, next) => {
         hasColumn('order_item_warehouse_allocations', 'delivered_by'),
         hasColumn('order_item_warehouse_allocations', 'delivered_at'),
         hasTable('order_warehouse_delivery_notes'),
+        hasColumn('orders', 'bs_date'),
+        hasColumn('orders', 'bs_fiscal_year'),
       ]);
     const params = [];
     const conditions = [];
@@ -1422,7 +1454,7 @@ const getAll = async (req, res, next) => {
     );
     const includeItems = req.query.include_items !== '0';
 
-    if (req.user.role === 'USER') {
+    if (['USER', 'ELDER'].includes(req.user.role)) {
       conditions.push('o.created_by = ?');
       params.push(req.user.id);
     }
@@ -1431,6 +1463,78 @@ const getAll = async (req, res, next) => {
     if (ALL_STATUSES.includes(requestedStatus)) {
       conditions.push('o.status = ?');
       params.push(requestedStatus);
+    }
+
+    const isIsoDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const dateFrom = String(req.query.date_from || '').trim();
+    const dateTo = String(req.query.date_to || '').trim();
+    const bsDateFrom = String(req.query.bs_date_from || '').trim();
+    const bsDateTo = String(req.query.bs_date_to || '').trim();
+    const fiscalYear = String(req.query.fiscal_year || '')
+      .trim()
+      .replace('-', '/');
+
+    if (dateFrom && !isIsoDate(dateFrom)) {
+      return res.status(400).json({
+        success: false,
+        message: 'English from date must use YYYY-MM-DD.',
+      });
+    }
+    if (dateTo && !isIsoDate(dateTo)) {
+      return res.status(400).json({
+        success: false,
+        message: 'English to date must use YYYY-MM-DD.',
+      });
+    }
+    if ((bsDateFrom || bsDateTo) && !supportsOrderBsDate) {
+      return res.status(409).json({
+        success: false,
+        message: 'Nepali date filtering requires sql/add-nepali-fiscal-year-fields.sql.',
+      });
+    }
+    if (bsDateFrom && !isIsoDate(bsDateFrom)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nepali from date must use YYYY-MM-DD.',
+      });
+    }
+    if (bsDateTo && !isIsoDate(bsDateTo)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nepali to date must use YYYY-MM-DD.',
+      });
+    }
+    if (fiscalYear && !/^\d{4}\/\d{2}$/.test(fiscalYear)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Fiscal year must use the format 2083/84.',
+      });
+    }
+    if (fiscalYear && !supportsOrderFiscalYear) {
+      return res.status(409).json({
+        success: false,
+        message: 'Fiscal-year filtering requires sql/add-nepali-fiscal-year-fields.sql.',
+      });
+    }
+    if (dateFrom) {
+      conditions.push('o.created_at >= ?');
+      params.push(`${dateFrom} 00:00:00`);
+    }
+    if (dateTo) {
+      conditions.push('o.created_at < DATE_ADD(?, INTERVAL 1 DAY)');
+      params.push(dateTo);
+    }
+    if (bsDateFrom) {
+      conditions.push('o.bs_date >= ?');
+      params.push(bsDateFrom);
+    }
+    if (bsDateTo) {
+      conditions.push('o.bs_date <= ?');
+      params.push(bsDateTo);
+    }
+    if (fiscalYear) {
+      conditions.push('o.bs_fiscal_year = ?');
+      params.push(fiscalYear);
     }
 
     const search = String(req.query.search || '').trim();
@@ -1497,6 +1601,8 @@ const getAll = async (req, res, next) => {
               o.created_by,
               o.created_at,
               o.updated_at,
+              ${supportsOrderBsDate ? 'o.bs_date' : 'NULL AS bs_date'},
+              ${supportsOrderFiscalYear ? 'o.bs_fiscal_year' : 'NULL AS bs_fiscal_year'},
               o.stock_deducted,
               o.delivery_note_number,
               o.confirmed_by,
@@ -1916,8 +2022,7 @@ const create = async (req, res, next) => {
 
     const getBaseOrderUnitPrice = (product) => {
       if (orderCurrency === 'INR') {
-        const indiaPrice = Number(product?.india_price);
-        return Number.isFinite(indiaPrice) ? indiaPrice : null;
+        return getIndiaPriceFromNepalPrice(product?.price);
       }
 
       const nprPrice = Number(product?.price);
@@ -2308,6 +2413,7 @@ const correctItems = async (req, res, next) => {
       'price_currency_snapshot'
     );
     let correctionRegularMarkup = 0;
+    let correctionCurrency = 'NPR';
     if (supportsRegularPriceMarkup) {
       const pricingResult = await client.query(
         `SELECT currency_code, regular_price_markup
@@ -2316,7 +2422,8 @@ const correctItems = async (req, res, next) => {
         [order.created_by]
       );
       const pricing = pricingResult.rows[0] || {};
-      if (String(pricing.currency_code || 'NPR').toUpperCase() === 'NPR') {
+      correctionCurrency = String(pricing.currency_code || 'NPR').toUpperCase();
+      if (correctionCurrency === 'NPR') {
         correctionRegularMarkup = Math.max(
           0,
           Number(pricing.regular_price_markup || 0)
@@ -2421,7 +2528,10 @@ const correctItems = async (req, res, next) => {
         values.push(oldItem?.offer_campaign_id ?? null);
       }
       if (supportsUnitPriceSnapshot) {
-        const basePrice = Number(item.product.price);
+        const basePrice =
+          correctionCurrency === 'INR'
+            ? getIndiaPriceFromNepalPrice(item.product.price)
+            : Number(item.product.price);
         const fallbackPrice =
           Number(oldItem?.ordered_from_offer || 0) === 1
             ? oldItem?.offer_price_snapshot
@@ -2433,7 +2543,7 @@ const correctItems = async (req, res, next) => {
       }
       if (supportsPriceCurrencySnapshot) {
         columns.push('price_currency_snapshot');
-        values.push(oldItem?.price_currency_snapshot ?? 'NPR');
+        values.push(oldItem?.price_currency_snapshot ?? correctionCurrency);
       }
       const insert = await appendFiscalInsertFields('order_items', columns, values);
       await client.query(`INSERT INTO order_items (${insert.columns.join(', ')}) VALUES (${insert.columns.map(() => '?').join(', ')})`, insert.values);
@@ -3576,12 +3686,131 @@ const verifyWarehouseFulfillment = async (req, res, next) => {
           Number(targetWarehouse.stock_quantity || 0) -
             Number(reservedResult.rows[0]?.reserved_quantity || 0)
         );
-        if (availableQuantity + 0.001 < remainingQuantity) {
-          await client.query('ROLLBACK');
-          return res.status(422).json({
-            success: false,
-            message: `${targetWarehouse.name} has only ${availableQuantity} unallocated pairs of ${allocation.product_name}. Correct or transfer the warehouse stock first.`,
-          });
+        const relocationQuantity = Math.max(
+          0,
+          remainingQuantity - availableQuantity
+        );
+        if (relocationQuantity > 0.001) {
+          const sourceStockResult = await client.query(
+            `SELECT quantity
+             FROM finished_good_warehouse_stock
+             WHERE finished_good_id = ? AND warehouse_id = ?
+             FOR UPDATE`,
+            [allocation.finished_good_id, warehouseId]
+          );
+          const sourceRecordedQuantity = Number(
+            sourceStockResult.rows[0]?.quantity || 0
+          );
+          if (sourceRecordedQuantity + 0.001 < relocationQuantity) {
+            await client.query('ROLLBACK');
+            return res.status(422).json({
+              success: false,
+              message: `The recorded stock cannot relocate ${relocationQuantity} pairs of ${allocation.product_name} from this warehouse to ${targetWarehouse.name}. Correct the warehouse count first.`,
+            });
+          }
+
+          await client.query(
+            `UPDATE finished_good_warehouse_stock
+             SET quantity = quantity - ?, updated_by = ?
+             WHERE finished_good_id = ? AND warehouse_id = ?`,
+            [
+              relocationQuantity,
+              req.user.id,
+              allocation.finished_good_id,
+              warehouseId,
+            ]
+          );
+          const targetStockInsert = await appendFiscalInsertFields(
+            'finished_good_warehouse_stock',
+            [
+              'finished_good_id',
+              'warehouse_id',
+              'quantity',
+              'created_by',
+              'updated_by',
+            ],
+            [
+              allocation.finished_good_id,
+              targetWarehouseId,
+              relocationQuantity,
+              req.user.id,
+              req.user.id,
+            ]
+          );
+          await client.query(
+            `INSERT INTO finished_good_warehouse_stock
+              (${targetStockInsert.columns.join(', ')})
+             VALUES (${targetStockInsert.columns.map(() => '?').join(', ')})
+             ON DUPLICATE KEY UPDATE
+               quantity = quantity + VALUES(quantity),
+               updated_by = VALUES(updated_by)`,
+            targetStockInsert.values
+          );
+
+          const movementNote = (
+            note ||
+            `Physical check found order #${orderId} stock in ${targetWarehouse.name}`
+          ).slice(0, 500);
+          const transferOutInsert = await appendFiscalInsertFields(
+            'finished_good_warehouse_movements',
+            [
+              'finished_good_id',
+              'warehouse_id',
+              'quantity',
+              'movement_type',
+              'reference_type',
+              'reference_id',
+              'notes',
+              'created_by',
+            ],
+            [
+              allocation.finished_good_id,
+              warehouseId,
+              relocationQuantity,
+              'TRANSFER_OUT',
+              'order_warehouse_reassignment',
+              orderId,
+              movementNote,
+              req.user.id,
+            ]
+          );
+          await client.query(
+            `INSERT INTO finished_good_warehouse_movements
+              (${transferOutInsert.columns.join(', ')})
+             VALUES (${transferOutInsert.columns.map(() => '?').join(', ')})`,
+            transferOutInsert.values
+          );
+          const transferInInsert = await appendFiscalInsertFields(
+            'finished_good_warehouse_movements',
+            [
+              'finished_good_id',
+              'warehouse_id',
+              'quantity',
+              'movement_type',
+              'reference_type',
+              'reference_id',
+              'notes',
+              'created_by',
+            ],
+            [
+              allocation.finished_good_id,
+              targetWarehouseId,
+              relocationQuantity,
+              'TRANSFER_IN',
+              'order_warehouse_reassignment',
+              orderId,
+              movementNote,
+              req.user.id,
+            ]
+          );
+          await client.query(
+            `INSERT INTO finished_good_warehouse_movements
+              (${transferInInsert.columns.join(', ')})
+             VALUES (${transferInInsert.columns.map(() => '?').join(', ')})`,
+            transferInInsert.values
+          );
+          verificationRecord.warehouse_stock_relocated_quantity =
+            relocationQuantity;
         }
 
         if (verifiedQuantity > 0.001) {
@@ -3953,6 +4182,7 @@ const deliverWarehouseFulfillment = async (req, res, next) => {
     }
 
     let deliveredPairs = 0;
+    let closedOutOfStockPairs = 0;
     const verificationItems = [];
     for (const allocation of plannedAllocations) {
       const allocatedQuantity = Number(allocation.allocated_quantity || 0);
@@ -4014,22 +4244,30 @@ const deliverWarehouseFulfillment = async (req, res, next) => {
       });
 
       if (quantity <= 0.001) {
+        const closeOutOfStock = remainderAction === 'OUT_OF_STOCK';
         await client.query(
           `UPDATE order_item_warehouse_allocations
-           SET packed_quantity = 0,
+           SET allocation_status = ?,
+               packed_quantity = 0,
                verified_quantity = 0,
                verification_status = ?,
                verification_note = ?,
                verified_by = ?,
-               verified_at = NOW()
+               verified_at = NOW(),
+               delivered_by = ?,
+               delivered_at = ?
            WHERE id = ? AND allocation_status = 'PLANNED'`,
           [
+            closeOutOfStock ? 'OUT_OF_STOCK' : 'PLANNED',
             remainderAction,
             verificationNote || null,
             req.user.id,
+            closeOutOfStock ? req.user.id : null,
+            closeOutOfStock ? new Date() : null,
             allocation.allocation_id,
           ]
         );
+        if (closeOutOfStock) closedOutOfStockPairs += allocatedQuantity;
         continue;
       }
 
@@ -4092,24 +4330,32 @@ const deliverWarehouseFulfillment = async (req, res, next) => {
         throw error;
       }
       if (remainder > 0.001) {
+        const closeOutOfStock = remainderAction === 'OUT_OF_STOCK';
         await client.query(
           `UPDATE order_item_warehouse_allocations
            SET quantity = ?,
+               allocation_status = ?,
                packed_quantity = 0,
                verified_quantity = 0,
                verification_status = ?,
                verification_note = ?,
                verified_by = ?,
-               verified_at = NOW()
+               verified_at = NOW(),
+               delivered_by = ?,
+               delivered_at = ?
            WHERE id = ? AND allocation_status = 'PLANNED'`,
           [
             remainder,
+            closeOutOfStock ? 'OUT_OF_STOCK' : 'PLANNED',
             remainderAction,
             verificationNote || null,
             req.user.id,
+            closeOutOfStock ? req.user.id : null,
+            closeOutOfStock ? new Date() : null,
             allocation.allocation_id,
           ]
         );
+        if (closeOutOfStock) closedOutOfStockPairs += remainder;
         const deliveredInsert = await appendFiscalInsertFields(
           'order_item_warehouse_allocations',
           [
@@ -4197,29 +4443,34 @@ const deliverWarehouseFulfillment = async (req, res, next) => {
     );
     if (await hasTable('order_warehouse_delivery_notes')) {
       const warehouseRemainingResult = await client.query(
-        `SELECT COUNT(*) AS remaining_allocations
+        `SELECT SUM(allocation_status = 'PLANNED') AS remaining_allocations,
+                SUM(allocation_status = 'DEDUCTED') AS delivered_allocations,
+                SUM(allocation_status = 'OUT_OF_STOCK') AS out_of_stock_allocations
          FROM order_item_warehouse_allocations allocation
          JOIN order_items item ON item.id = allocation.order_item_id
          WHERE item.order_id = ?
            AND allocation.warehouse_id = ?
-           AND allocation.allocation_status = 'PLANNED'`,
+           AND allocation.allocation_status <> 'RELEASED'`,
         [orderId, warehouseId]
       );
       if (
-        deliveredPairs > 0 &&
         Number(
           warehouseRemainingResult.rows[0]?.remaining_allocations || 0
         ) === 0
       ) {
+        const warehouseHasShortage =
+          Number(
+            warehouseRemainingResult.rows[0]?.out_of_stock_allocations || 0
+          ) > 0;
         await client.query(
           `UPDATE order_warehouse_delivery_notes
-           SET status = 'DELIVERED'
+           SET status = ?
            WHERE order_id = ? AND warehouse_id = ? AND status <> 'VOID'`,
-          [orderId, warehouseId]
+          [warehouseHasShortage ? 'SHORTAGE' : 'DELIVERED', orderId, warehouseId]
         );
       }
     }
-    const fullyDelivered = deliveredPairs > 0 &&
+    const fullyDelivered =
       Number(remainingResult.rows[0]?.remaining_allocations || 0) === 0;
 
     if (fullyDelivered) {
@@ -4255,7 +4506,10 @@ const deliverWarehouseFulfillment = async (req, res, next) => {
     try {
       await auditLog({
         ...getActor(req),
-        actionType: deliveredPairs > 0 ? 'DELIVERED' : 'VERIFIED',
+        actionType:
+          deliveredPairs > 0 || closedOutOfStockPairs > 0
+            ? 'DELIVERED'
+            : 'VERIFIED',
         module: 'orders',
         entity_type: 'warehouse_delivery_slip',
         entity_id: orderId,
@@ -4263,7 +4517,7 @@ const deliverWarehouseFulfillment = async (req, res, next) => {
           deliveredFulfillment?.warehouse_slip_number ||
           getOrderEntityName(order),
         description:
-          deliveredPairs > 0
+          deliveredPairs > 0 || closedOutOfStockPairs > 0
             ? `Verified and delivered ${deliveredFulfillment?.warehouse_slip_number || `warehouse ${warehouseId}`} for ${getOrderEntityName(order)}`
             : `Verified ${deliveredFulfillment?.warehouse_slip_number || `warehouse ${warehouseId}`} for ${getOrderEntityName(order)}; all products remain pending`,
         metadata: {
@@ -4273,6 +4527,7 @@ const deliverWarehouseFulfillment = async (req, res, next) => {
           warehouse_name: deliveredFulfillment?.name,
           warehouse_slip_number: deliveredFulfillment?.warehouse_slip_number,
           delivered_pairs: deliveredPairs,
+          out_of_stock_pairs: closedOutOfStockPairs,
           master_order_status: fullyDelivered ? 'DELIVERED' : 'PACKED',
           fulfillment_status: fullyDelivered
             ? 'DELIVERED'
@@ -4291,9 +4546,11 @@ const deliverWarehouseFulfillment = async (req, res, next) => {
     return res.json({
       success: true,
       message: fullyDelivered
-        ? `${deliveredFulfillment?.warehouse_slip_number || 'Warehouse slip'} delivered. The master order is now fully delivered.`
+        ? `${deliveredFulfillment?.warehouse_slip_number || 'Warehouse slip'} completed${closedOutOfStockPairs > 0 ? ` with ${closedOutOfStockPairs} out-of-stock pairs` : ''}. The master order is now complete.`
         : deliveredPairs > 0
-          ? `${deliveredPairs} pairs delivered now. Remaining products stay pending for later delivery.`
+          ? `${deliveredPairs} pairs delivered now.${closedOutOfStockPairs > 0 ? ` ${closedOutOfStockPairs} missing pairs were closed as out of stock.` : ''} Remaining products stay pending for later delivery.`
+          : closedOutOfStockPairs > 0
+            ? `${closedOutOfStockPairs} missing pairs were closed as out of stock without deducting stock.`
           : 'Warehouse check saved. No stock was deducted; all selected products remain pending.',
       data: preparedOrder,
     });

@@ -83,7 +83,7 @@ export default function App() {
         <Route
           path="dashboard"
           element={
-            <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER", "USER"]}>
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN", "MEMBER", "USER", "ELDER"]}>
               {withSuspense(<DashboardPage />)}
             </ProtectedRoute>
           }

@@ -9,11 +9,28 @@ SET @add_verification_status = IF(
       AND COLUMN_NAME = 'verification_status'
   ),
   'SELECT 1',
-  'ALTER TABLE order_item_warehouse_allocations ADD COLUMN verification_status VARCHAR(20) NULL AFTER delivered_at'
+  'ALTER TABLE order_item_warehouse_allocations ADD COLUMN verification_status VARCHAR(40) NULL AFTER delivered_at'
 );
 PREPARE add_verification_status_stmt FROM @add_verification_status;
 EXECUTE add_verification_status_stmt;
 DEALLOCATE PREPARE add_verification_status_stmt;
+
+-- Repair installations where this column was originally created as VARCHAR(20).
+-- FOUND_OTHER_WAREHOUSE is 21 characters and cannot be stored in the old width.
+SET @widen_verification_status = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'order_item_warehouse_allocations'
+      AND COLUMN_NAME = 'verification_status'
+      AND CHARACTER_MAXIMUM_LENGTH < 40
+  ),
+  'ALTER TABLE order_item_warehouse_allocations MODIFY COLUMN verification_status VARCHAR(40) NULL',
+  'SELECT 1'
+);
+PREPARE widen_verification_status_stmt FROM @widen_verification_status;
+EXECUTE widen_verification_status_stmt;
+DEALLOCATE PREPARE widen_verification_status_stmt;
 
 SET @add_verified_quantity = IF(
   EXISTS(

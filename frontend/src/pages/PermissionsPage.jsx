@@ -8,7 +8,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
-import { formatNumber } from "../utils/format";
+import { formatNumber, getIndiaPriceFromNepalPrice } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
 
 const managedRoles = new Set(["USER", "MEMBER", "ELDER"]);
@@ -516,10 +516,7 @@ export default function PermissionsPage() {
         if (!shownUsers.length) return null;
 
         const savedNprPrice = Number(product.price || 0);
-        const savedIndiaPrice =
-          product.india_price === null || product.india_price === undefined
-            ? null
-            : Number(product.india_price);
+        const savedIndiaPrice = getIndiaPriceFromNepalPrice(savedNprPrice);
 
         shownUsers.forEach((indiaUser) => {
           userRows.push({
@@ -533,7 +530,7 @@ export default function PermissionsPage() {
             Color: product.color || "",
             Size: product.size || "",
             "Saved Price (NPR)": savedNprPrice,
-            "India Price (INR)": savedIndiaPrice ?? "Not set",
+            "India Price (INR · NPR ÷ 1.6)": savedIndiaPrice ?? "Not set",
           });
         });
 
@@ -547,7 +544,7 @@ export default function PermissionsPage() {
           Stock: Number(product.quantity || 0),
           Unit: product.unit || "pairs",
           "Saved Price (NPR)": savedNprPrice,
-          "India Price (INR)": savedIndiaPrice ?? "Not set",
+          "India Price (INR · NPR ÷ 1.6)": savedIndiaPrice ?? "Not set",
           "Shown User Count": shownUsers.length,
           "Shown To": shownUsers
             .map((indiaUser) => indiaUser.name || indiaUser.email)

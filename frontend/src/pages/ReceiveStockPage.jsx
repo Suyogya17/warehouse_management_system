@@ -251,6 +251,8 @@ export default function ReceiveStockPage() {
                     <img
                       src={`${APP_BASE_URL}${selectedMaterial.image_url}`}
                       alt={selectedMaterial.name}
+                      loading="lazy"
+                      decoding="async"
                       className="h-[120px] w-full object-cover"
                     />
                   ) : (

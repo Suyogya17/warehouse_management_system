@@ -40,18 +40,26 @@ app.use(express.json());
 /* ─────────────────────────────
    CORS CONFIG (FIXED PRODUCTION)
 ──────────────────────────── */
+const configuredFrontendOrigins = String(process.env.FRONTEND_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/$/, ""))
+  .filter(Boolean);
+
+const allowedOrigins = new Set([
+  "https://nepchawarehouse.com",
+  "https://www.nepchawarehouse.com",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  ...configuredFrontendOrigins,
+]);
+
 const corsOptions = {
   origin: function (origin, callback) {
-    const allowedOrigins = [
-      "https://nepchawarehouse.com",
-      "http://localhost:5173",
-      "http://localhost:5174"
-    ];
 
     // allow tools like Postman or server-to-server
     if (!origin) return callback(null, true);
 
-    if (allowedOrigins.includes(origin)) {
+    if (allowedOrigins.has(origin.replace(/\/$/, ""))) {
       return callback(null, true);
     }
 
@@ -60,7 +68,7 @@ const corsOptions = {
   },
 
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   exposedHeaders: [
     "Content-Disposition",

@@ -14,7 +14,11 @@ import { useToast } from "../context/ToastContext";
 import { useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { getRoundedCartons } from "../utils/displayStock";
-import { formatNumber, formatPrice } from "../utils/format";
+import {
+  formatNumber,
+  formatPrice,
+  getIndiaPriceFromNepalPrice,
+} from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
 import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
 import { buildVisibilitySummary } from "../utils/visibilitySummary";
@@ -115,7 +119,9 @@ function OpenProductCard({
   );
   const openUsers = selectedVariant.open_users || [];
   const priceValue =
-    countryCode === "IN" ? selectedVariant.india_price : selectedVariant.price;
+    countryCode === "IN"
+      ? getIndiaPriceFromNepalPrice(selectedVariant.price)
+      : selectedVariant.price;
   const priceCurrency = countryCode === "IN" ? "INR" : "NPR";
   const hasPrice =
     priceValue !== null && priceValue !== undefined && priceValue !== "";

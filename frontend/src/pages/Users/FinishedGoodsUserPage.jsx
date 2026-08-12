@@ -154,8 +154,10 @@ function ProductCard({ variants = [], onAddToCart, onProductInterest, cartProduc
       const response = await fetch(selectedImageUrl);
       const blob = await response.blob();
       const extension =
-        blob.type === "image/webp"
-          ? "webp"
+        blob.type === "image/avif"
+          ? "avif"
+          : blob.type === "image/webp"
+            ? "webp"
           : blob.type === "image/png"
             ? "png"
             : "jpg";
@@ -362,6 +364,8 @@ function ProductCard({ variants = [], onAddToCart, onProductInterest, cartProduc
             <img
               src={selectedImageUrl}
               alt={selectedVariant.name}
+              loading="lazy"
+              decoding="async"
               className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
             />
 

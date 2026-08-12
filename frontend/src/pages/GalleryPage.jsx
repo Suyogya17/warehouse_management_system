@@ -420,6 +420,7 @@ export default function GalleryPage() {
                 onAddToCart={canOrder ? addToCart : undefined}
                 onProductInterest={trackGalleryInterest}
                 cartProductIds={cartProductIds}
+                showStockDetails={canViewAllProducts}
               />
             ))}
           </div>

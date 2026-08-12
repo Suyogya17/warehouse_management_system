@@ -98,6 +98,14 @@ export const apiRequest = async (path, options = {}, token) => {
       throw new Error("Request timed out. Please try again.");
     }
 
+    if (error instanceof TypeError) {
+      throw new Error(
+        navigator.onLine === false
+          ? "This device is offline. Connect to the internet and try again."
+          : "Could not connect to the server. Refresh the page and try again."
+      );
+    }
+
     throw error;
   } finally {
     window.clearTimeout(timeout);

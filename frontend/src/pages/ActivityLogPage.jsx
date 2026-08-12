@@ -8,7 +8,7 @@ import StatusBadge from "../components/StatusBadge";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { api } from "../services/api";
-import { formatEnglishDate, formatTime, titleCase } from "../utils/format";
+import { formatEnglishDate, formatNumber, formatTime, titleCase } from "../utils/format";
 
 const initialFilters = {
   search: "",
@@ -73,6 +73,55 @@ const metadataSummary = (metadata) => {
   return parts.length ? parts.join(" | ") : "-";
 };
 
+const hasOrderItemComparison = (metadata) =>
+  metadata &&
+  typeof metadata === "object" &&
+  Array.isArray(metadata.before) &&
+  Array.isArray(metadata.after);
+
+const buildOrderItemChanges = (metadata) => {
+  if (!hasOrderItemComparison(metadata)) return [];
+
+  const itemKey = (item, index) =>
+    Number(item?.finished_good_id) > 0
+      ? `product:${Number(item.finished_good_id)}`
+      : `name:${String(item?.product_name || "Unknown product").toLowerCase()}:${index}`;
+  const before = new Map(
+    metadata.before.map((item, index) => [itemKey(item, index), item])
+  );
+  const after = new Map(
+    metadata.after.map((item, index) => [itemKey(item, index), item])
+  );
+  const changes = [];
+
+  for (const [key, previous] of before) {
+    const current = after.get(key);
+    if (!current) {
+      changes.push({ type: "Removed", product: previous.product_name, before: previous, after: null });
+      continue;
+    }
+    if (Math.abs(Number(previous.qty_ordered || 0) - Number(current.qty_ordered || 0)) > 0.001) {
+      changes.push({ type: "Quantity changed", product: current.product_name || previous.product_name, before: previous, after: current });
+    }
+  }
+  for (const [key, current] of after) {
+    if (!before.has(key)) {
+      changes.push({ type: "Added", product: current.product_name, before: null, after: current });
+    }
+  }
+
+  return changes;
+};
+
+const formatOrderItemQuantity = (item) => {
+  if (!item) return "0 pairs";
+  const pairs = Number(item.qty_ordered || 0);
+  const cartons = Number(item.carton_qty);
+  return Number.isFinite(cartons)
+    ? `${formatNumber(cartons)} CTN / ${formatNumber(pairs)} pairs`
+    : `${formatNumber(pairs)} pairs`;
+};
+
 export default function ActivityLogPage() {
   const { token } = useAuth();
   const { showToast } = useToast();
@@ -87,6 +136,12 @@ export default function ActivityLogPage() {
   });
   const [pagination, setPagination] = useState({ page: 1, limit: PAGE_SIZE, total: 0, total_pages: 1 });
   const [loading, setLoading] = useState(true);
+  const [selectedChangeLog, setSelectedChangeLog] = useState(null);
+
+  const selectedItemChanges = useMemo(
+    () => buildOrderItemChanges(selectedChangeLog?.metadata),
+    [selectedChangeLog]
+  );
 
   const params = useMemo(
     () => ({
@@ -177,6 +232,16 @@ export default function ActivityLogPage() {
       <p className="mt-3 text-sm leading-6 text-slate-700">{log.description || "-"}</p>
       <p className="mt-2 text-xs font-medium text-slate-500">{log.entity_name || log.entity_id || "-"}</p>
       <p className="mt-2 text-xs leading-5 text-slate-500">{metadataSummary(log.metadata)}</p>
+      {hasOrderItemComparison(log.metadata) ? (
+        <Button
+          size="sm"
+          variant="secondary"
+          className="mt-3 w-full"
+          onClick={() => setSelectedChangeLog(log)}
+        >
+          View Changes
+        </Button>
+      ) : null}
     </article>
   );
 
@@ -313,7 +378,19 @@ export default function ActivityLogPage() {
                       </td>
                       <td className="max-w-sm px-4 py-4 text-sm text-slate-600">{log.description || "-"}</td>
                       <td className="px-4 py-4 text-sm text-slate-600">{log.entity_name || log.entity_id || "-"}</td>
-                      <td className="max-w-xs px-4 py-4 text-xs leading-5 text-slate-500">{metadataSummary(log.metadata)}</td>
+                      <td className="max-w-xs px-4 py-4 text-xs leading-5 text-slate-500">
+                        <div>{metadataSummary(log.metadata)}</div>
+                        {hasOrderItemComparison(log.metadata) ? (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            className="mt-2"
+                            onClick={() => setSelectedChangeLog(log)}
+                          >
+                            View Changes
+                          </Button>
+                        ) : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -349,6 +426,90 @@ export default function ActivityLogPage() {
           />
         )}
       </SectionCard>
+
+      {selectedChangeLog ? (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          onMouseDown={() => setSelectedChangeLog(null)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="order-change-title"
+            className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 id="order-change-title" className="text-lg font-bold text-slate-900">
+                  Order Item Changes
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {selectedChangeLog.entity_name || `Order #${selectedChangeLog.entity_id}`} · {selectedChangeLog.user_name || "Unknown user"} · {formatEnglishDate(selectedChangeLog.created_at)} {formatTime(selectedChangeLog.created_at)}
+                </p>
+                {selectedChangeLog.metadata?.reason ? (
+                  <p className="mt-1 text-sm font-medium text-slate-700">
+                    Reason: {selectedChangeLog.metadata.reason}
+                  </p>
+                ) : null}
+              </div>
+              <Button size="sm" variant="secondary" onClick={() => setSelectedChangeLog(null)}>
+                Close
+              </Button>
+            </header>
+
+            <div className="max-h-[70vh] overflow-auto p-4 sm:p-5">
+              {selectedItemChanges.length ? (
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full min-w-[680px] text-left">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        {['Change', 'Product', 'Before', 'After'].map((heading) => (
+                          <th key={heading} className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            {heading}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {selectedItemChanges.map((change, index) => (
+                        <tr key={`${change.type}:${change.product}:${index}`}>
+                          <td className="px-4 py-3">
+                            <StatusBadge
+                              tone={
+                                change.type === 'Removed'
+                                  ? 'danger'
+                                  : change.type === 'Added'
+                                    ? 'success'
+                                    : 'warning'
+                              }
+                            >
+                              {change.type}
+                            </StatusBadge>
+                          </td>
+                          <td className="px-4 py-3 text-sm font-semibold text-slate-900">
+                            {change.product || 'Unknown product'}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-slate-600">
+                            {formatOrderItemQuantity(change.before)}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-slate-600">
+                            {formatOrderItemQuantity(change.after)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="rounded-xl bg-slate-50 p-5 text-sm text-slate-600">
+                  The saved before and after lists contain no product or quantity differences.
+                </p>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

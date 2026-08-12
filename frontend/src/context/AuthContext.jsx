@@ -77,7 +77,7 @@ export const AuthProvider = ({ children }) => {
   const login = useCallback(async (email, password, expectedRole) => {
     setLoading(true);
     try {
-      const result = await api.login({ email, password });
+      const result = await api.login({ email: String(email || "").trim().toLowerCase(), password });
       const user = normalizeUser(result.user);
       if (expectedRole && user.role !== normalizeRole(expectedRole)) {
         throw new Error(`This account is ${user.role}. Please use the correct login type.`);

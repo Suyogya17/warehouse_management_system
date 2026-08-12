@@ -231,7 +231,7 @@ export default function AdvertisementsPage() {
                 item.media_type === "VIDEO" ? (
                   <video src={`${APP_BASE_URL}${item.image_url}`} controls preload="metadata" className={`${isFeedPlacement(item) ? "aspect-square" : "aspect-[16/5]"} w-full bg-black object-cover`} />
                 ) : (
-                  <img src={`${APP_BASE_URL}${item.image_url}`} alt={item.title} className={`${isFeedPlacement(item) ? "aspect-square" : "aspect-[16/5]"} w-full object-cover`} />
+                  <img src={`${APP_BASE_URL}${item.image_url}`} alt={item.title} loading="lazy" decoding="async" className={`${isFeedPlacement(item) ? "aspect-square" : "aspect-[16/5]"} w-full object-cover`} />
                 )
               ) : <div className={`flex ${isFeedPlacement(item) ? "aspect-square" : "aspect-[16/5]"} items-center justify-center bg-slate-100 text-sm text-slate-400`}>No media</div>}
               <div className="space-y-3 p-4">

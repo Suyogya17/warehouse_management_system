@@ -93,6 +93,7 @@ const navByRole = {
   ],
 
   ELDER: [
+    { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { to: "/elder-finished", label: "Our Products", icon: "finishedGoods" },
     { to: "/offers", label: "Offers", icon: "finishedGoods" },
     { to: "/gallery", label: "Gallery", icon: "image" },
@@ -197,8 +198,7 @@ export default function AppShell() {
       "Dashboard"
     );
   }, [location.pathname, navItems, role]);
-  const isOrdersWorkspace = location.pathname === "/orders";
-
+  const usesNaturalPageScroll = location.pathname === "/product-display";
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname]);
@@ -537,7 +537,9 @@ export default function AppShell() {
 
   return (
     <div
-      className="min-h-screen overflow-x-hidden bg-transparent text-slate-900 lg:h-screen lg:overflow-hidden"
+      className={`min-h-screen overflow-x-hidden bg-transparent text-slate-900 ${
+        usesNaturalPageScroll ? "" : "lg:h-screen lg:overflow-hidden"
+      }`}
       onWheelCapture={preventNumberWheelChange}
     >
       <NotificationWatcher user={user} token={token} onNotify={addNotification} />
@@ -545,10 +547,10 @@ export default function AppShell() {
         <ChatWidget user={user} token={token} unreadCount={chatUnreadCount} />
       ) : null}
       <div
-        className={`mx-auto flex min-h-screen w-full py-3 lg:h-screen lg:min-h-0 lg:items-stretch lg:py-4 ${
-          isOrdersWorkspace
-            ? "max-w-none gap-3 px-2 sm:px-3 lg:gap-4 lg:px-3 min-[2200px]:max-w-[2100px]"
-            : "max-w-[1800px] gap-4 px-3 sm:px-4 lg:gap-6 lg:px-6"
+        className={`mx-auto flex min-h-screen w-full max-w-none gap-3 px-2 py-3 sm:px-3 lg:gap-4 lg:px-3 lg:py-4 min-[2200px]:max-w-[2100px] ${
+          usesNaturalPageScroll
+            ? "lg:items-start"
+            : "lg:h-screen lg:min-h-0 lg:items-stretch"
         }`}
       >
 
@@ -605,7 +607,13 @@ export default function AppShell() {
         </aside>
 
         {/* DESKTOP SIDEBAR */}
-        <aside className="hidden w-72 shrink-0 lg:block lg:h-full lg:min-h-0">
+        <aside
+          className={`hidden w-72 shrink-0 lg:block ${
+            usesNaturalPageScroll
+              ? "lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] lg:min-h-0"
+              : "lg:h-full lg:min-h-0"
+          }`}
+        >
           <div className="flex h-full min-h-0 flex-col space-y-4 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
             {/* USER CARD */}
             <UserCard />
@@ -628,7 +636,11 @@ export default function AppShell() {
         </aside>
 
         {/* MAIN */}
-        <main className="min-w-0 flex-1 space-y-4 py-1 lg:h-full lg:overflow-y-auto lg:pr-1">
+        <main
+          className={`min-w-0 flex-1 space-y-4 py-1 lg:pr-1 ${
+            usesNaturalPageScroll ? "" : "lg:h-full lg:overflow-y-auto"
+          }`}
+        >
 
           {/* TOP BAR */}
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 sm:px-4 sm:py-4">

@@ -25,6 +25,14 @@ const initialForm = {
   items: [{ finished_good_id: "", qty_ordered: 1 }],
 };
 
+const emptyOrderDateFilters = {
+  date_from: "",
+  date_to: "",
+  bs_date_from: "",
+  bs_date_to: "",
+  fiscal_year: "",
+};
+
 const statusTone = {
   PENDING: "warning",
   CONFIRMED: "info",
@@ -90,6 +98,10 @@ export default function OrdersPage() {
   const [warehouses, setWarehouses] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [orderDateFilters, setOrderDateFilters] = useState(emptyOrderDateFilters);
+  const [appliedOrderDateFilters, setAppliedOrderDateFilters] = useState(
+    emptyOrderDateFilters
+  );
   const [correctionOrder, setCorrectionOrder] = useState(null);
   const [correctionItems, setCorrectionItems] = useState([]);
   const [correctionReason, setCorrectionReason] = useState("");
@@ -123,6 +135,7 @@ export default function OrdersPage() {
       per_page: 50,
       search: debouncedOrderSearch,
       status: statusFilter === "ALL" ? undefined : statusFilter,
+      ...appliedOrderDateFilters,
     });
     setOrders(result.data || []);
     setOrderPagination(
@@ -133,11 +146,72 @@ export default function OrdersPage() {
         total_pages: 1,
       }
     );
-  }, [debouncedOrderSearch, orderPage, statusFilter, token]);
+  }, [appliedOrderDateFilters, debouncedOrderSearch, orderPage, statusFilter, token]);
+
+  const applyOrderDateFilters = () => {
+    const normalized = {
+      ...orderDateFilters,
+      fiscal_year: orderDateFilters.fiscal_year.trim().replace("-", "/"),
+    };
+    const bsDatePattern = /^\d{4}-\d{2}-\d{2}$/;
+    if (
+      (normalized.bs_date_from && !bsDatePattern.test(normalized.bs_date_from)) ||
+      (normalized.bs_date_to && !bsDatePattern.test(normalized.bs_date_to))
+    ) {
+      showToast({
+        tone: "error",
+        title: "Invalid Nepali date",
+        message: "Enter Nepali dates as YYYY-MM-DD, for example 2083-04-27.",
+      });
+      return;
+    }
+    if (
+      normalized.fiscal_year &&
+      !/^\d{4}\/\d{2}$/.test(normalized.fiscal_year)
+    ) {
+      showToast({
+        tone: "error",
+        title: "Invalid fiscal year",
+        message: "Enter the fiscal year as 2083/84.",
+      });
+      return;
+    }
+    if (normalized.date_from && normalized.date_to && normalized.date_from > normalized.date_to) {
+      showToast({
+        tone: "error",
+        title: "Invalid English date range",
+        message: "The From date cannot be after the To date.",
+      });
+      return;
+    }
+    if (
+      normalized.bs_date_from &&
+      normalized.bs_date_to &&
+      normalized.bs_date_from > normalized.bs_date_to
+    ) {
+      showToast({
+        tone: "error",
+        title: "Invalid Nepali date range",
+        message: "The BS From date cannot be after the BS To date.",
+      });
+      return;
+    }
+    setOrderDateFilters(normalized);
+    setAppliedOrderDateFilters(normalized);
+    setOrderPage(1);
+  };
+
+  const clearOrderDateFilters = () => {
+    setOrderDateFilters(emptyOrderDateFilters);
+    setAppliedOrderDateFilters(emptyOrderDateFilters);
+    setOrderPage(1);
+  };
 
   const loadReferenceData = useCallback(async () => {
     const [availabilityResult, warehouseResult] = await Promise.all([
-      api.getAvailability(token, { includeHidden: canManageOrders }),
+      api.getAvailability(token, {
+        include_hidden: canManageOrders ? 1 : undefined,
+      }),
       api.getWarehouses(token),
     ]);
     setAvailability(availabilityResult.data || []);
@@ -170,14 +244,18 @@ export default function OrdersPage() {
     [availability]
   );
 
-  const totals = availability.reduce(
-    (acc, item) => {
-      acc.physical += Number(item.physical_stock || 0);
-      acc.reserved += Number(item.reserved_qty || 0);
-      acc.available += Number(item.available_qty || 0);
-      return acc;
-    },
-    { physical: 0, reserved: 0, available: 0 }
+  const totals = useMemo(
+    () =>
+      availability.reduce(
+        (acc, item) => {
+          acc.physical += Number(item.physical_stock || 0);
+          acc.reserved += Number(item.reserved_qty || 0);
+          acc.available += Number(item.available_qty || 0);
+          return acc;
+        },
+        { physical: 0, reserved: 0, available: 0 }
+      ),
+    [availability]
   );
 
   const updateItem = (index, key, value) => {
@@ -275,18 +353,30 @@ export default function OrdersPage() {
     }
     setVerificationWarehouse({ order, fulfillment });
     setVerificationItems(
-      pendingItems.map((item) => ({
-        ...item,
-        deliver_quantity:
-          item.verified_quantity === null || item.verified_quantity === undefined
-            ? Number(item.quantity || 0)
-            : Number(item.verified_quantity),
-        remainder_action: ["DELIVER_LATER", "NOT_FOUND"].includes(item.verification_status)
+      pendingItems.map((item) => {
+        const planned = Number(item.quantity || 0);
+        const savedStatus = ["DELIVER_LATER", "NOT_FOUND", "OUT_OF_STOCK"].includes(
+          item.verification_status
+        )
           ? item.verification_status
-          : "DELIVER_LATER",
-        target_warehouse_id: "",
-        note: item.verification_note || "",
-      }))
+          : "DELIVER_LATER";
+        let foundQuantity =
+          item.verified_quantity === null || item.verified_quantity === undefined
+            ? planned
+            : Number(item.verified_quantity);
+        // Repair an older inconsistent check where NOT_FOUND was saved while
+        // the verified quantity still equalled the complete planned quantity.
+        if (savedStatus === "NOT_FOUND" && foundQuantity >= planned) {
+          foundQuantity = 0;
+        }
+        return {
+          ...item,
+          deliver_quantity: foundQuantity,
+          remainder_action: savedStatus,
+          target_warehouse_id: "",
+          note: item.verification_note || "",
+        };
+      })
     );
   };
 
@@ -294,9 +384,44 @@ export default function OrdersPage() {
     setVerificationItems((current) =>
       current.map((item) =>
         Number(item.allocation_id) === Number(allocationId)
-          ? { ...item, [key]: value }
+          ? {
+              ...item,
+              [key]: value,
+              ...(key === "deliver_quantity" &&
+              Number(value) >= Number(item.quantity || 0)
+                ? {
+                    remainder_action: "DELIVER_LATER",
+                    target_warehouse_id: "",
+                  }
+                : {}),
+            }
           : item
       )
+    );
+  };
+
+  const setVerificationItemAction = (allocationId, action) => {
+    setVerificationItems((current) =>
+      current.map((item) => {
+        if (Number(item.allocation_id) !== Number(allocationId)) return item;
+        if (action === "ALL_FOUND") {
+          return {
+            ...item,
+            deliver_quantity: Number(item.quantity || 0),
+            remainder_action: "DELIVER_LATER",
+            target_warehouse_id: "",
+          };
+        }
+        return {
+          ...item,
+          deliver_quantity: 0,
+          remainder_action: action,
+          target_warehouse_id:
+            action === "FOUND_OTHER_WAREHOUSE"
+              ? item.target_warehouse_id || ""
+              : "",
+        };
+      })
     );
   };
 
@@ -319,6 +444,7 @@ export default function OrdersPage() {
     const invalidWarehouseMove = verificationItems.find(
       (item) =>
         item.remainder_action === "FOUND_OTHER_WAREHOUSE" &&
+        Number(item.quantity || 0) - Number(item.deliver_quantity || 0) > 0.001 &&
         (!Number(item.target_warehouse_id) ||
           Number(item.target_warehouse_id) ===
             Number(verificationWarehouse.fulfillment.warehouse_id))
@@ -384,20 +510,32 @@ export default function OrdersPage() {
       (sum, item) => sum + Number(item.verified_quantity || 0),
       0
     );
-    if (readyPairs <= 0) {
+    const outOfStockPairs = pendingItems.reduce(
+      (sum, item) =>
+        item.verification_status === "OUT_OF_STOCK"
+          ? sum + Math.max(0, Number(item.quantity || 0) - Number(item.verified_quantity || 0))
+          : sum,
+      0
+    );
+    if (readyPairs <= 0 && outOfStockPairs <= 0) {
       showToast({
         tone: "error",
         title: "Nothing ready",
-        message: "No verified product quantity is ready to deliver.",
+        message: "No product is ready to deliver or close as out of stock.",
       });
       return;
     }
     const confirmed = window.confirm(
       [
-        `Deliver verified products from ${fulfillment.warehouse_slip_number}?`,
+        readyPairs > 0
+          ? `Deliver verified products from ${fulfillment.warehouse_slip_number}?`
+          : `Close ${fulfillment.warehouse_slip_number} as out of stock?`,
         `${formatNumber(readyPairs)} pairs will be deducted from stock.`,
-        "Products marked for later or not found will remain pending.",
-      ].join("\n\n")
+        outOfStockPairs > 0
+          ? `${formatNumber(outOfStockPairs)} missing pairs will be closed as out of stock without stock deduction.`
+          : null,
+        "Products marked Deliver later or Not found will remain pending.",
+      ].filter(Boolean).join("\n\n")
     );
     if (!confirmed) return;
 
@@ -410,7 +548,7 @@ export default function OrdersPage() {
         pendingItems.map((item) => ({
           allocation_id: Number(item.allocation_id),
           deliver_quantity: Number(item.verified_quantity || 0),
-          remainder_action: ["DELIVER_LATER", "NOT_FOUND"].includes(item.verification_status)
+          remainder_action: ["DELIVER_LATER", "NOT_FOUND", "OUT_OF_STOCK"].includes(item.verification_status)
             ? item.verification_status
             : "DELIVER_LATER",
           note: item.verification_note || "",
@@ -1315,6 +1453,96 @@ export default function OrdersPage() {
           </select>
         </div>
 
+        <div className="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-2 xl:grid-cols-5">
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            English date from
+            <input
+              type="date"
+              value={orderDateFilters.date_from}
+              onChange={(event) =>
+                setOrderDateFilters((current) => ({
+                  ...current,
+                  date_from: event.target.value,
+                }))
+              }
+              className="h-10 rounded-xl border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            English date to
+            <input
+              type="date"
+              value={orderDateFilters.date_to}
+              onChange={(event) =>
+                setOrderDateFilters((current) => ({
+                  ...current,
+                  date_to: event.target.value,
+                }))
+              }
+              className="h-10 rounded-xl border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            Nepali BS date from
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="2083-04-01"
+              value={orderDateFilters.bs_date_from}
+              onChange={(event) =>
+                setOrderDateFilters((current) => ({
+                  ...current,
+                  bs_date_from: event.target.value,
+                }))
+              }
+              className="h-10 rounded-xl border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            Nepali BS date to
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="2083-04-27"
+              value={orderDateFilters.bs_date_to}
+              onChange={(event) =>
+                setOrderDateFilters((current) => ({
+                  ...current,
+                  bs_date_to: event.target.value,
+                }))
+              }
+              className="h-10 rounded-xl border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            Nepali fiscal year
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={7}
+              placeholder="2083/84"
+              value={orderDateFilters.fiscal_year}
+              onChange={(event) =>
+                setOrderDateFilters((current) => ({
+                  ...current,
+                  fiscal_year: event.target.value,
+                }))
+              }
+              className="h-10 rounded-xl border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+            />
+          </label>
+          <div className="flex gap-2 md:col-span-2 xl:col-span-5 xl:justify-end">
+            <Button type="button" size="sm" variant="secondary" onClick={clearOrderDateFilters}>
+              Clear dates
+            </Button>
+            <Button type="button" size="sm" icon="search" onClick={applyOrderDateFilters}>
+              Search dates
+            </Button>
+          </div>
+        </div>
+
         <DataTable
           columns={[
             { key: "id", label: "Order-ID", width: "4%", align: "center" },
@@ -1503,7 +1731,12 @@ export default function OrdersPage() {
                     </small>
                     {canCorrectWarehouseSource &&
                     !row.delivery_note_number &&
+                    !row.warehouse_dns_corrected &&
                     warehouseDeliveryNoteNumbers.length > 0 &&
+                    warehouseFulfillments.every(
+                      (fulfillment) =>
+                        !["VOID", "REASSIGNED"].includes(fulfillment.status)
+                    ) &&
                     row.status === "CONFIRMED" ? (
                       <Button
                         size="sm"
@@ -1537,6 +1770,11 @@ export default function OrdersPage() {
                             {warehouseFulfillments.map((fulfillment) => {
                               const warehouseKey = `${row.id}:${fulfillment.warehouse_id}`;
                               const isDelivered = fulfillment.status === "DELIVERED";
+                              const isDeliveredWithShortage =
+                                fulfillment.status === "DELIVERED WITH SHORTAGE";
+                              const isOutOfStock = fulfillment.status === "OUT OF STOCK";
+                              const isCompleted =
+                                isDelivered || isDeliveredWithShortage || isOutOfStock;
                               const isPartiallyDelivered = fulfillment.status === "PARTIALLY DELIVERED";
                               const isVoid = fulfillment.status === "VOID";
                               const isReassigned = fulfillment.status === "REASSIGNED";
@@ -1553,13 +1791,20 @@ export default function OrdersPage() {
                                 (sum, item) => sum + Number(item.verified_quantity || 0),
                                 0
                               );
+                              const verifiedOutOfStockPairs = pendingWarehouseItems.reduce(
+                                (sum, item) =>
+                                  item.verification_status === "OUT_OF_STOCK"
+                                    ? sum + Math.max(0, Number(item.quantity || 0) - Number(item.verified_quantity || 0))
+                                    : sum,
+                                0
+                              );
                               return (
                                 <div
                                   key={warehouseKey}
                                   className={`rounded-xl border p-2 ${
                                     isInactive
                                       ? "border-slate-300 bg-slate-100"
-                                      : isDelivered
+                                      : isCompleted
                                       ? "border-emerald-200 bg-emerald-50"
                                       : isPartiallyDelivered
                                         ? "border-sky-200 bg-sky-50"
@@ -1575,14 +1820,14 @@ export default function OrdersPage() {
                                         {fulfillment.name}
                                       </div>
                                     </div>
-                                    <StatusBadge tone={isDelivered ? "success" : isInactive ? "neutral" : isPartiallyDelivered ? "info" : "warning"}>
+                                    <StatusBadge tone={isDelivered ? "success" : isDeliveredWithShortage ? "warning" : isOutOfStock ? "danger" : isInactive ? "neutral" : isPartiallyDelivered ? "info" : "warning"}>
                                       {fulfillment.status}
                                     </StatusBadge>
                                   </div>
                                   <div className="mt-1 text-xs font-semibold text-slate-700">
                                     {formatNumber(fulfillment.cartons)} CTN / {formatNumber(fulfillment.pairs)} pairs
                                   </div>
-                                  {Number(fulfillment.delivered_pairs || 0) > 0 && !isDelivered ? (
+                                  {Number(fulfillment.delivered_pairs || 0) > 0 && !isCompleted ? (
                                     <div className="mt-1 text-xs text-sky-700">
                                       {formatNumber(fulfillment.delivered_pairs)} delivered · {formatNumber(fulfillment.pending_pairs)} pending
                                     </div>
@@ -1597,17 +1842,21 @@ export default function OrdersPage() {
                                     <div className="mt-1 text-xs font-semibold text-slate-600">
                                       Void — this delivery note is inactive.
                                     </div>
-                                  ) : isDelivered ? (
+                                  ) : isCompleted ? (
                                     <>
-                                      <div className="mt-1 text-xs text-emerald-700">
-                                        {fulfillment.delivered_by_name
-                                          ? `By ${fulfillment.delivered_by_name}`
-                                          : "Delivered"}
+                                      <div className={`mt-1 text-xs ${isDelivered ? "text-emerald-700" : "text-amber-800"}`}>
+                                        {isOutOfStock
+                                          ? `Closed without stock deduction · ${formatNumber(fulfillment.out_of_stock_pairs || 0)} pairs out of stock`
+                                          : isDeliveredWithShortage
+                                            ? `Available products delivered · ${formatNumber(fulfillment.out_of_stock_pairs || 0)} pairs closed as out of stock`
+                                            : fulfillment.delivered_by_name
+                                              ? `By ${fulfillment.delivered_by_name}`
+                                              : "Delivered"}
                                         {fulfillment.delivered_at
                                           ? ` · ${formatEnglishDate(fulfillment.delivered_at)}`
                                           : ""}
                                       </div>
-                                      {canCorrectWarehouseSource ? (
+                                      {isDelivered && canCorrectWarehouseSource ? (
                                         <Button
                                           size="sm"
                                           variant="danger"
@@ -1643,14 +1892,16 @@ export default function OrdersPage() {
                                         disabled={
                                           deliveringWarehouseKey === warehouseKey ||
                                           !productsChecked ||
-                                          verifiedReadyPairs <= 0
+                                          (verifiedReadyPairs <= 0 && verifiedOutOfStockPairs <= 0)
                                         }
                                         onClick={() => deliverWarehouse(row, fulfillment)}
                                       >
                                         {deliveringWarehouseKey === warehouseKey
                                           ? "Delivering…"
-                                          : productsChecked
+                                          : productsChecked && verifiedReadyPairs > 0
                                             ? `Deliver ${formatNumber(verifiedReadyPairs)} verified pairs`
+                                            : productsChecked && verifiedOutOfStockPairs > 0
+                                              ? "Close out-of-stock DN"
                                             : "Deliver verified products"}
                                       </Button>
                                     </div>
@@ -1929,7 +2180,8 @@ export default function OrdersPage() {
                           }
                         >
                           <option value="DELIVER_LATER">Deliver later</option>
-                          <option value="NOT_FOUND">Not found / out of stock</option>
+                          <option value="NOT_FOUND">Not found — recheck later</option>
+                          <option value="OUT_OF_STOCK">Close as out of stock</option>
                           <option value="FOUND_OTHER_WAREHOUSE">Found in another warehouse</option>
                         </SelectInput>
                       </Field>
@@ -1976,7 +2228,9 @@ export default function OrdersPage() {
                         type="button"
                         size="sm"
                         variant="secondary"
-                        onClick={() => updateVerificationItem(item.allocation_id, "deliver_quantity", planned)}
+                        onClick={() =>
+                          setVerificationItemAction(item.allocation_id, "ALL_FOUND")
+                        }
                       >
                         All found
                       </Button>
@@ -1984,10 +2238,9 @@ export default function OrdersPage() {
                         type="button"
                         size="sm"
                         variant="secondary"
-                        onClick={() => {
-                          updateVerificationItem(item.allocation_id, "deliver_quantity", 0);
-                          updateVerificationItem(item.allocation_id, "remainder_action", "DELIVER_LATER");
-                        }}
+                        onClick={() =>
+                          setVerificationItemAction(item.allocation_id, "DELIVER_LATER")
+                        }
                       >
                         Deliver later
                       </Button>
@@ -1995,21 +2248,32 @@ export default function OrdersPage() {
                         type="button"
                         size="sm"
                         variant="danger"
-                        onClick={() => {
-                          updateVerificationItem(item.allocation_id, "deliver_quantity", 0);
-                          updateVerificationItem(item.allocation_id, "remainder_action", "NOT_FOUND");
-                        }}
+                        onClick={() =>
+                          setVerificationItemAction(item.allocation_id, "NOT_FOUND")
+                        }
                       >
                         Not found
                       </Button>
                       <Button
                         type="button"
                         size="sm"
+                        variant="danger"
+                        onClick={() =>
+                          setVerificationItemAction(item.allocation_id, "OUT_OF_STOCK")
+                        }
+                      >
+                        Out of stock
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
                         variant="secondary"
-                        onClick={() => {
-                          updateVerificationItem(item.allocation_id, "deliver_quantity", 0);
-                          updateVerificationItem(item.allocation_id, "remainder_action", "FOUND_OTHER_WAREHOUSE");
-                        }}
+                        onClick={() =>
+                          setVerificationItemAction(
+                            item.allocation_id,
+                            "FOUND_OTHER_WAREHOUSE"
+                          )
+                        }
                       >
                         Found in another warehouse
                       </Button>
@@ -2020,7 +2284,7 @@ export default function OrdersPage() {
             </div>
 
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-              Need to remove or replace a missing product? Reopen packing before delivering anything, then use the existing order correction window. Once any quantity is delivered, the original order is locked for audit safety.
+              Deliver later and Not found remain pending. Out of stock permanently closes the missing quantity without deducting stock, allowing the found products and warehouse DN to be completed. Use Out of stock only after confirming that the product will not be delivered later.
             </div>
 
             <div className="flex flex-wrap justify-between gap-2">

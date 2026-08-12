@@ -8,7 +8,11 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
-import { formatNumber, formatPrice } from "../utils/format";
+import {
+  formatNumber,
+  formatPrice,
+  getIndiaPriceFromNepalPrice,
+} from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
 import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
 import { getRoundedCartons } from "../utils/displayStock";
@@ -547,8 +551,8 @@ export default function ProductDisplayPage() {
     }
 
     return (
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-        <table className="w-full text-left">
+      <div className="max-w-full overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <table className="w-full min-w-[760px] text-left">
           <thead className="bg-slate-50">
             <tr>
               <th className="min-w-64 px-4 py-3 text-xs font-semibold uppercase text-slate-500">Product</th>
@@ -674,18 +678,12 @@ export default function ProductDisplayPage() {
 
   const savePrice = async (item) => {
     const price = Number(priceInputs[item.id]);
-    const indiaPriceInput = indiaPriceInputs[item.id] ?? "";
-    const indiaPrice = indiaPriceInput === "" ? null : Number(indiaPriceInput);
+    const indiaPrice = getIndiaPriceFromNepalPrice(price);
 
     if (!Number.isFinite(price) || price < 0) {
       showToast({ tone: "error", title: "Invalid Nepal price", message: "Enter 0 or a positive amount." });
       return;
     }
-    if (indiaPrice !== null && (!Number.isFinite(indiaPrice) || indiaPrice < 0)) {
-      showToast({ tone: "error", title: "Invalid India price", message: "Enter an empty value, 0, or a positive amount." });
-      return;
-    }
-
     try {
       setSavingPriceId(item.id);
       const result = await api.updateFinishedGoodPrice(
@@ -734,7 +732,7 @@ export default function ProductDisplayPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex w-full min-w-0 max-w-full flex-col gap-4 overflow-x-hidden sm:gap-6">
       <PageHeader
         eyebrow="Catalog control"
         title="Product Display"
@@ -742,7 +740,7 @@ export default function ProductDisplayPage() {
         icon="eye"
       />
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 xl:gap-4">
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <p className="text-sm font-medium text-slate-500">Shown to users</p>
           <p className="mt-1 text-2xl font-semibold text-slate-900">{visibleCount}</p>
@@ -766,8 +764,8 @@ export default function ProductDisplayPage() {
         subtitle="Choose up to 5 products for the USER dashboard carousel. If none are selected, newest products are shown automatically."
         icon="dashboard"
       >
-        <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-          <div className="space-y-3">
+        <div className="grid min-w-0 gap-4 p-3 sm:p-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:gap-5">
+          <div className="min-w-0 space-y-3">
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-500">
                 Search and add product
@@ -819,7 +817,7 @@ export default function ProductDisplayPage() {
             </div>
           </div>
 
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold text-slate-900">Selected carousel products</p>
@@ -838,7 +836,7 @@ export default function ProductDisplayPage() {
             {selectedFeaturedProducts.length ? (
               <div className="space-y-2">
                 {selectedFeaturedProducts.map((product, index) => (
-                  <div key={product.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                  <div key={product.id} className="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm sm:gap-3 sm:p-3">
                     <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-sm font-bold text-indigo-700">
                       {index + 1}
                     </span>
@@ -859,7 +857,7 @@ export default function ProductDisplayPage() {
                       <p className="truncate text-sm font-semibold text-slate-950">{product.article_code || product.name}</p>
                       <p className="text-xs text-slate-500">FG.ID {product.id} · {[product.color, product.size].filter(Boolean).join(" / ") || "-"}</p>
                     </div>
-                    <div className="flex gap-1">
+                    <div className="ml-auto flex flex-wrap justify-end gap-1">
                       <Button type="button" size="sm" variant="secondary" onClick={() => moveFeaturedProduct(product.id, "up")} disabled={index === 0}>
                         Up
                       </Button>
@@ -888,8 +886,8 @@ export default function ProductDisplayPage() {
           subtitle="Select one user to see which products are shown or hidden for that account."
           icon="users"
         >
-        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-          <div className="grid gap-4 lg:grid-cols-[minmax(240px,340px)_1fr_auto] lg:items-end">
+        <div className="min-w-0 rounded-xl border border-slate-200 bg-slate-50/70 p-3 sm:p-4">
+          <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(220px,320px)_minmax(0,1fr)_auto] xl:items-end">
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                 User
@@ -1032,7 +1030,7 @@ export default function ProductDisplayPage() {
           subtitle="Visible pairs is the maximum stock number customers can see and order for that exact variant."
           icon="finishedGoods"
         >
-        <div className="grid gap-3 border-b border-slate-100 px-6 py-4 md:grid-cols-3">
+        <div className="grid gap-3 border-b border-slate-100 px-3 py-4 sm:px-5 lg:grid-cols-3">
           <div className="rounded-lg bg-slate-50 px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Physical stock</p>
             <p className="mt-1 text-sm text-slate-700">Actual pairs in warehouse.</p>
@@ -1047,7 +1045,7 @@ export default function ProductDisplayPage() {
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 flex-col gap-3 px-3 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
           <input
             type="text"
             placeholder="Search products..."
@@ -1065,13 +1063,13 @@ export default function ProductDisplayPage() {
           </div>
         </div>
 
-        <div className="mx-6 overflow-x-auto rounded-xl border border-slate-200 bg-white">
-          <table className="w-full text-left">
+        <div className="mx-2 max-w-full overflow-x-auto rounded-xl border border-slate-200 bg-white sm:mx-4 lg:mx-5">
+          <table className="w-full min-w-[900px] text-left">
             <thead className="bg-indigo-50">
               <tr>
                 <th className="w-24 px-4 py-3 text-xs font-semibold uppercase text-slate-500">Order</th>
-                <th className="min-w-56 px-4 py-3 text-xs font-semibold uppercase text-slate-500">Product</th>
-                <th className="min-w-[560px] px-4 py-3 text-xs font-semibold uppercase text-slate-500">Variant controls</th>
+                <th className="min-w-48 px-4 py-3 text-xs font-semibold uppercase text-slate-500">Product</th>
+                <th className="min-w-[380px] px-4 py-3 text-xs font-semibold uppercase text-slate-500">Variant controls</th>
                 <th className="w-36 px-4 py-3 text-xs font-semibold uppercase text-slate-500">Group status</th>
                 <th className="w-44 px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Move</th>
               </tr>
@@ -1122,16 +1120,9 @@ export default function ProductDisplayPage() {
                         const savedPrice = Number(item.price || 0);
                         const priceInput = priceInputs[item.id] ?? String(savedPrice);
                         const priceChanged = Number(priceInput) !== savedPrice;
-                        const savedIndiaPrice =
-                          item.india_price === null || item.india_price === undefined
-                            ? null
-                            : Number(item.india_price);
-                        const indiaPriceInput =
-                          indiaPriceInputs[item.id] ??
-                          (savedIndiaPrice === null ? "" : String(savedIndiaPrice));
-                        const parsedIndiaPrice =
-                          indiaPriceInput === "" ? null : Number(indiaPriceInput);
-                        const indiaPriceChanged = parsedIndiaPrice !== savedIndiaPrice;
+                        const savedIndiaPrice = getIndiaPriceFromNepalPrice(savedPrice);
+                        const indiaPriceInput = getIndiaPriceFromNepalPrice(priceInput);
+                        const indiaPriceChanged = priceChanged;
                         const visibleUsers = item.is_visible
                           ? visibleUsersByProduct.get(Number(item.id)) || []
                           : [];
@@ -1139,7 +1130,7 @@ export default function ProductDisplayPage() {
                         return (
                           <div
                             key={item.id}
-                            className="grid gap-3 rounded-lg border border-slate-200 bg-white px-3 py-3 md:grid-cols-[minmax(130px,1.2fr)_minmax(180px,1fr)_minmax(230px,1.2fr)_minmax(210px,1fr)_auto]"
+                            className="grid min-w-0 gap-3 rounded-lg border border-slate-200 bg-white px-3 py-3 2xl:grid-cols-[minmax(120px,1.1fr)_minmax(150px,0.8fr)_minmax(190px,1fr)_minmax(190px,1fr)_auto]"
                           >
                             <div className="min-w-0">
                               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -1221,17 +1212,14 @@ export default function ProductDisplayPage() {
                                   />
                                 </label>
                                 <label className="text-xs font-semibold uppercase tracking-wide text-orange-700">
-                                  India (INR)
+                                  India (INR) · Nepal ÷ 1.6
                                   <input
                                     type="number"
                                     min="0"
                                     step="0.01"
-                                    value={indiaPriceInput}
-                                    placeholder="Not set"
-                                    onChange={(event) =>
-                                      setIndiaPriceInputs((current) => ({ ...current, [item.id]: event.target.value }))
-                                    }
-                                    className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-semibold normal-case text-slate-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
+                                    value={indiaPriceInput ?? ""}
+                                    readOnly
+                                    className="mt-1 h-10 w-full rounded-lg border border-orange-200 bg-orange-50 px-3 text-sm font-semibold normal-case text-orange-900 outline-none"
                                   />
                                 </label>
                               </div>
@@ -1249,7 +1237,7 @@ export default function ProductDisplayPage() {
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-2 justify-start md:justify-end">
+                            <div className="flex flex-wrap items-center justify-start gap-2 2xl:justify-end">
                               <div className="group relative">
                                 <Button
                                   type="button"
@@ -1334,13 +1322,13 @@ export default function ProductDisplayPage() {
         </div>
 
         {!filteredGroups.length ? (
-          <div className="mx-6 rounded-xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
+          <div className="mx-2 rounded-xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500 sm:mx-5">
             No products found.
           </div>
         ) : null}
 
         {filteredGroups.length ? (
-          <div className="mx-6 mt-4 flex flex-col items-center justify-between gap-3 border-t border-slate-100 pb-2 pt-4 sm:flex-row">
+          <div className="mx-2 mt-4 flex flex-col items-center justify-between gap-3 border-t border-slate-100 pb-2 pt-4 sm:mx-5 sm:flex-row">
             <p className="text-sm text-slate-500">
               Showing {(currentPage - 1) * rowsPerPage + 1}-
               {Math.min(currentPage * rowsPerPage, filteredGroups.length)} of {filteredGroups.length}

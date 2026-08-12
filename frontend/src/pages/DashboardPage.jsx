@@ -963,24 +963,25 @@ export default function DashboardPage() {
   const PRODUCTS_PER_PAGE = 12;
 
   const isAdmin = user.role === "ADMIN" || user.role === "CO_ADMIN";
+  const isCustomerDashboard = ["USER", "ELDER"].includes(user.role);
   const canManageVisibility = canManageProductVisibility(user);
   const canViewDashboard = isAdmin || user.role === "MEMBER";
   const canViewOnHold = canManageVisibility || user.role === "MEMBER";
 
   const load = useCallback(async () => {
     const requests = [
-      ["stock", user.role !== "USER" ? api.getStockSummary(token) : Promise.resolve(null)],
+      ["stock", !isCustomerDashboard ? api.getStockSummary(token) : Promise.resolve(null)],
       [
         "finishedGoods",
-        user.role !== "USER"
+        !isCustomerDashboard
           ? api.getFinishedGoods(token)
           : Promise.resolve({ data: [] }),
       ],
-      ["production", user.role !== "USER" ? api.getProductionHistory(token, { limit: 20, include_total: 0 }) : Promise.resolve({ data: [] })],
+      ["production", !isCustomerDashboard ? api.getProductionHistory(token, { limit: 20, include_total: 0 }) : Promise.resolve({ data: [] })],
       ["orders", user.role !== "MEMBER" ? api.getOrders(token, { limit: 100, include_items: 0 }) : Promise.resolve({ data: [] })],
       [
         "availability",
-        canManageVisibility || user.role === "MEMBER" || user.role === "USER"
+        canManageVisibility || user.role === "MEMBER" || isCustomerDashboard
           ? api.getAvailability(token, {
               include_hidden:
                 canManageVisibility || user.role === "MEMBER" ? 1 : undefined,
@@ -989,21 +990,31 @@ export default function DashboardPage() {
       ],
       ["permissions", canManageVisibility ? api.getPermissions(token, { compact: 1 }) : Promise.resolve({ data: [] })],
       ["users", canManageVisibility ? api.getUsers(token) : Promise.resolve({ data: [] })],
-      ["advertisements", user.role === "USER" ? api.getAdvertisements(token) : Promise.resolve({ data: [] })],
+      ["advertisements", isCustomerDashboard ? api.getAdvertisements(token) : Promise.resolve({ data: [] })],
     ];
 
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       requests.map(async ([key, request]) => {
         try {
           const result = await request;
           const value = key === "stock" ? result : result?.data || [];
-          setState((current) => ({ ...current, [key]: value }));
+          return { key, value };
         } catch (error) {
           console.error(`Dashboard ${key} load failed:`, error);
+          return null;
         }
       })
     );
-  }, [token, user.role, canManageVisibility]);
+    const updates = results.reduce((next, result) => {
+      if (result.status === "fulfilled" && result.value) {
+        next[result.value.key] = result.value.value;
+      }
+      return next;
+    }, {});
+    if (Object.keys(updates).length) {
+      setState((current) => ({ ...current, ...updates }));
+    }
+  }, [token, user.role, canManageVisibility, isCustomerDashboard]);
 
   useEffect(() => { load().catch(console.error); }, [load]);
   useDataRefresh(load, "dashboard");
@@ -1539,7 +1550,7 @@ export default function DashboardPage() {
         icon="dashboard"
       />
 
-      {user.role === "USER" && (
+      {isCustomerDashboard && (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatCard label="Catalog Status" value="Active" tone="default" icon="finishedGoods" />
           <StatCard label="Pending Orders" value={formatNumber(pendingOrders)} tone="alert" icon="orders" />
@@ -1550,11 +1561,11 @@ export default function DashboardPage() {
 
       {canManageVisibility && <AdminDashboardControls />}
 
-      {user.role === "USER" && advertisementsAboveStatus.length > 0 && (
+      {isCustomerDashboard && advertisementsAboveStatus.length > 0 && (
         <AdvertisementBanner advertisements={advertisementsAboveStatus} />
       )}
 
-      {user.role === "USER" && (
+      {isCustomerDashboard && (
         <UserDashboardShowcase
           products={state.availability}
           notices={publishedNotices}
@@ -1562,12 +1573,12 @@ export default function DashboardPage() {
         />
       )}
 
-      {user.role !== "USER" && publishedNotices.length > 0 && (
+      {!isCustomerDashboard && publishedNotices.length > 0 && (
         <PublishedNotices notices={publishedNotices} />
       )}
 
       {/* STAT CARDS */}
-      {user.role !== "USER" && (
+      {!isCustomerDashboard && (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <>
             <StatCard label="Raw Material Stock"            value={formatNumber(rawTotal)}      tone="calm"    icon="materials" />
@@ -1597,15 +1608,15 @@ export default function DashboardPage() {
         <VisibilitySummary summary={visibilitySummary} />
       )}
 
-      {user.role === "USER" && advertisementsBelowStatus.length > 0 && (
+      {isCustomerDashboard && advertisementsBelowStatus.length > 0 && (
         <AdvertisementBanner advertisements={advertisementsBelowStatus} />
       )}
 
-      {user.role === "USER" && facebookFeedAdvertisements.length > 0 && (
+      {isCustomerDashboard && facebookFeedAdvertisements.length > 0 && (
         <AdvertisementFeed advertisements={facebookFeedAdvertisements} variant="facebook" />
       )}
 
-      {user.role === "USER" && instagramFeedAdvertisements.length > 0 && (
+      {isCustomerDashboard && instagramFeedAdvertisements.length > 0 && (
         <AdvertisementFeed advertisements={instagramFeedAdvertisements} variant="instagram" />
       )}
 

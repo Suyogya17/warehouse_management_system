@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
 import { APP_BASE_URL } from "../services/api";
+import { getNeighborImageUrls, preloadImages } from "../utils/imagePreload";
 
 export default function ProductImageGallery({ variants = [], selectedVariant, onSelect }) {
   const [open, setOpen] = useState(false);
@@ -37,6 +38,18 @@ export default function ProductImageGallery({ variants = [], selectedVariant, on
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open || !galleryVariants.length) return;
+
+    preloadImages(
+      getNeighborImageUrls(
+        galleryVariants,
+        selectedGalleryIndex,
+        (variant) => `${APP_BASE_URL}${variant.image_url}`
+      )
+    );
+  }, [galleryVariants, open, selectedGalleryIndex]);
+
   const goToGalleryImage = (direction) => {
     if (!galleryVariants.length) return;
     const nextIndex =
@@ -68,8 +81,10 @@ export default function ProductImageGallery({ variants = [], selectedVariant, on
       const response = await fetch(selectedImageUrl);
       const blob = await response.blob();
       const extension =
-        blob.type === "image/webp"
-          ? "webp"
+        blob.type === "image/avif"
+          ? "avif"
+          : blob.type === "image/webp"
+            ? "webp"
           : blob.type === "image/png"
             ? "png"
             : "jpg";
@@ -123,6 +138,9 @@ export default function ProductImageGallery({ variants = [], selectedVariant, on
             <img
               src={selectedImageUrl}
               alt={selectedVariant.name}
+              loading="eager"
+              fetchPriority="high"
+              decoding="async"
               className="max-w-full max-h-[72vh] sm:max-h-[85vh] object-contain rounded-xl sm:rounded-2xl shadow-2xl"
             />
 

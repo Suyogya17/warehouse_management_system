@@ -165,10 +165,18 @@ const register = async (req, res, next) => {
 const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+
+    if (!normalizedEmail || typeof password !== 'string' || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required',
+      });
+    }
 
     const result = await query(
       'SELECT * FROM users WHERE email = ?',
-      [email]
+      [normalizedEmail]
     );
 
     if (!result.length) {

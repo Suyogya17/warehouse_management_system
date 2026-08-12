@@ -5,8 +5,11 @@
   "scripts": {
     "start": "node app.js",
     "backfill:nepali-fiscal-year": "node scripts/backfill-nepali-fiscal-year.js",
+    "backfill:order-fiscal-dates": "node scripts/backfill-order-fiscal-dates.js",
     "performance:explain": "node scripts/explain-performance.js",
-    "images:optimize": "node scripts/optimize-existing-images.js"
+    "images:optimize": "node scripts/optimize-existing-images.js",
+    "images:convert-avif": "node scripts/optimize-existing-images.js",
+    "images:convert-chat-avif": "node scripts/convert-chat-images-to-avif.js"
   },
   "dependencies": {
     "archiver": "^8.0.0",

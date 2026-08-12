@@ -1616,8 +1616,14 @@ const downloadAttachment = async (req, res, next) => {
     const originalSafeName = String(attachment.original_name || 'attachment')
       .replace(/[\r\n"]/g, '')
       .slice(0, 180);
-    const safeName = String(attachment.mime_type) === 'image/webp'
-      ? `${path.basename(originalSafeName, path.extname(originalSafeName)) || 'image'}.webp`
+    const storedImageExtension =
+      String(attachment.mime_type) === 'image/avif'
+        ? '.avif'
+        : String(attachment.mime_type) === 'image/webp'
+          ? '.webp'
+          : '';
+    const safeName = storedImageExtension
+      ? `${path.basename(originalSafeName, path.extname(originalSafeName)) || 'image'}${storedImageExtension}`
       : originalSafeName;
     const asciiName = safeName.replace(/[^\x20-\x7E]/g, '_');
     res.setHeader(
@@ -1626,7 +1632,11 @@ const downloadAttachment = async (req, res, next) => {
     );
     res.setHeader(
       'Content-Type',
-      wantsThumbnail && attachment.thumbnail_name ? 'image/webp' : attachment.mime_type
+      wantsThumbnail && attachment.thumbnail_name
+        ? String(attachment.thumbnail_name).toLowerCase().endsWith('.avif')
+          ? 'image/avif'
+          : 'image/webp'
+        : attachment.mime_type
     );
     res.setHeader('Cache-Control', 'private, max-age=300');
     return res.sendFile(filePath, (error) => {

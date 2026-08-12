@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Factory } from "lucide-react";
-import loaderShoe from "../assets/nepcha-loader-shoe.webp";
+import loaderShoe from "../assets/nepcha-loader-shoe.avif";
 
 export function NepchaLoader({ overlay = false, label = "Loading..." }) {
   return (
@@ -35,6 +35,8 @@ export function NepchaLoader({ overlay = false, label = "Loading..." }) {
             className="nepcha-loader__finished-shoe"
             src={loaderShoe}
             alt=""
+            loading="eager"
+            decoding="async"
           />
         </div>
 

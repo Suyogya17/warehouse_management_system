@@ -298,7 +298,7 @@ export default function UsersPage() {
           {form.currency_code === "INR" ? (
             <Field label="India pricing">
               <div className="flex h-11 items-center rounded-xl border border-orange-200 bg-orange-50 px-3.5 text-sm font-medium text-orange-800">
-                Enter INR prices separately on each product.
+                Automatically shown as the Nepal price divided by 1.6.
               </div>
             </Field>
           ) : (
@@ -369,7 +369,7 @@ export default function UsersPage() {
               label: "Pricing method",
               render: (row) =>
                 row.currency_code === "INR"
-                  ? "Per-product India price"
+                  ? "Nepal price ÷ 1.6"
                   : `NPR ÷ ${row.exchange_rate || 1}`,
             },
             {

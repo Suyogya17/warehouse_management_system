@@ -2,6 +2,15 @@ import NepaliDateModule from "nepali-date-converter";
 
 const NepaliDate = NepaliDateModule.default || NepaliDateModule;
 
+export const INDIA_PRICE_DIVISOR = 1.6;
+
+export const getIndiaPriceFromNepalPrice = (value) => {
+  if (value === null || value === undefined || value === "") return null;
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return null;
+  return Math.round((amount / INDIA_PRICE_DIVISOR) * 100) / 100;
+};
+
 const normalizeDate = (value) => {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
@@ -54,12 +63,7 @@ export const getProductPriceForUser = (product = {}, user = {}) => {
       new Date(product.offer_ends_at).getTime() >= Date.now());
 
   if (currency === "INR") {
-    const indiaPrice = product?.india_price;
-    if (indiaPrice === null || indiaPrice === undefined || indiaPrice === "") {
-      return null;
-    }
-    const amount = Number(indiaPrice);
-    return Number.isFinite(amount) ? amount : null;
+    return getIndiaPriceFromNepalPrice(product?.price);
   }
 
   const amount = Number(product?.price);

@@ -28,6 +28,11 @@ import {
 
 const getAvailableQty = getCustomerVisibleStock;
 
+const getSeriesName = (soleCode = "") =>
+  String(soleCode)
+    .replace(/[-_\s]*sole$/i, "")
+    .trim();
+
 const getNextSort = (current) => {
   if (current === "display") return "newest";
   if (current === "newest") return "oldest";
@@ -54,7 +59,9 @@ function ProductCard({ variants = [], onAddToCart, cartProductIds, user }) {
         (variant) => Number(variant.id) === Number(current?.id)
       );
 
-      if (refreshedCurrent) return refreshedCurrent;
+      if (refreshedCurrent && getAvailableQty(refreshedCurrent) > 0) {
+        return refreshedCurrent;
+      }
 
       return variants.find((variant) => getAvailableQty(variant) > 0) || variants[0];
     });
@@ -264,6 +271,7 @@ export default function ElderFinishedGoods() {
   search: "",
   size: "",
   stock: "all",
+  series: "",
   commission: "all",
 });
   const [currentPage, setCurrentPage] = useState(1);
@@ -310,9 +318,14 @@ export default function ElderFinishedGoods() {
 
   // ─── GROUP BY ARTICLE CODE ────────────────────────
 
+  const availableItems = useMemo(
+    () => items.filter((item) => getAvailableQty(item) > 0),
+    [items]
+  );
+
   const groupedProducts = useMemo(() => {
     const groups = {};
-    items.forEach((item) => {
+    availableItems.forEach((item) => {
       const baseCode =
         item.article_code ||
         item.name?.split("_")?.slice(0, -1)?.join("_") ||
@@ -325,9 +338,17 @@ export default function ElderFinishedGoods() {
     return Object.values(groups)
       .map((variants) => [...variants].sort(sortProductsByDisplayOrder))
       .sort(sortProductGroupsByDisplayOrder);
-  }, [items]);
+  }, [availableItems]);
 
-  const sizes = [...new Set(items.map((i) => i.size).filter(Boolean))];
+  const sizes = [...new Set(availableItems.map((item) => item.size).filter(Boolean))];
+  const seriesList = useMemo(
+    () =>
+      [...new Set(availableItems.map((item) => getSeriesName(item.sole_code)).filter(Boolean))]
+        .sort((a, b) =>
+          a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+        ),
+    [availableItems]
+  );
 
   // ─── FILTER & SORT ────────────────────────────────
 
@@ -343,30 +364,25 @@ export default function ElderFinishedGoods() {
             // console.log("Group sample:", groupedProducts[0]?.map(v => ({ name: v.name, available_qty: v.available_qty })));
 
           const matchSize = !filters.size || item.size === filters.size;
+          const matchSeries =
+            !filters.series || getSeriesName(item.sole_code) === filters.series;
           const matchCommission = matchesCommissionFilter(item, filters.commission);
 
           // FIX: Filter by available_qty (reserved-aware), not raw quantity
           const availableQty = getAvailableQty(item);
           const matchStock =
-        filters.stock === "all"
-          ? true
-          : filters.stock === "available"
-          ? availableQty > 0
-          : filters.stock === "out"
-          ? availableQty > 0 && availableQty < 1
-          : true;
-          return matchSearch && matchSize && matchStock && matchCommission;
+            filters.stock === "low"
+              ? availableQty < 10
+              : filters.stock === "available"
+                ? availableQty >= 10
+                : true;
+          return matchSearch && matchSize && matchStock && matchSeries && matchCommission;
           
         })
       )
       .filter((variants) => {
-  // hide fully out-of-stock groups by default
-  if (filters.stock === "all") {
-    return variants.some((v) => getAvailableQty(v) > 0);
-  }
-
-  return variants.length > 0;
-})
+        return variants.length > 0;
+      })
       .map((variants) => [...variants].sort(sortProductsByDisplayOrder))
       .sort((a, b) => {
         if (sort === "display") {
@@ -536,15 +552,28 @@ export default function ElderFinishedGoods() {
               ))}
             </select>
 
-<select
-  value={filters.stock}
-  onChange={(e) => setFilters((f) => ({ ...f, stock: e.target.value }))}
-  className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
->
-  <option value="all">Available Products</option>
-  <option value="available">In Stock</option>
-  <option value="out">Out of Stock</option>
-</select>
+            <select
+              value={filters.series}
+              onChange={(e) => setFilters((f) => ({ ...f, series: e.target.value }))}
+              className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            >
+              <option value="">All Series</option>
+              {seriesList.map((series) => (
+                <option key={series} value={series}>
+                  {series}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={filters.stock}
+              onChange={(e) => setFilters((f) => ({ ...f, stock: e.target.value }))}
+              className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            >
+              <option value="all">Available Products</option>
+              <option value="available">In Stock (10+)</option>
+              <option value="low">Low Stock</option>
+            </select>
 
             <select
               value={filters.commission}
@@ -557,7 +586,7 @@ export default function ElderFinishedGoods() {
             </select>
 
             <button
-              onClick={() => setFilters({ search: "", size: "", stock: "all", commission: "all" })}
+              onClick={() => setFilters({ search: "", size: "", stock: "all", series: "", commission: "all" })}
               className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition-all"
             >
               Clear

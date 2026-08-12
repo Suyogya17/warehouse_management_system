@@ -10,6 +10,7 @@ const {
   getSeriesOfferAdjustment,
   loadUserSeriesOfferAdjustments,
 } = require('./offerPricing');
+const { getIndiaPriceFromNepalPrice } = require('./priceConversion');
 
 const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'PACKED'];
 const DEFAULT_DISPLAY_QUANTITY = 450;
@@ -46,17 +47,22 @@ const getReservedByProduct = async (productIds = []) => {
               supportsWarehouseDelivery
                 ? `GREATEST(
                     0,
-                    oi.qty_ordered - COALESCE((
-                      SELECT SUM(delivered_allocation.quantity)
-                      FROM order_item_warehouse_allocations delivered_allocation
-                      WHERE delivered_allocation.order_item_id = oi.id
-                        AND delivered_allocation.allocation_status = 'DEDUCTED'
-                    ), 0)
+                    oi.qty_ordered - COALESCE(delivered_allocation.delivered_quantity, 0)
                   )`
                 : 'oi.qty_ordered'
             }), 0) AS reserved_qty
      FROM order_items oi
      JOIN orders o ON o.id = oi.order_id
+     ${
+       supportsWarehouseDelivery
+         ? `LEFT JOIN (
+              SELECT order_item_id, SUM(quantity) AS delivered_quantity
+              FROM order_item_warehouse_allocations
+              WHERE allocation_status = 'DEDUCTED'
+              GROUP BY order_item_id
+            ) delivered_allocation ON delivered_allocation.order_item_id = oi.id`
+         : ''
+     }
      WHERE o.status IN ${statusClause}
        AND oi.finished_good_id IN ${productClause}
      GROUP BY oi.finished_good_id`,
@@ -334,7 +340,7 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
         .toUpperCase();
       const baseOfferPrice =
         currencyCode === 'INR'
-          ? Number(product.india_price)
+          ? getIndiaPriceFromNepalPrice(product.price)
           : Number(product.price);
       const offerSeriesPriceAdjustment =
         offerIsActive && canSeeOffer

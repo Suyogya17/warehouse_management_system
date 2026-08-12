@@ -126,7 +126,7 @@ function Composer({ value, onChange, onSubmit, sending, disabled, onAttach, onRe
             ref={fileInputRef}
             type="file"
             className="hidden"
-            accept="image/jpeg,image/png,image/webp,application/pdf,.docx,.xlsx"
+            accept="image/jpeg,image/png,image/webp,image/avif,application/pdf,.docx,.xlsx"
             onChange={(event) => {
               const file = event.target.files?.[0];
               event.target.value = "";

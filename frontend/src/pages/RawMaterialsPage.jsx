@@ -301,6 +301,8 @@ const remove = (id) => {
     <img
       src={preview}
       alt="Preview"
+      loading="lazy"
+      decoding="async"
       className="h-60 w-30 object-cover rounded-xl border"
     />
     {/* <div className="text-sm text-slate-600">
@@ -314,6 +316,8 @@ const remove = (id) => {
                 <img
                   src={`${APP_BASE_URL}${items.find((item) => item.id === editingId)?.image_url}`}
                   alt={form.name}
+                  loading="lazy"
+                  decoding="async"
                   className="h-24 w-24 rounded-2xl object-cover"
                 />
               </div>

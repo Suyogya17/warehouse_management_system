@@ -5,6 +5,7 @@ const { query, pool } = require("../config/db");
 const { hasColumn, hasTable } = require("../utils/schemaSupport");
 
 const APPLY = process.argv.includes("--apply");
+const DELETE_ORIGINALS = process.argv.includes("--delete-originals");
 const uploadsDirectory = path.resolve(__dirname, "..", "uploads");
 const imageReferences = [
   { table: "finished_goods", column: "image_url" },
@@ -85,19 +86,14 @@ const optimizeOne = async (imageUrl, references) => {
 
   const sourceStats = await fs.promises.stat(sourcePath);
   const sourceExtension = path.extname(sourcePath).toLowerCase();
-  if (
-    sourceExtension === ".webp" &&
-    sourceStats.size <= 300 * 1024 &&
-    metadata.width <= 1200 &&
-    metadata.height <= 1200
-  ) {
+  if (sourceExtension === ".avif") {
     return { status: "already-optimized", imageUrl };
   }
 
   const outputName = `${path.basename(
     sourcePath,
     path.extname(sourcePath)
-  )}.optimized.webp`;
+  )}.optimized.avif`;
   const outputPath = path.join(uploadsDirectory, outputName);
   const outputUrl = `/uploads/${outputName}`;
 
@@ -119,7 +115,7 @@ const optimizeOne = async (imageUrl, references) => {
         fit: "inside",
         withoutEnlargement: true,
       })
-      .webp({ quality: 78, effort: 4, smartSubsample: true })
+      .avif({ quality: 58, effort: 4, chromaSubsampling: "4:2:0" })
       .toFile(outputPath);
   }
 
@@ -130,6 +126,16 @@ const optimizeOne = async (imageUrl, references) => {
     outputUrl
   );
 
+  let originalDeleted = false;
+  if (
+    DELETE_ORIGINALS &&
+    updatedRows > 0 &&
+    path.resolve(sourcePath) !== path.resolve(outputPath)
+  ) {
+    await fs.promises.unlink(sourcePath);
+    originalDeleted = true;
+  }
+
   return {
     status: "optimized",
     imageUrl,
@@ -137,6 +143,7 @@ const optimizeOne = async (imageUrl, references) => {
     sourceSize: sourceStats.size,
     outputSize: outputStats.size,
     updatedRows,
+    originalDeleted,
   };
 };
 
@@ -147,7 +154,7 @@ const main = async () => {
 
   console.log(
     APPLY
-      ? `Optimizing ${urls.length} referenced uploads...`
+      ? `Converting ${urls.length} referenced uploads to AVIF...`
       : `Dry run: ${urls.length} referenced uploads found.`
   );
 
@@ -189,7 +196,7 @@ const main = async () => {
         bytes_before: bytesBefore,
         bytes_after: bytesAfter,
         saved_bytes: Math.max(0, bytesBefore - bytesAfter),
-        originals_deleted: false,
+        originals_deleted: optimized.filter((result) => result.originalDeleted).length,
         status_counts: results.reduce((counts, result) => {
           counts[result.status] = Number(counts[result.status] || 0) + 1;
           return counts;
@@ -203,6 +210,10 @@ const main = async () => {
   if (!APPLY) {
     console.log(
       "No files or database rows were changed. Run again with --apply after taking a database and uploads backup."
+    );
+  } else if (!DELETE_ORIGINALS) {
+    console.log(
+      "AVIF files and database references were updated. Original files were retained; add --delete-originals only after verifying the site."
     );
   }
 };

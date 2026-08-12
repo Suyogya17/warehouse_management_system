@@ -79,6 +79,8 @@ function SecureAttachment({ attachment, token, mine, compact = false }) {
               <img
                 src={previewUrl}
                 alt={attachment.original_name}
+                loading="lazy"
+                decoding="async"
                 className={`w-full object-contain ${compact ? "max-h-44" : "max-h-72"}`}
               />
             ) : (
@@ -189,6 +191,7 @@ function ReferenceCard({ reference, mine, compact = false }) {
             src={`${APP_BASE_URL}${snapshot.image_url}`}
             alt=""
             loading="lazy"
+            decoding="async"
             className={`${compact ? "h-12 w-12" : "h-14 w-14"} shrink-0 rounded-lg bg-white object-cover`}
           />
         ) : (
@@ -501,7 +504,7 @@ export function ChatReferencePicker({ open, token, conversationId, staffConversa
                   className="flex w-full items-center gap-3 rounded-xl border border-slate-200 p-3 text-left hover:border-indigo-300 hover:bg-indigo-50 disabled:opacity-50"
                 >
                   {type === "PRODUCT" && row.image_url ? (
-                    <img src={`${APP_BASE_URL}${row.image_url}`} alt="" loading="lazy" className="h-12 w-12 shrink-0 rounded-lg bg-slate-100 object-cover" />
+                    <img src={`${APP_BASE_URL}${row.image_url}`} alt="" loading="lazy" decoding="async" className="h-12 w-12 shrink-0 rounded-lg bg-slate-100 object-cover" />
                   ) : (
                     <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700">
                       <Icon name={type === "PRODUCT" ? "box" : "orders"} className="h-5 w-5" />

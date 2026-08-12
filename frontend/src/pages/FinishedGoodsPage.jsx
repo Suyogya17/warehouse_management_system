@@ -11,7 +11,11 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
-import { formatNumber, formatPrice } from "../utils/format";
+import {
+  formatNumber,
+  formatPrice,
+  getIndiaPriceFromNepalPrice,
+} from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
 import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
 import Select from "react-select";
@@ -41,7 +45,10 @@ const buildFormData = (values, editingId) => {
   formData.append("color", values.color);
   formData.append("unit", values.unit);
   formData.append("price", Number(values.price || 0));
-  formData.append("india_price", values.india_price === "" ? "" : Number(values.india_price));
+  formData.append(
+    "india_price",
+    getIndiaPriceFromNepalPrice(values.price) ?? ""
+  );
   formData.append("is_commission", values.is_commission ? 1 : 0);
   formData.append("min_quantity", Number(values.min_quantity));
   formData.append("size", values.size || "");
@@ -574,16 +581,13 @@ export default function FinishedGoodsPage() {
               />
             </Field>
 
-            <Field label="India Price (INR)">
+            <Field label="India Price (INR · NPR ÷ 1.6)">
               <TextInput
                 type="number"
                 min={0}
                 step="0.01"
-                value={form.india_price}
-                placeholder="Enter India price"
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, india_price: event.target.value }))
-                }
+                value={getIndiaPriceFromNepalPrice(form.price) ?? ""}
+                readOnly
               />
             </Field>
 
@@ -664,6 +668,8 @@ export default function FinishedGoodsPage() {
                 <img
                   src={`${APP_BASE_URL}${items.find((item) => item.id === editingId)?.image_url}`}
                   alt={form.name}
+                  loading="lazy"
+                  decoding="async"
                   className="h-24 w-24 rounded-2xl object-cover"
                 />
               </div>
@@ -777,10 +783,11 @@ export default function FinishedGoodsPage() {
             ...(isAdmin ? [{ key: "price", label: "Price (NPR)", render: (row) => formatPrice(row.price) }] : []),
             ...(isAdmin ? [{
               key: "india_price",
-              label: "India Price (INR)",
-              render: (row) => row.india_price === null || row.india_price === undefined
-                ? "Not set"
-                : formatPrice(row.india_price, "INR"),
+              label: "India Price (INR · NPR ÷ 1.6)",
+              render: (row) => {
+                const indiaPrice = getIndiaPriceFromNepalPrice(row.price);
+                return indiaPrice === null ? "Not set" : formatPrice(indiaPrice, "INR");
+              },
             }] : []),
             ...(isAdmin
               ? [{

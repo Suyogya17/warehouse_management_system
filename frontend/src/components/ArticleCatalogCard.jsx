@@ -1,8 +1,16 @@
-import { useMemo, useState } from "react";
-import { Check, Package, ShoppingCart, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Package,
+  ShoppingCart,
+  X,
+} from "lucide-react";
 import { APP_BASE_URL } from "../services/api";
 import { getCustomerVisibleStock, getRoundedCartons } from "../utils/displayStock";
 import { formatNumber } from "../utils/format";
+import { getNeighborImageUrls, preloadImages } from "../utils/imagePreload";
 
 const getSeriesName = (soleCode = "") =>
   String(soleCode)
@@ -15,6 +23,7 @@ export default function ArticleCatalogCard({
   onAddToCart,
   onProductInterest,
   cartProductIds = new Set(),
+  showStockDetails = false,
 }) {
   const [previewProduct, setPreviewProduct] = useState(null);
 
@@ -28,6 +37,60 @@ export default function ArticleCatalogCard({
       ),
     [variants]
   );
+  const previewVariants = useMemo(
+    () => sortedVariants.filter((variant) => variant.image_url),
+    [sortedVariants]
+  );
+  const previewIndex = Math.max(
+    0,
+    previewVariants.findIndex(
+      (variant) => Number(variant.id) === Number(previewProduct?.id)
+    )
+  );
+  const canNavigatePreview = previewVariants.length > 1;
+
+  const changePreview = useCallback(
+    (direction) => {
+      if (!previewVariants.length) return;
+      const currentIndex = Math.max(
+        0,
+        previewVariants.findIndex(
+          (variant) => Number(variant.id) === Number(previewProduct?.id)
+        )
+      );
+      const nextIndex =
+        (currentIndex + direction + previewVariants.length) %
+        previewVariants.length;
+      setPreviewProduct(previewVariants[nextIndex]);
+      onProductInterest?.(previewVariants[nextIndex]);
+    },
+    [onProductInterest, previewProduct?.id, previewVariants]
+  );
+
+  useEffect(() => {
+    if (!previewProduct) return undefined;
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setPreviewProduct(null);
+      if (event.key === "ArrowLeft" && canNavigatePreview) changePreview(-1);
+      if (event.key === "ArrowRight" && canNavigatePreview) changePreview(1);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [canNavigatePreview, changePreview, previewProduct]);
+
+  useEffect(() => {
+    if (!previewProduct || !previewVariants.length) return;
+
+    preloadImages(
+      getNeighborImageUrls(
+        previewVariants,
+        previewIndex,
+        (variant) => `${APP_BASE_URL}${variant.image_url}`
+      )
+    );
+  }, [previewIndex, previewProduct, previewVariants]);
 
   const product = sortedVariants[0];
   if (!product) return null;
@@ -108,9 +171,13 @@ export default function ArticleCatalogCard({
               </button>
 
               <div className="mt-3 flex items-center justify-between gap-2">
-                <p className="min-w-0 break-words text-[10px] font-semibold leading-4 text-slate-500 min-[380px]:text-[11px] sm:text-xs">
-                  {formatNumber(availableCartons)} CTN · {formatNumber(availablePairs)} pairs
-                </p>
+                {showStockDetails ? (
+                  <p className="min-w-0 break-words text-[10px] font-semibold leading-4 text-slate-500 min-[380px]:text-[11px] sm:text-xs">
+                    {formatNumber(availableCartons)} CTN · {formatNumber(availablePairs)} pairs
+                  </p>
+                ) : (
+                  <span />
+                )}
                 {onAddToCart ? (
                   <button
                     type="button"
@@ -149,9 +216,34 @@ export default function ArticleCatalogCard({
             <img
               src={`${APP_BASE_URL}${previewProduct.image_url}`}
               alt={previewProduct.name}
+              loading="eager"
+              fetchPriority="high"
               decoding="async"
               className="max-h-[88vh] max-w-full rounded-2xl bg-white object-contain"
             />
+            {canNavigatePreview ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => changePreview(-1)}
+                  className="absolute left-2 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/55 text-white shadow-xl transition hover:bg-black/75 sm:-left-14 sm:bg-white sm:text-slate-900 sm:hover:bg-slate-100"
+                  aria-label="Previous gallery photo"
+                >
+                  <ChevronLeft size={25} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changePreview(1)}
+                  className="absolute right-2 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/55 text-white shadow-xl transition hover:bg-black/75 sm:-right-14 sm:bg-white sm:text-slate-900 sm:hover:bg-slate-100"
+                  aria-label="Next gallery photo"
+                >
+                  <ChevronRight size={25} />
+                </button>
+                <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-xs font-bold text-white">
+                  {previewIndex + 1} / {previewVariants.length}
+                </span>
+              </>
+            ) : null}
             <button
               type="button"
               onClick={() => setPreviewProduct(null)}

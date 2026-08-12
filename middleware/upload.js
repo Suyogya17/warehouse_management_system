@@ -48,11 +48,11 @@ const optimizeUploadedImage = async (file) => {
     file.filename,
     path.extname(file.filename)
   );
-  const optimizedFilename = `${filenameBase}.webp`;
+  const optimizedFilename = `${filenameBase}.avif`;
   const optimizedPath = path.join(uploadsDirectory, optimizedFilename);
   const temporaryPath = path.join(
     uploadsDirectory,
-    `.${filenameBase}-${process.pid}-${Date.now()}.tmp.webp`
+    `.${filenameBase}-${process.pid}-${Date.now()}.tmp.avif`
   );
 
   try {
@@ -64,7 +64,7 @@ const optimizeUploadedImage = async (file) => {
         fit: "inside",
         withoutEnlargement: true,
       })
-      .webp({ quality: 78, effort: 4, smartSubsample: true })
+      .avif({ quality: 58, effort: 4, chromaSubsampling: "4:2:0" })
       .toFile(temporaryPath);
 
     // The original upload may already be WebP, making its final optimized
@@ -83,7 +83,7 @@ const optimizeUploadedImage = async (file) => {
       filename: optimizedFilename,
       path: optimizedPath,
       destination: uploadsDirectory,
-      mimetype: "image/webp",
+      mimetype: "image/avif",
       size: stats.size,
     };
   } catch (error) {

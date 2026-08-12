@@ -240,6 +240,13 @@ const getDashboard = async (req, res, next) => {
   try {
     const activeReservationExpression =
       await getActiveReservationExpression("oi");
+    const supportsFinishedGoodsSoftDelete = await hasColumn(
+      "finished_goods",
+      "is_deleted"
+    );
+    const activeFinishedGoodsWhere = supportsFinishedGoodsSoftDelete
+      ? " WHERE is_deleted = 0"
+      : "";
     const [
       rawMaterialTotal,
       finishedGoodsTotal,
@@ -254,7 +261,10 @@ const getDashboard = async (req, res, next) => {
       countryOnHoldProducts,
     ] = await Promise.all([
       run("SELECT COALESCE(SUM(quantity), 0) AS total_quantity FROM raw_materials"),
-      run("SELECT COALESCE(SUM(quantity), 0) AS total_quantity FROM finished_goods"),
+      run(
+        `SELECT COALESCE(SUM(quantity), 0) AS total_quantity
+         FROM finished_goods${activeFinishedGoodsWhere}`
+      ),
       run(
         `SELECT COALESCE(SUM(qty_produced), 0) AS total_quantity
          FROM production

@@ -67,8 +67,8 @@ const storeChatAttachment = async (file) => {
   const key = crypto.randomUUID();
 
   if (isImage(file)) {
-    const storedName = `${key}.webp`;
-    const thumbnailName = `${key}-thumb.webp`;
+    const storedName = `${key}.avif`;
+    const thumbnailName = `${key}-thumb.avif`;
     const storedPath = path.join(CHAT_UPLOAD_ROOT, storedName);
     const thumbnailPath = path.join(CHAT_UPLOAD_ROOT, thumbnailName);
 
@@ -77,12 +77,12 @@ const storeChatAttachment = async (file) => {
       await image
         .clone()
         .resize({ width: 1800, height: 1800, fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: 82, effort: 4 })
+        .avif({ quality: 60, effort: 4, chromaSubsampling: '4:2:0' })
         .toFile(storedPath);
       await image
         .clone()
         .resize({ width: 480, height: 480, fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: 72, effort: 3 })
+        .avif({ quality: 52, effort: 3, chromaSubsampling: '4:2:0' })
         .toFile(thumbnailPath);
     } catch (_error) {
       await Promise.all([
@@ -96,7 +96,7 @@ const storeChatAttachment = async (file) => {
     return {
       storedName,
       thumbnailName,
-      mimeType: 'image/webp',
+      mimeType: 'image/avif',
       sizeBytes: stats.size,
     };
   }
@@ -132,7 +132,7 @@ const storeChatAttachment = async (file) => {
     : fallbackMimeByExtension[extension];
   const documentType = DOCUMENT_TYPES.get(effectiveMime);
   if (!documentType) {
-    throw new Error('Only voice messages, JPG, PNG, WebP, PDF, DOCX and XLSX files are supported.');
+    throw new Error('Only voice messages, JPG, PNG, WebP, AVIF, PDF, DOCX and XLSX files are supported.');
   }
   assertDocumentSignature(file.buffer, documentType.signature);
 
