@@ -1794,7 +1794,7 @@ const getFilters = async (req, res, next) => {
     const ownWhere = ownOrdersOnly ? 'WHERE o.created_by = ?' : '';
     const ownParams = ownOrdersOnly ? [req.user.id] : [];
 
-    const [dealers, parties] = await Promise.all([
+    const [dealers, parties, partyDetails] = await Promise.all([
       query(
         `SELECT o.created_by AS id,
                 COALESCE(u.name, 'Unknown user') AS name,
@@ -1828,7 +1828,56 @@ const getFilters = async (req, res, next) => {
           ),
         ownParams
       ),
+      query(
+        `SELECT o.created_by AS dealer_id,
+                o.customer_name AS name,
+                o.customer_phone,
+                o.customer_address,
+                o.pan_number,
+                o.transport_name,
+                o.created_at
+         FROM orders o
+         ${ownWhere}
+         WHERE_REPLACEMENT
+         ORDER BY o.created_at DESC, o.id DESC`
+          .replace(
+            'WHERE_REPLACEMENT',
+            ownOrdersOnly
+              ? "AND o.customer_name IS NOT NULL AND TRIM(o.customer_name) <> ''"
+              : "WHERE o.customer_name IS NOT NULL AND TRIM(o.customer_name) <> ''"
+          ),
+        ownParams
+      ),
     ]);
+
+    const recentDetailsByParty = partyDetails.rows.reduce((details, row) => {
+      const groupKey = `${Number(row.dealer_id)}:${normalizeCustomerKey(row.name)}`;
+      const current = details.get(groupKey) || {
+        customer_phone: null,
+        customer_address: null,
+        pan_number: null,
+        transport_name: null,
+      };
+      if (!current.customer_phone && String(row.customer_phone || '').trim()) {
+        current.customer_phone = row.customer_phone;
+      }
+      if (!current.customer_address && String(row.customer_address || '').trim()) {
+        current.customer_address = row.customer_address;
+      }
+      if (!current.pan_number && String(row.pan_number || '').trim()) {
+        current.pan_number = row.pan_number;
+      }
+      const transport = String(row.transport_name || '').trim();
+      if (
+        !current.transport_name &&
+        transport &&
+        !['N/A', 'NA', 'NONE', '-'].includes(transport.toUpperCase())
+      ) {
+        current.transport_name = transport;
+      }
+      details.set(groupKey, current);
+      return details;
+    }, new Map());
 
     return res.json({
       success: true,
@@ -1871,7 +1920,10 @@ const getFilters = async (req, res, next) => {
             existing.latest_order_at = row.latest_order_at;
           }
           return groups;
-        }, new Map()).values()].map(({ canonical_count, ...party }) => party),
+        }, new Map()).values()].map(({ canonical_count, ...party }) => ({
+          ...party,
+          ...(recentDetailsByParty.get(`${party.dealer_id}:${party.key}`) || {}),
+        })),
       },
     });
   } catch (err) {

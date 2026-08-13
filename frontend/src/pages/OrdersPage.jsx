@@ -128,6 +128,7 @@ export default function OrdersPage() {
   const [correctingDnOrderId, setCorrectingDnOrderId] = useState(null);
   const [verificationWarehouse, setVerificationWarehouse] = useState(null);
   const [verificationItems, setVerificationItems] = useState([]);
+  const [suggestedTransportName, setSuggestedTransportName] = useState("");
   const [lockedOrderDetails, setLockedOrderDetails] = useState(null);
   const [lockedOrderHistory, setLockedOrderHistory] = useState([]);
   const [loadingLockedOrderHistory, setLoadingLockedOrderHistory] = useState(false);
@@ -271,11 +272,30 @@ export default function OrdersPage() {
   );
 
   const knownPartiesForCurrentUser = useMemo(() => {
-    const ownParties = (orderFilterOptions.parties || []).filter(
+    return (orderFilterOptions.parties || []).filter(
       (party) => String(party.dealer_id) === String(user?.id)
     );
-    return ownParties.length ? ownParties : orderFilterOptions.parties || [];
   }, [orderFilterOptions.parties, user?.id]);
+
+  const applyKnownPartySuggestion = useCallback(() => {
+    const enteredKey = normalizePartyKey(form.customer_name);
+    const knownParty = knownPartiesForCurrentUser.find(
+      (party) => party.key === enteredKey
+    );
+    const transportSuggestion = String(knownParty?.transport_name || "").trim();
+
+    setSuggestedTransportName(transportSuggestion);
+    if (!knownParty) return;
+
+    setForm((current) => ({
+      ...current,
+      customer_name: knownParty.name || current.customer_name,
+      transport_name:
+        !String(current.transport_name || "").trim() && transportSuggestion
+          ? transportSuggestion
+          : current.transport_name,
+    }));
+  }, [form.customer_name, knownPartiesForCurrentUser]);
 
   const totals = useMemo(
     () =>
@@ -344,6 +364,7 @@ export default function OrdersPage() {
         await api.createOrder({ ...payload, confirm_duplicate: true }, token);
       }
       setForm(initialForm);
+      setSuggestedTransportName("");
       await load();
       announceDataRefresh("orders");
       showToast({ tone: "success", title: "Order reserved", message: "Available stock was refreshed." });
@@ -1339,15 +1360,7 @@ export default function OrdersPage() {
                 onChange={(event) =>
                   setForm((current) => ({ ...current, customer_name: event.target.value }))
                 }
-                onBlur={() => {
-                  const enteredKey = normalizePartyKey(form.customer_name);
-                  const knownParty = knownPartiesForCurrentUser.find(
-                    (party) => party.key === enteredKey
-                  );
-                  if (knownParty?.name && knownParty.name !== form.customer_name) {
-                    setForm((current) => ({ ...current, customer_name: knownParty.name }));
-                  }
-                }}
+                onBlur={applyKnownPartySuggestion}
                 required
               />
               <datalist id="known-order-parties">
@@ -1396,7 +1409,14 @@ export default function OrdersPage() {
               />
             </Field>
 
-            <Field label="Transport Name">
+            <Field
+              label="Transport Name"
+              hint={
+                suggestedTransportName
+                  ? `Previously used for this customer: ${suggestedTransportName}. You can still type a different transport.`
+                  : "The previous transport will be suggested when this customer is recognized."
+              }
+            >
               <TextInput
                 value={form.transport_name}
                 onChange={(event) =>
@@ -1404,6 +1424,21 @@ export default function OrdersPage() {
                 }
                 required
               />
+              {suggestedTransportName &&
+              form.transport_name.trim() !== suggestedTransportName ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setForm((current) => ({
+                      ...current,
+                      transport_name: suggestedTransportName,
+                    }))
+                  }
+                  className="mt-2 inline-flex rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100"
+                >
+                  Use {suggestedTransportName}
+                </button>
+              ) : null}
             </Field>
 
             <Field label="Notes">

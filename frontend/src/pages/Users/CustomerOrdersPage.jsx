@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
+import CreatableSelect from "react-select/creatable";
 
 import {
   ShoppingCart,
@@ -24,6 +25,19 @@ import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { getCustomerVisibleStock } from "../../utils/displayStock";
 import { formatEnglishDate, formatNepaliDate, formatNumber, formatTime } from "../../utils/format";
+import {
+  findTransportByName,
+  TRANSPORT_DIRECTORY,
+  transportServesAddress,
+} from "../../data/transportDirectory";
+
+const normalizeCustomerKey = (value) =>
+  String(value || "").trim().toLowerCase().replace(/[\s._-]+/g, "");
+
+const isUsefulTransport = (value) => {
+  const transport = String(value || "").trim();
+  return transport && !["N/A", "NA", "NONE", "-"].includes(transport.toUpperCase());
+};
 
 export default function UserOrderPage() {
   const { token } = useAuth();
@@ -39,10 +53,12 @@ export default function UserOrderPage() {
   const [customerAddress, setCustomerAddress] = useState("");
   const [panNumber, setPanNumber] = useState("");
   const [transportName, setTransportName] = useState("");
+  const [suggestedTransportName, setSuggestedTransportName] = useState("");
   const [notes, setNotes] = useState("");
 
   const [errors, setErrors] = useState({});
   const [orders, setOrders] = useState([]);
+  const [customerHistory, setCustomerHistory] = useState([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
@@ -164,8 +180,12 @@ export default function UserOrderPage() {
     const fetchOrders = async () => {
       try {
         setLoadingOrders(true);
-        const res = await api.getOrders(token, { limit: 100 });
-        setOrders(res.data || []);
+        const [ordersResult, filtersResult] = await Promise.all([
+          api.getOrders(token, { limit: 100 }),
+          api.getOrderFilters(token),
+        ]);
+        setOrders(ordersResult.data || []);
+        setCustomerHistory(filtersResult.data?.parties || []);
       } catch (err) {
         showToast({
           title: "Orders failed to load",
@@ -249,10 +269,14 @@ export default function UserOrderPage() {
       setCart([]);
       localStorage.removeItem("userCart");
       setCustomerName(""); setCustomerPhone(""); setCustomerAddress("");
-      setPanNumber(""); setTransportName(""); setNotes(""); setErrors({});
+      setPanNumber(""); setTransportName(""); setSuggestedTransportName(""); setNotes(""); setErrors({});
 
-      const res = await api.getOrders(token, { limit: 100 });
-      setOrders(res.data || []);
+      const [ordersResult, filtersResult] = await Promise.all([
+        api.getOrders(token, { limit: 100 }),
+        api.getOrderFilters(token),
+      ]);
+      setOrders(ordersResult.data || []);
+      setCustomerHistory(filtersResult.data?.parties || []);
     } catch (err) {
       const shortages = err.data?.shortages;
       if (shortages?.length) {
@@ -278,6 +302,91 @@ export default function UserOrderPage() {
   // ─── DERIVED ──────────────────────────────────────
 
   const totalItems = cart.reduce((sum, item) => sum + Number(item.qty_ordered || 0), 0);
+
+  const knownCustomers = useMemo(() => {
+    if (customerHistory.length) {
+      return customerHistory.map((customer) => ({
+        ...customer,
+        id: `${customer.dealer_id}:${customer.key}`,
+        customer_name: customer.name,
+        created_at: customer.latest_order_at,
+      }));
+    }
+    const customers = new Map();
+    [...orders]
+      .sort((left, right) => {
+        const dateDifference = new Date(right.created_at || 0) - new Date(left.created_at || 0);
+        return dateDifference || Number(right.id || 0) - Number(left.id || 0);
+      })
+      .forEach((order) => {
+        const key = normalizeCustomerKey(order.customer_name);
+        if (key && !customers.has(key)) customers.set(key, order);
+      });
+    return [...customers.values()];
+  }, [customerHistory, orders]);
+
+  const applyCustomerHistory = () => {
+    const matchingCustomer = knownCustomers.find(
+      (order) => normalizeCustomerKey(order.customer_name) === normalizeCustomerKey(customerName)
+    );
+    const previousTransport = isUsefulTransport(matchingCustomer?.transport_name)
+      ? String(matchingCustomer.transport_name).trim()
+      : "";
+
+    setSuggestedTransportName(previousTransport);
+    if (!matchingCustomer) return;
+
+    setCustomerName(matchingCustomer.customer_name || customerName);
+    setCustomerPhone((current) => current || String(matchingCustomer.customer_phone || ""));
+    setCustomerAddress((current) => current || String(matchingCustomer.customer_address || ""));
+    setPanNumber((current) => current || String(matchingCustomer.pan_number || ""));
+    setTransportName((current) => current || previousTransport);
+  };
+
+  const transportOptions = useMemo(() => {
+    const previousName = String(suggestedTransportName || "").trim();
+    const previousDirectoryEntry = findTransportByName(previousName);
+    const options = TRANSPORT_DIRECTORY.map((transport) => ({
+      value: transport.name,
+      label: transport.name,
+      phone: transport.phone,
+      destinations: transport.destinations,
+      recommendedForAddress: transportServesAddress(transport, customerAddress),
+      previouslyUsed:
+        Boolean(previousName) &&
+        (transport.name.toLowerCase() === previousName.toLowerCase() ||
+          previousDirectoryEntry?.name === transport.name),
+    }));
+
+    if (previousName && !previousDirectoryEntry) {
+      options.unshift({
+        value: previousName,
+        label: previousName,
+        phone: "",
+        destinations: [],
+        recommendedForAddress: false,
+        previouslyUsed: true,
+      });
+    }
+
+    return options.sort((left, right) => {
+      if (left.previouslyUsed !== right.previouslyUsed) return left.previouslyUsed ? -1 : 1;
+      if (left.recommendedForAddress !== right.recommendedForAddress) {
+        return left.recommendedForAddress ? -1 : 1;
+      }
+      return left.label.localeCompare(right.label);
+    });
+  }, [customerAddress, suggestedTransportName]);
+
+  const selectedTransportOption = useMemo(() => {
+    const currentName = String(transportName || "").trim();
+    if (!currentName) return null;
+    return (
+      transportOptions.find(
+        (transport) => transport.value.toLowerCase() === currentName.toLowerCase()
+      ) || { value: currentName, label: currentName, phone: "", destinations: [] }
+    );
+  }, [transportName, transportOptions]);
   const totalPages = Math.ceil(orders.length / ordersPerPage);
   const paginatedOrders = orders.slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage);
 
@@ -467,11 +576,18 @@ export default function UserOrderPage() {
                 Customer Name <span className="text-red-500">*</span>
               </label>
               <input
+                list="user-order-customers"
                 className={`w-full border rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${errors.customerName ? "border-red-500" : "border-slate-300"}`}
                 placeholder="Enter customer name"
                 value={customerName}
                 onChange={(e) => { setCustomerName(e.target.value); setErrors((p) => ({ ...p, customerName: "" })); }}
+                onBlur={applyCustomerHistory}
               />
+              <datalist id="user-order-customers">
+                {knownCustomers.map((customer) => (
+                  <option key={customer.id} value={customer.customer_name} />
+                ))}
+              </datalist>
               {errors.customerName && <p className="text-red-500 text-sm mt-1">{errors.customerName}</p>}
             </div>
 
@@ -513,12 +629,67 @@ export default function UserOrderPage() {
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-2">Transport Name</label>
-              <input
-                className="w-full border border-slate-300 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                placeholder="Enter transport company"
-                value={transportName}
-                onChange={(e) => setTransportName(e.target.value)}
+              <CreatableSelect
+                isClearable
+                options={transportOptions}
+                value={selectedTransportOption}
+                placeholder="Select or type a transport company..."
+                formatCreateLabel={(value) => `Use new transport: ${value}`}
+                noOptionsMessage={() => "Type a new transport name"}
+                onChange={(option) => setTransportName(option?.value || "")}
+                formatOptionLabel={(option, meta) =>
+                  meta.context === "value" ? (
+                    option.label
+                  ) : (
+                    <div className="py-0.5">
+                      <div className="flex flex-wrap items-center gap-1.5 font-medium text-slate-900">
+                        <span>{option.label}</span>
+                        {option.previouslyUsed ? (
+                          <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-indigo-700">
+                            Previously used
+                          </span>
+                        ) : null}
+                        {option.recommendedForAddress ? (
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-700">
+                            Serves destination
+                          </span>
+                        ) : null}
+                      </div>
+                      {option.phone || option.destinations?.length ? (
+                        <div className="mt-0.5 text-xs text-slate-500">
+                          {option.phone ? `${option.phone} · ` : ""}
+                          {(option.destinations || []).join(", ")}
+                        </div>
+                      ) : null}
+                    </div>
+                  )
+                }
+                styles={{
+                  control: (base, state) => ({
+                    ...base,
+                    minHeight: "50px",
+                    borderRadius: "0.75rem",
+                    borderColor: state.isFocused ? "#6366f1" : "#cbd5e1",
+                    boxShadow: state.isFocused ? "0 0 0 2px #c7d2fe" : base.boxShadow,
+                    ":hover": { borderColor: state.isFocused ? "#6366f1" : "#94a3b8" },
+                  }),
+                  menu: (base) => ({ ...base, zIndex: 50 }),
+                }}
               />
+              {suggestedTransportName ? (
+                <p className="mt-1.5 text-xs text-indigo-700">
+                  Previously used for this customer: {suggestedTransportName}
+                </p>
+              ) : null}
+              {selectedTransportOption?.phone ? (
+                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+                  <span className="font-semibold text-slate-800">Phone:</span>{" "}
+                  {selectedTransportOption.phone}
+                  <span className="mx-2 text-slate-300">|</span>
+                  <span className="font-semibold text-slate-800">Destinations:</span>{" "}
+                  {selectedTransportOption.destinations.join(", ")}
+                </div>
+              ) : null}
             </div>
 
             <div className="md:col-span-2">
@@ -530,7 +701,24 @@ export default function UserOrderPage() {
               />
             </div>
           </div>
+               {/* SUBMIT */}
+      {cart.length > 0 && (
+        <div className="flex justify-around padding-y-5 gap-3">
+          <button
+            onClick={submitOrder} disabled={submitting}
+            className="px-8 py-3 bg-indigo-500 text-white rounded-xl font-semibold hover:bg-indigo-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[180px] justify-center"
+          >
+            {submitting ? (
+              <><div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" /> Submitting...</>
+            ) : (
+              <><CheckCircle2 size={20} /> Place Order</>
+            )}
+          </button>
+        </div>
+      )}
         </SectionCard>
+        
+
       )}
 
       {/* ORDERS TABLE */}
@@ -623,7 +811,7 @@ export default function UserOrderPage() {
       </SectionCard>
 
       {/* SUBMIT */}
-      {cart.length > 0 && (
+      {/* {cart.length > 0 && (
         <div className="flex justify-end gap-3">
           <button onClick={() => navigate("/finished-goods")} className="px-6 py-3 border border-slate-300 text-slate-700 rounded-xl font-semibold hover:bg-slate-50 transition-all">
             Add More Products
@@ -639,7 +827,7 @@ export default function UserOrderPage() {
             )}
           </button>
         </div>
-      )}
+      )} */}
     </div>
   );
 }
