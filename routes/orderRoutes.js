@@ -5,6 +5,7 @@ const { cacheResponse } = require('../middleware/cacheMiddleware');
 
 router.use(authenticate);
 
+router.get('/filters', cacheResponse(30000), ctrl.getFilters);
 router.get('/', cacheResponse(10000), ctrl.getAll);
 router.get('/availability', cacheResponse(15000), ctrl.getAvailability);
 router.get('/offer-purchases', authorize('ADMIN', 'CO_ADMIN'), cacheResponse(5000), ctrl.getOfferPurchases);

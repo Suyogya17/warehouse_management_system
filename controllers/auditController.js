@@ -77,6 +77,11 @@ const getAll = async (req, res, next) => {
       params.push(req.query.entity_type);
     }
 
+    if (req.query.entity_id !== undefined && req.query.entity_id !== '') {
+      filters.push(`${entityIdExpr} = ?`);
+      params.push(req.query.entity_id);
+    }
+
     if (req.query.date_from) {
       filters.push('DATE(al.created_at) >= ?');
       params.push(req.query.date_from);

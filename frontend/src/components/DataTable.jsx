@@ -29,6 +29,8 @@ export default function DataTable({
   fitColumns = false,
   wrapCells = false,
   responsiveScroll = false,
+  minTableWidth = null,
+  density = "normal",
   serverPagination = null,
   onExport = null,
 }) {
@@ -235,6 +237,7 @@ export default function DataTable({
             }`}
           >
             <table
+              style={minTableWidth ? { minWidth: minTableWidth } : undefined}
               className={`w-full border-collapse text-left ${
                 fitColumns
                   ? responsiveScroll
@@ -255,7 +258,8 @@ export default function DataTable({
                   {columns.map((column) => (
                     <th
                       key={column.key}
-                      className={`px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-600 ${alignmentClass(
+                      style={{ minWidth: column.minWidth || undefined }}
+                      className={`${density === "comfortable" ? "px-5 py-4" : "px-4 py-3"} text-xs font-semibold uppercase tracking-wider text-slate-600 ${alignmentClass(
                         column
                       )} ${column.headerClassName || ""}`}
                     >
@@ -273,7 +277,8 @@ export default function DataTable({
                   {columns.map((column, columnIndex) => (
                     <td
                       key={column.key}
-                      className={`px-4 py-4 align-top text-sm text-slate-600 ${
+                      style={{ minWidth: column.minWidth || undefined }}
+                      className={`${density === "comfortable" ? "px-5 py-5 leading-6" : "px-4 py-4"} align-top text-sm text-slate-600 ${
                         wrapCells ? "break-words" : ""
                       } ${
                         columnIndex === 0

@@ -641,6 +641,8 @@ export const api = {
     return apiRequest(`/orders${query ? `?${query}` : ""}`, {}, token);
   },
 
+  getOrderFilters: (token) => apiRequest("/orders/filters", {}, token),
+
   getAvailability: (token, options = {}) => {
     const query = buildQueryString(options);
     return apiRequest(`/orders/availability${query ? `?${query}` : ""}`, {}, token);

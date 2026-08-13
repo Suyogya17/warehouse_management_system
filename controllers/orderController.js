@@ -145,6 +145,12 @@ const normalizeItems = (items = []) =>
 const normalizeCustomerName = (value) =>
   String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 
+const normalizeCustomerKey = (value) =>
+  normalizeCustomerName(value).replace(/[\s._-]+/g, '');
+
+const customerKeySql = (column = 'o.customer_name') =>
+  `LOWER(REPLACE(REPLACE(REPLACE(REPLACE(TRIM(${column}), ' ', ''), '-', ''), '_', ''), '.', ''))`;
+
 const normalizeCustomerPhone = (value) =>
   String(value || '').replace(/\D/g, '');
 
@@ -1459,6 +1465,24 @@ const getAll = async (req, res, next) => {
       params.push(req.user.id);
     }
 
+    const createdBy = Number(req.query.created_by || 0);
+    if (createdBy > 0 && !['USER', 'ELDER'].includes(req.user.role)) {
+      conditions.push('o.created_by = ?');
+      params.push(createdBy);
+    }
+
+    const customerKey = normalizeCustomerKey(req.query.customer_key);
+    if (customerKey) {
+      conditions.push(`${customerKeySql()} = ?`);
+      params.push(customerKey);
+    } else {
+      const customerName = String(req.query.customer_name || '').trim();
+      if (customerName) {
+        conditions.push('o.customer_name = ?');
+        params.push(customerName);
+      }
+    }
+
     const requestedStatus = String(req.query.status || '').trim().toUpperCase();
     if (ALL_STATUSES.includes(requestedStatus)) {
       conditions.push('o.status = ?');
@@ -1758,6 +1782,97 @@ const getAll = async (req, res, next) => {
             ),
           }
         : {}),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getFilters = async (req, res, next) => {
+  try {
+    const ownOrdersOnly = ['USER', 'ELDER'].includes(req.user.role);
+    const ownWhere = ownOrdersOnly ? 'WHERE o.created_by = ?' : '';
+    const ownParams = ownOrdersOnly ? [req.user.id] : [];
+
+    const [dealers, parties] = await Promise.all([
+      query(
+        `SELECT o.created_by AS id,
+                COALESCE(u.name, 'Unknown user') AS name,
+                COALESCE(u.email, '') AS email,
+                COALESCE(u.role, '-') AS role,
+                COUNT(*) AS order_count
+         FROM orders o
+         LEFT JOIN users u ON u.id = o.created_by
+         ${ownWhere}
+         GROUP BY o.created_by, u.name, u.email, u.role
+         ORDER BY name`,
+        ownParams
+      ),
+      query(
+        `SELECT o.created_by AS dealer_id,
+                COALESCE(u.name, 'Unknown user') AS dealer_name,
+                o.customer_name AS name,
+                COUNT(*) AS order_count,
+                MAX(o.created_at) AS latest_order_at
+         FROM orders o
+         LEFT JOIN users u ON u.id = o.created_by
+         ${ownWhere}
+         WHERE_REPLACEMENT
+         GROUP BY o.created_by, u.name, o.customer_name
+         ORDER BY dealer_name, o.customer_name`
+          .replace(
+            'WHERE_REPLACEMENT',
+            ownOrdersOnly
+              ? "AND o.customer_name IS NOT NULL AND TRIM(o.customer_name) <> ''"
+              : "WHERE o.customer_name IS NOT NULL AND TRIM(o.customer_name) <> ''"
+          ),
+        ownParams
+      ),
+    ]);
+
+    return res.json({
+      success: true,
+      data: {
+        dealers: dealers.rows.map((row) => ({
+          ...row,
+          id: Number(row.id),
+          order_count: Number(row.order_count || 0),
+        })),
+        parties: [...parties.rows.reduce((groups, row) => {
+          const dealerId = Number(row.dealer_id);
+          const key = normalizeCustomerKey(row.name);
+          if (!key) return groups;
+          const groupKey = `${dealerId}:${key}`;
+          const count = Number(row.order_count || 0);
+          const existing = groups.get(groupKey);
+          if (!existing) {
+            groups.set(groupKey, {
+              dealer_id: dealerId,
+              dealer_name: row.dealer_name,
+              key,
+              name: row.name,
+              order_count: count,
+              aliases: [row.name],
+              latest_order_at: row.latest_order_at,
+              canonical_count: count,
+            });
+            return groups;
+          }
+          existing.order_count += count;
+          existing.aliases.push(row.name);
+          if (count > existing.canonical_count) {
+            existing.name = row.name;
+            existing.canonical_count = count;
+          }
+          if (
+            row.latest_order_at &&
+            (!existing.latest_order_at || new Date(row.latest_order_at) > new Date(existing.latest_order_at))
+          ) {
+            existing.latest_order_at = row.latest_order_at;
+          }
+          return groups;
+        }, new Map()).values()].map(({ canonical_count, ...party }) => party),
+      },
     });
   } catch (err) {
     next(err);
@@ -5120,4 +5235,4 @@ const logPrint = async (req, res, next) => {
   }
 };
 
-module.exports = { getAll, getAvailability, getOfferPurchases, create, correctItems, updateStatus, assignDeliveryNote, correctWarehouseDeliveryNoteNumbers, reopenPacking, undoConfirmation, verifyWarehouseFulfillment, deliverWarehouseFulfillment, undoWarehouseFulfillmentDelivery, prepareDeliveryNote, logPrint };
+module.exports = { getAll, getFilters, getAvailability, getOfferPurchases, create, correctItems, updateStatus, assignDeliveryNote, correctWarehouseDeliveryNoteNumbers, reopenPacking, undoConfirmation, verifyWarehouseFulfillment, deliverWarehouseFulfillment, undoWarehouseFulfillmentDelivery, prepareDeliveryNote, logPrint };

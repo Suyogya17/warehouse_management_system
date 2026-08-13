@@ -58,6 +58,8 @@ const CANCELLATION_OPTIONS = [
 const cancellationLabel = (value) =>
   CANCELLATION_OPTIONS.find((option) => option.value === value)?.label ||
   "Other";
+const normalizePartyKey = (value) =>
+  String(value || "").trim().toLowerCase().replace(/[\s._-]+/g, "");
 const ORDER_CORRECTION_CO_ADMINS = new Set([
   "suyogya shrestha",
   "suyogya shresth",
@@ -98,6 +100,12 @@ export default function OrdersPage() {
   const [warehouses, setWarehouses] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [dealerFilter, setDealerFilter] = useState(null);
+  const [partyFilter, setPartyFilter] = useState(null);
+  const [orderFilterOptions, setOrderFilterOptions] = useState({
+    dealers: [],
+    parties: [],
+  });
   const [orderDateFilters, setOrderDateFilters] = useState(emptyOrderDateFilters);
   const [appliedOrderDateFilters, setAppliedOrderDateFilters] = useState(
     emptyOrderDateFilters
@@ -120,6 +128,9 @@ export default function OrdersPage() {
   const [correctingDnOrderId, setCorrectingDnOrderId] = useState(null);
   const [verificationWarehouse, setVerificationWarehouse] = useState(null);
   const [verificationItems, setVerificationItems] = useState([]);
+  const [lockedOrderDetails, setLockedOrderDetails] = useState(null);
+  const [lockedOrderHistory, setLockedOrderHistory] = useState([]);
+  const [loadingLockedOrderHistory, setLoadingLockedOrderHistory] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -135,6 +146,8 @@ export default function OrdersPage() {
       per_page: 50,
       search: debouncedOrderSearch,
       status: statusFilter === "ALL" ? undefined : statusFilter,
+      created_by: dealerFilter?.value,
+      customer_key: partyFilter?.value,
       ...appliedOrderDateFilters,
     });
     setOrders(result.data || []);
@@ -146,7 +159,7 @@ export default function OrdersPage() {
         total_pages: 1,
       }
     );
-  }, [appliedOrderDateFilters, debouncedOrderSearch, orderPage, statusFilter, token]);
+  }, [appliedOrderDateFilters, dealerFilter?.value, debouncedOrderSearch, orderPage, partyFilter?.value, statusFilter, token]);
 
   const applyOrderDateFilters = () => {
     const normalized = {
@@ -207,15 +220,28 @@ export default function OrdersPage() {
     setOrderPage(1);
   };
 
+  const clearAllOrderFilters = () => {
+    setOrderSearch("");
+    setDebouncedOrderSearch("");
+    setDealerFilter(null);
+    setPartyFilter(null);
+    setStatusFilter("ALL");
+    setOrderDateFilters(emptyOrderDateFilters);
+    setAppliedOrderDateFilters(emptyOrderDateFilters);
+    setOrderPage(1);
+  };
+
   const loadReferenceData = useCallback(async () => {
-    const [availabilityResult, warehouseResult] = await Promise.all([
+    const [availabilityResult, warehouseResult, orderFiltersResult] = await Promise.all([
       api.getAvailability(token, {
         include_hidden: canManageOrders ? 1 : undefined,
       }),
       api.getWarehouses(token),
+      api.getOrderFilters(token),
     ]);
     setAvailability(availabilityResult.data || []);
     setWarehouses(warehouseResult.data || []);
+    setOrderFilterOptions(orderFiltersResult.data || { dealers: [], parties: [] });
   }, [canManageOrders, token]);
 
   const load = useCallback(
@@ -243,6 +269,13 @@ export default function OrdersPage() {
     () => new Map(availability.map((item) => [String(item.id), item])),
     [availability]
   );
+
+  const knownPartiesForCurrentUser = useMemo(() => {
+    const ownParties = (orderFilterOptions.parties || []).filter(
+      (party) => String(party.dealer_id) === String(user?.id)
+    );
+    return ownParties.length ? ownParties : orderFilterOptions.parties || [];
+  }, [orderFilterOptions.parties, user?.id]);
 
   const totals = useMemo(
     () =>
@@ -801,6 +834,29 @@ export default function OrdersPage() {
     }
   };
 
+  const openLockedOrderDetails = async (order) => {
+    setLockedOrderDetails(order);
+    setLockedOrderHistory([]);
+    setLoadingLockedOrderHistory(true);
+    try {
+      const result = await api.getActivityLogs(token, {
+        module: "orders",
+        entity_id: order.id,
+        page: 1,
+        limit: 100,
+      });
+      setLockedOrderHistory(result.data || []);
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Order history unavailable",
+        message: error.message || "Could not load this order's activity history.",
+      });
+    } finally {
+      setLoadingLockedOrderHistory(false);
+    }
+  };
+
   const openCorrection = (order) => {
     setCorrectionOrder(order);
     setCorrectionReason("");
@@ -837,15 +893,37 @@ export default function OrdersPage() {
     }
   };
 
-  const renderOrderItems = (order) => (
-    <div className="space-y-1">
-      {order.items.map((item) => (
-        <p key={item.id}>
-          {item.product_name} - {formatNumber(item.qty_ordered)} {item.unit}
-        </p>
-      ))}
-    </div>
-  );
+  const renderOrderItems = (order) => {
+    const items = order.items || [];
+    const totalPairs = items.reduce(
+      (sum, item) => sum + Number(item.qty_ordered || 0),
+      0
+    );
+    const totalCartons = items.reduce((sum, item) => {
+      const pairs = Number(item.qty_ordered || 0);
+      const pairsPerCarton = Number(item.inner_boxes_per_outer_box || 0);
+      return pairsPerCarton > 0 ? sum + pairs / pairsPerCarton : sum;
+    }, 0);
+    const cartonLabel = Number.isInteger(totalCartons)
+      ? formatNumber(totalCartons)
+      : totalCartons.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+    return (
+      <div className="space-y-1.5">
+        {items.map((item) => (
+          <div key={item.id} className="leading-5">
+            {item.product_name} - {formatNumber(item.qty_ordered)} {item.unit}
+          </div>
+        ))}
+        <div className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-2 text-xs font-bold text-indigo-800">
+          Total ordered: {cartonLabel} CTN
+          <span className="ml-1 font-medium text-indigo-600">
+            / {formatNumber(totalPairs)} pairs
+          </span>
+        </div>
+      </div>
+    );
+  };
 
   const filteredOrders = orders;
 
@@ -1254,14 +1332,29 @@ export default function OrdersPage() {
       >
         <form className="space-y-5" onSubmit={submit}>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <Field label="Customer name">
+            <Field label="Customer name" hint="Choose an existing party name when available to avoid duplicate spellings.">
               <TextInput
+                list="known-order-parties"
                 value={form.customer_name}
                 onChange={(event) =>
                   setForm((current) => ({ ...current, customer_name: event.target.value }))
                 }
+                onBlur={() => {
+                  const enteredKey = normalizePartyKey(form.customer_name);
+                  const knownParty = knownPartiesForCurrentUser.find(
+                    (party) => party.key === enteredKey
+                  );
+                  if (knownParty?.name && knownParty.name !== form.customer_name) {
+                    setForm((current) => ({ ...current, customer_name: knownParty.name }));
+                  }
+                }}
                 required
               />
+              <datalist id="known-order-parties">
+                {knownPartiesForCurrentUser.map((party) => (
+                  <option key={`${party.dealer_id}:${party.key}`} value={party.name} />
+                ))}
+              </datalist>
             </Field>
 
             <Field label="Customer phone">
@@ -1422,8 +1515,10 @@ export default function OrdersPage() {
         }
         icon="orders"
       >
-        <div className="mb-1 flex flex-col items-stretch justify-between gap-3 px-1 py-2 sm:flex-row sm:items-center">
-          <div className="relative w-full sm:w-auto">
+        <div className="mb-3 grid gap-3 rounded-2xl border border-slate-200 bg-white p-3 md:grid-cols-2 xl:grid-cols-[1.2fr_1fr_1fr_0.65fr]">
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            Search orders
+          <div className="relative w-full">
             <Search
               size={16}
               className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
@@ -1433,24 +1528,111 @@ export default function OrdersPage() {
               placeholder="Search orders..."
               value={orderSearch}
               onChange={(e) => setOrderSearch(e.target.value)}
-              className="w-full rounded-xl border border-black bg-white py-2.5 pl-10 pr-4 text-sm shadow-sm focus:border-slate-400 focus:outline-none sm:w-auto"
+              className="h-[42px] w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-10 pr-4 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
             />
           </div>
-          <select
-            value={statusFilter}
-            onChange={(e) => {
-              setStatusFilter(e.target.value);
-              setOrderPage(1);
-            }}
-            className="rounded-xl border border-black bg-white px-4 py-2.5 text-sm shadow-sm focus:border-slate-400 focus:outline-none"
-          >
-            <option value="ALL">All Status</option>
-            <option value="PENDING">Pending</option>
-            <option value="CONFIRMED">Confirmed</option>
-            <option value="PACKED">Packed</option>
-            <option value="DELIVERED">Delivered</option>
-            <option value="CANCELLED">Cancelled</option>
-          </select>
+          </label>
+
+          <label className="grid min-w-0 gap-1 text-xs font-semibold text-slate-600">
+            Dealer / Created by
+            <Select
+              isClearable
+              isSearchable
+              placeholder="All dealers"
+              value={dealerFilter}
+              options={(orderFilterOptions.dealers || []).map((dealer) => ({
+                value: String(dealer.id),
+                label: `${dealer.name} (${formatNumber(dealer.order_count)})`,
+                description: [dealer.role, dealer.email].filter(Boolean).join(" · "),
+              }))}
+              onChange={(option) => {
+                setDealerFilter(option);
+                setPartyFilter(null);
+                setOrderPage(1);
+              }}
+              formatOptionLabel={(option) => (
+                <div className="min-w-0">
+                  <div className="truncate font-semibold">{option.label}</div>
+                  {option.description ? <div className="truncate text-[11px] text-slate-400">{option.description}</div> : null}
+                </div>
+              )}
+              styles={{
+                control: (base, state) => ({
+                  ...base,
+                  minHeight: 42,
+                  borderRadius: 12,
+                  borderColor: state.isFocused ? "#818cf8" : "#cbd5e1",
+                  boxShadow: state.isFocused ? "0 0 0 2px #e0e7ff" : "none",
+                }),
+                menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+              }}
+              menuPortalTarget={document.body}
+              menuPosition="fixed"
+            />
+          </label>
+
+          <label className="grid min-w-0 gap-1 text-xs font-semibold text-slate-600">
+            Party / Customer
+            <Select
+              isClearable
+              isSearchable
+              isDisabled={!dealerFilter}
+              placeholder={dealerFilter ? "All parties for this dealer" : "Select dealer first"}
+              value={partyFilter}
+              options={(orderFilterOptions.parties || [])
+                .filter((party) => String(party.dealer_id) === String(dealerFilter?.value))
+                .map((party) => ({
+                  value: party.key,
+                  label: `${party.name} (${formatNumber(party.order_count)})`,
+                  aliases: party.aliases || [],
+                }))}
+              onChange={(option) => {
+                setPartyFilter(option);
+                setOrderPage(1);
+              }}
+              formatOptionLabel={(option) => (
+                <div className="min-w-0">
+                  <div className="truncate font-semibold">{option.label}</div>
+                  {option.aliases?.length > 1 ? (
+                    <div className="truncate text-[11px] text-slate-400">
+                      Also entered as: {option.aliases.filter((alias) => !option.label.startsWith(`${alias} (`)).join(", ")}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+              styles={{
+                control: (base, state) => ({
+                  ...base,
+                  minHeight: 42,
+                  borderRadius: 12,
+                  borderColor: state.isFocused ? "#818cf8" : "#cbd5e1",
+                  boxShadow: state.isFocused ? "0 0 0 2px #e0e7ff" : "none",
+                }),
+                menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+              }}
+              menuPortalTarget={document.body}
+              menuPosition="fixed"
+            />
+          </label>
+
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            Order status
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setOrderPage(1);
+              }}
+              className="h-[42px] rounded-xl border border-slate-300 bg-white px-3 text-sm font-normal shadow-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+            >
+              <option value="ALL">All statuses</option>
+              <option value="PENDING">Pending</option>
+              <option value="CONFIRMED">Confirmed</option>
+              <option value="PACKED">Packed</option>
+              <option value="DELIVERED">Delivered</option>
+              <option value="CANCELLED">Cancelled</option>
+            </select>
+          </label>
         </div>
 
         <div className="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-2 xl:grid-cols-5">
@@ -1534,6 +1716,9 @@ export default function OrdersPage() {
             />
           </label>
           <div className="flex gap-2 md:col-span-2 xl:col-span-5 xl:justify-end">
+            <Button type="button" size="sm" variant="secondary" onClick={clearAllOrderFilters}>
+              Clear all filters
+            </Button>
             <Button type="button" size="sm" variant="secondary" onClick={clearOrderDateFilters}>
               Clear dates
             </Button>
@@ -1545,11 +1730,11 @@ export default function OrdersPage() {
 
         <DataTable
           columns={[
-            { key: "id", label: "Order-ID", width: "4%", align: "center" },
+            { key: "id", label: "ID", minWidth: 90, align: "center" },
             {
               key: "customer_details",
               label: "Customer Details",
-              width: "14%",
+              minWidth: 220,
               render: (row) => (
                 <div className="min-w-0">
                   <strong>{row.customer_name || "-"}</strong>
@@ -1564,11 +1749,11 @@ export default function OrdersPage() {
                 </div>
               ),
             },
-            { key: "items", label: "Items", width: "20%", render: renderOrderItems },
+            { key: "items", label: "Items", minWidth: 340, render: renderOrderItems },
             {
               key: "status",
               label: "Status",
-              width: "7%",
+              minWidth: 165,
               align: "center",
               render: (row) => {
                 const displayStatus = row.fulfillment_status || row.status;
@@ -1590,7 +1775,7 @@ export default function OrdersPage() {
             {
               key: "cancellation_reason",
               label: "Cancel Reason",
-              width: "10%",
+              minWidth: 190,
               render: (row) =>
                 row.status === "CANCELLED" ? (
                   <div className="space-y-1">
@@ -1613,13 +1798,13 @@ export default function OrdersPage() {
             {
               key: "created_by_name",
               label: "Created By",
-              width: "8%",
+              minWidth: 165,
               align: "center",
             },
             {
               key: "created_at",
               label: "Created",
-              width: "9%",
+              minWidth: 165,
               align: "center",
               render: (row) => {
                 return (
@@ -1635,7 +1820,7 @@ export default function OrdersPage() {
               ? {
                   key: "actions",
                   label: "Actions",
-                  width: "9%",
+                  minWidth: 165,
                   align: "center",
                   render: (row) => {
                     const canPrint = PRINTABLE_DELIVERY_STATUSES.includes(row.status);
@@ -1653,7 +1838,7 @@ export default function OrdersPage() {
                             title="Prepare one separate paper for each warehouse under the same DN"
                             onClick={() => printDeliveryNote(row)}
                           >
-                            🖨️ Warehouse DN
+                            🖨️ DN
                           </Button>
                         ) : null}
 
@@ -1682,7 +1867,7 @@ export default function OrdersPage() {
                             {row.status === "PACKED" &&
                             Number(row.delivered_warehouse_count || 0) === 0 ? (
                               <div className="rounded-lg bg-indigo-50 px-2 py-1.5 text-xs font-semibold text-indigo-700">
-                                Deliver from the individual warehouse DNs.
+                                Deliver from warehouse DNs.
                               </div>
                             ) : null}
                             {Number(row.delivered_warehouse_count || 0) === 0 ? (
@@ -1701,11 +1886,11 @@ export default function OrdersPage() {
                     );
                   },
                 }
-              : { key: "empty", label: "", width: "12%" },
+              : null,
             {
               key: "confirmed_by_name",
               label: "Confirmed By / DN",
-              width: "11%",
+              minWidth: 230,
               align: "center",
               render: (row) => {
                 const warehouseDeliveryNoteNumbers =
@@ -1927,7 +2112,7 @@ export default function OrdersPage() {
               ? {
                   key: "order_edits",
                   label: "Order Edits",
-                  width: "8%",
+                  minWidth: 155,
                   align: "center",
                   render: (row) => {
                     if (!canCorrectOrders) return <span className="text-slate-400">-</span>;
@@ -1936,9 +2121,19 @@ export default function OrdersPage() {
                         (fulfillment) => Number(fulfillment.delivered_pairs || 0) > 0
                       )) {
                         return (
-                          <span className="text-xs font-semibold text-slate-500">
-                            Locked after partial delivery
-                          </span>
+                          <div className="grid gap-1.5">
+                            <span className="text-xs font-semibold text-slate-500">
+                              Locked after partial delivery
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="h-auto min-h-8 w-full whitespace-normal px-2 py-1 text-xs"
+                              onClick={() => openLockedOrderDetails(row)}
+                            >
+                              View details
+                            </Button>
+                          </div>
                         );
                       }
                       return (
@@ -1966,22 +2161,201 @@ export default function OrdersPage() {
                         </Button>
                       );
                     }
-                    return <span className="text-slate-400">Locked</span>;
+                    return (
+                      <div className="grid gap-1.5">
+                        <span className="text-xs font-semibold text-slate-400">Locked</span>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-auto min-h-8 w-full whitespace-normal px-2 py-1 text-xs"
+                          onClick={() => openLockedOrderDetails(row)}
+                        >
+                          View details
+                        </Button>
+                      </div>
+                    );
                   },
                 }
-              : { key: "order_edits_empty", label: "", width: "8%" },
-          ]}
+              : null,
+          ].filter(Boolean)}
           rows={filteredOrders}
           showToolbar={false}
-          fitColumns
           wrapCells
           responsiveScroll
+          density="comfortable"
+          minTableWidth={canManageOrders ? 1885 : 1410}
           serverPagination={{
             ...orderPagination,
             onPageChange: setOrderPage,
           }}
         />
       </SectionCard>
+
+      {lockedOrderDetails ? (
+        <div
+          className="fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm sm:p-5"
+          onMouseDown={() => setLockedOrderDetails(null)}
+        >
+          <div
+            className="max-h-[94vh] w-full max-w-6xl overflow-y-auto rounded-2xl bg-white shadow-2xl"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur sm:px-6">
+              <div>
+                <h2 className="text-lg font-bold text-slate-950">
+                  Order #{lockedOrderDetails.id} delivery details
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {lockedOrderDetails.customer_name || "Customer"} · Current status: {lockedOrderDetails.fulfillment_status || lockedOrderDetails.status}
+                </p>
+              </div>
+              <Button type="button" variant="secondary" size="sm" onClick={() => setLockedOrderDetails(null)}>
+                Close
+              </Button>
+            </div>
+
+            <div className="space-y-6 p-5 sm:p-6">
+              <section>
+                <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <h3 className="font-bold text-slate-950">Warehouse and product details</h3>
+                    <p className="text-sm text-slate-500">
+                      Delivered stock is locked for audit safety. Pending products remain visible below.
+                    </p>
+                  </div>
+                  <span className="text-xs font-semibold text-slate-500">
+                    {formatNumber((lockedOrderDetails.warehouse_fulfillments || []).length)} warehouse DNs
+                  </span>
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-2">
+                  {(lockedOrderDetails.warehouse_fulfillments || []).map((fulfillment) => {
+                    const fulfillmentTone = ["DELIVERED"].includes(fulfillment.status)
+                      ? "success"
+                      : ["DELIVERED WITH SHORTAGE", "PARTIALLY DELIVERED"].includes(fulfillment.status)
+                        ? "warning"
+                        : ["OUT OF STOCK"].includes(fulfillment.status)
+                          ? "danger"
+                          : "neutral";
+                    return (
+                      <article key={`${lockedOrderDetails.id}:${fulfillment.warehouse_id}`} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                        <header className="flex flex-wrap items-start justify-between gap-3 bg-slate-50 px-4 py-3">
+                          <div>
+                            <p className="font-bold text-slate-950">{fulfillment.warehouse_slip_number}</p>
+                            <p className="text-xs text-slate-500">{fulfillment.name}</p>
+                          </div>
+                          <StatusBadge tone={fulfillmentTone}>{fulfillment.status}</StatusBadge>
+                        </header>
+
+                        <div className="grid grid-cols-2 gap-2 border-y border-slate-200 px-4 py-3 text-xs sm:grid-cols-4">
+                          <div><span className="block text-slate-400">Allocated</span><strong>{formatNumber(fulfillment.pairs)} pairs</strong></div>
+                          <div><span className="block text-slate-400">CTN</span><strong>{formatNumber(fulfillment.cartons)}</strong></div>
+                          <div><span className="block text-slate-400">Delivered</span><strong className="text-emerald-700">{formatNumber(fulfillment.delivered_pairs || 0)}</strong></div>
+                          <div><span className="block text-slate-400">Pending / OOS</span><strong>{formatNumber(fulfillment.pending_pairs || 0)} / {formatNumber(fulfillment.out_of_stock_pairs || 0)}</strong></div>
+                        </div>
+
+                        {fulfillment.delivered_by_name || fulfillment.delivered_at ? (
+                          <div className="bg-emerald-50 px-4 py-2 text-xs text-emerald-800">
+                            {fulfillment.delivered_by_name ? `Delivered by ${fulfillment.delivered_by_name}` : "Delivered"}
+                            {fulfillment.delivered_at
+                              ? ` · ${formatEnglishDate(fulfillment.delivered_at, { includeTime: false })} ${formatTime(fulfillment.delivered_at)}`
+                              : ""}
+                          </div>
+                        ) : null}
+
+                        <div className="divide-y divide-slate-100">
+                          {(fulfillment.items || []).map((item) => {
+                            const itemStatus = String(item.allocation_status || "PLANNED").toUpperCase();
+                            const itemTone = itemStatus === "DEDUCTED"
+                              ? "success"
+                              : itemStatus === "OUT_OF_STOCK"
+                                ? "danger"
+                                : itemStatus === "PLANNED"
+                                  ? "warning"
+                                  : "neutral";
+                            const itemStatusLabel = itemStatus === "DEDUCTED" ? "DELIVERED" : itemStatus;
+                            return (
+                              <div key={item.allocation_id} className="px-4 py-3 text-sm">
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <div>
+                                    <p className="font-semibold text-slate-900">{item.article_code || item.product_name}</p>
+                                    <p className="text-xs text-slate-500">{[item.color, item.size].filter(Boolean).join(" · ") || item.product_name}</p>
+                                  </div>
+                                  <StatusBadge tone={itemTone}>{itemStatusLabel}</StatusBadge>
+                                </div>
+                                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
+                                  <span>Allocated: <strong>{formatNumber(item.quantity)} pairs</strong></span>
+                                  <span>Physically found: <strong>{item.verified_quantity === null ? "Not checked" : `${formatNumber(item.verified_quantity)} pairs`}</strong></span>
+                                  {item.verification_status ? <span>Check: <strong>{String(item.verification_status).replace(/_/g, " ")}</strong></span> : null}
+                                </div>
+                                {item.verification_note ? (
+                                  <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900">
+                                    Note: {item.verification_note}
+                                  </p>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                          {!(fulfillment.items || []).length ? (
+                            <p className="px-4 py-4 text-sm text-slate-500">No active product allocations remain on this DN.</p>
+                          ) : null}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section>
+                <h3 className="font-bold text-slate-950">Order and warehouse history</h3>
+                <p className="mb-3 text-sm text-slate-500">Newest activity appears first.</p>
+                {loadingLockedOrderHistory ? (
+                  <div className="rounded-xl border border-slate-200 p-6 text-center text-sm text-slate-500">Loading history…</div>
+                ) : lockedOrderHistory.length ? (
+                  <div className="overflow-hidden rounded-xl border border-slate-200">
+                    <div className="divide-y divide-slate-100">
+                      {lockedOrderHistory.map((log) => {
+                        const metadata = log.metadata && typeof log.metadata === "object" ? log.metadata : {};
+                        return (
+                          <div key={log.id} className="grid gap-2 px-4 py-3 md:grid-cols-[150px_150px_1fr]">
+                            <div className="text-xs text-slate-500">
+                              <strong className="block text-slate-700">{formatEnglishDate(log.created_at, { includeTime: false })}</strong>
+                              {formatTime(log.created_at)}
+                            </div>
+                            <div className="text-xs">
+                              <strong className="block text-slate-800">{log.user_name || "Unknown user"}</strong>
+                              <span className="text-slate-500">{log.user_role || "-"}</span>
+                            </div>
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge tone={String(log.action_type).toUpperCase() === "DELIVERED" ? "success" : String(log.action_type).toUpperCase() === "REVERSED" ? "danger" : "neutral"}>
+                                  {String(log.action_type || "Activity").replace(/_/g, " ")}
+                                </StatusBadge>
+                                {metadata.warehouse_name ? <span className="text-xs font-semibold text-indigo-700">{metadata.warehouse_name}</span> : null}
+                              </div>
+                              <p className="mt-1 text-sm text-slate-700">{log.description || "-"}</p>
+                              {metadata.reason ? <p className="mt-1 text-xs text-amber-800">Reason: {metadata.reason}</p> : null}
+                              <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-slate-500">
+                                {metadata.delivered_pairs !== undefined ? <span>Delivered: {formatNumber(metadata.delivered_pairs)} pairs</span> : null}
+                                {metadata.out_of_stock_pairs !== undefined ? <span>Out of stock: {formatNumber(metadata.out_of_stock_pairs)} pairs</span> : null}
+                                {metadata.restored_pairs !== undefined ? <span>Restored: {formatNumber(metadata.restored_pairs)} pairs</span> : null}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-slate-200 p-6 text-center text-sm text-slate-500">
+                    No activity history was found for this order.
+                  </div>
+                )}
+              </section>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {cancelOrder ? (
         <div
