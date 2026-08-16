@@ -1,4 +1,10 @@
-import { getRoundedCartons } from "../../utils/displayStock";
+const getFullCartons = (quantity, pairsPerCarton) => {
+  const pairs = Number(quantity || 0);
+  const cartonSize = Number(pairsPerCarton || 0);
+  return Number.isFinite(pairs) && pairs > 0 && Number.isFinite(cartonSize) && cartonSize > 0
+    ? Math.floor(pairs / cartonSize)
+    : 0;
+};
 
 export const OFFER_PERCENTAGES_BY_EMAIL = {
   "pramod.kathmandu@nepcha.com": 40,
@@ -13,8 +19,8 @@ export const OFFER_STOCK_PRODUCTS_PER_PAGE = 5;
 export const OFFER_REPORT_PRODUCTS_PER_PAGE = 5;
 
 export const isActiveOffer = (item) =>
-  Number(item.offer_enabled) === 1 &&
-  (!item.offer_ends_at || new Date(item.offer_ends_at).getTime() >= Date.now());
+  Number(item?.offer_enabled) === 1 &&
+  (!item?.offer_ends_at || new Date(item.offer_ends_at).getTime() >= Date.now());
 
 export const getOfferGroupKey = (item) =>
   `${String(item.article_code || item.name || item.id).trim().toLowerCase()}::${String(item.sole_code || "").trim().toLowerCase()}`;
@@ -24,9 +30,23 @@ export const getSeriesName = (soleCode = "") =>
     .replace(/[-_\s]*sole$/i, "")
     .trim();
 
+export const getOfferAllocationPairs = (product) => {
+  const campaignSnapshot = Number(product?.offer_stock_quantity_snapshot);
+  return isActiveOffer(product) && Number.isFinite(campaignSnapshot) && campaignSnapshot > 0
+    ? campaignSnapshot
+    : Number(product?.quantity || 0);
+};
+
+export const getOfferPairsPerCarton = (product) => {
+  const campaignCartonSize = Number(product?.offer_pairs_per_carton_snapshot);
+  return isActiveOffer(product) && Number.isFinite(campaignCartonSize) && campaignCartonSize > 0
+    ? campaignCartonSize
+    : Number(product?.inner_boxes_per_outer_box || 0);
+};
+
 export const getPercentageAllocations = (product, targets = []) => {
-  const pairsPerCarton = Number(product?.inner_boxes_per_outer_box || 0);
-  const totalCartons = getRoundedCartons(product?.quantity, pairsPerCarton);
+  const pairsPerCarton = getOfferPairsPerCarton(product);
+  const totalCartons = getFullCartons(getOfferAllocationPairs(product), pairsPerCarton);
   if (pairsPerCarton <= 0 || totalCartons <= 0) return new Map();
 
   const allocations = targets
@@ -97,8 +117,8 @@ export const getPercentageAllocations = (product, targets = []) => {
 };
 
 export const getCartonAllocations = (product, targets = []) => {
-  const pairsPerCarton = Number(product?.inner_boxes_per_outer_box || 0);
-  const totalCartons = getRoundedCartons(product?.quantity, pairsPerCarton);
+  const pairsPerCarton = getOfferPairsPerCarton(product);
+  const totalCartons = getFullCartons(getOfferAllocationPairs(product), pairsPerCarton);
   if (pairsPerCarton <= 0 || totalCartons <= 0) return new Map();
 
   return new Map(

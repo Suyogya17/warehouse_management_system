@@ -4,7 +4,7 @@ import Button from "../../components/Button";
 import EmptyState from "../../components/EmptyState";
 import ProductImageGallery from "../../components/ProductImageGallery";
 import { APP_BASE_URL } from "../../services/api";
-import { getCustomerVisibleStock, getRoundedCartons } from "../../utils/displayStock";
+import { getCustomerVisibleStock } from "../../utils/displayStock";
 import {
   formatNumber,
   formatPrice,
@@ -16,6 +16,22 @@ import {
   getOfferGroupKey,
   isActiveOffer,
 } from "./offerUtils";
+
+const getFullCartons = (quantity, pairsPerCarton) => {
+  const pairs = Number(quantity || 0);
+  const cartonSize = Number(pairsPerCarton || 0);
+  return Number.isFinite(pairs) && pairs > 0 && Number.isFinite(cartonSize) && cartonSize > 0
+    ? Math.floor(pairs / cartonSize)
+    : 0;
+};
+
+const getLoosePairs = (quantity, pairsPerCarton) => {
+  const pairs = Math.max(0, Math.floor(Number(quantity || 0)));
+  const cartonSize = Math.floor(Number(pairsPerCarton || 0));
+  return Number.isFinite(pairs) && Number.isFinite(cartonSize) && cartonSize > 0
+    ? pairs % cartonSize
+    : 0;
+};
 
 function OfferProductCard({ variants, canManage, canOrder, viewer, onEdit, onRemove, onAddToCart, onProductInterest, cartProductIds }) {
   const [selected, setSelected] = useState(variants.find(isActiveOffer) || variants[0]);
@@ -31,9 +47,11 @@ function OfferProductCard({ variants, canManage, canOrder, viewer, onEdit, onRem
   if (!selected) return null;
   const active = isActiveOffer(selected);
   const availableQty = canManage
-    ? Number(selected.quantity || 0)
+    ? Number(selected.available_qty ?? selected.quantity ?? 0)
     : getCustomerVisibleStock(selected);
-  const cartons = getRoundedCartons(availableQty, selected.inner_boxes_per_outer_box);
+  const reservedQty = canManage ? Number(selected.reserved_qty || 0) : 0;
+  const cartons = getFullCartons(availableQty, selected.inner_boxes_per_outer_box);
+  const loosePairs = getLoosePairs(availableQty, selected.inner_boxes_per_outer_box);
   const targetQuantities = (selected.offer_targets || [])
     .map((target) => Number(target.display_quantity || 0))
     .filter((quantity) => quantity > 0);
@@ -83,8 +101,20 @@ function OfferProductCard({ variants, canManage, canOrder, viewer, onEdit, onRem
           </div>
         ) : null}
         <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-50 p-2">
-          <div><p className="text-[10px] font-semibold uppercase text-slate-400">Qty stock</p><p className="text-sm font-bold text-indigo-700">{formatNumber(availableQty)} {selected.unit || "pairs"}</p></div>
-          <div><p className="text-[10px] font-semibold uppercase text-slate-400">CTN stock</p><p className="text-sm font-bold text-amber-600">{formatNumber(cartons)} CTN</p></div>
+          <div>
+            <p className="text-[10px] font-semibold uppercase text-slate-400">Available stock</p>
+            <p className="text-sm font-bold text-indigo-700">{formatNumber(availableQty)} {selected.unit || "pairs"}</p>
+            {reservedQty > 0 ? (
+              <p className="text-[10px] font-semibold text-slate-500">{formatNumber(reservedQty)} pairs reserved</p>
+            ) : null}
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold uppercase text-slate-400">CTN stock</p>
+            <p className="text-sm font-bold text-amber-600">{formatNumber(cartons)} full CTN</p>
+            {loosePairs > 0 ? (
+              <p className="text-[10px] font-semibold text-slate-500">+ {formatNumber(loosePairs)} loose pairs</p>
+            ) : null}
+          </div>
         </div>
         {canManage && <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 px-3 py-2"><div><p className="text-[10px] font-semibold uppercase text-slate-500">Original price</p><p className="text-base font-bold text-slate-800">{Number(selected.price || 0) > 0 ? formatPrice(selected.price, "NPR") : "-"}</p></div><div className="border-l border-slate-200 pl-3"><p className="text-[10px] font-semibold uppercase text-emerald-600">Offer price</p><p className="text-base font-bold text-emerald-800">{Number(selected.price || 0) > 0 ? formatPrice(Number(selected.price) + 50, "NPR") : "-"}</p></div></div>}
         {!canManage && customerOfferPrice !== null && <div className="flex items-center justify-between rounded-xl bg-emerald-50 px-3 py-2"><span className="text-xs font-semibold uppercase text-emerald-600">Offer price</span><span className="text-base font-bold text-emerald-800">{formatUserPrice(customerOfferPrice, viewer)}</span></div>}

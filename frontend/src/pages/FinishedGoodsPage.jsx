@@ -86,6 +86,7 @@ export default function FinishedGoodsPage() {
   const [searchId, setSearchId] = useState("");
   const [seriesFilter, setSeriesFilter] = useState("");
   const [commissionFilter, setCommissionFilter] = useState("all");
+  const [exporting, setExporting] = useState(false);
   const [seriesOptions, setSeriesOptions] = useState([]);
   const [productPage, setProductPage] = useState(1);
   const [productPagination, setProductPagination] = useState({
@@ -334,63 +335,90 @@ export default function FinishedGoodsPage() {
   const isEmpty = filteredItems.length === 0;
   const totalPairs = filteredItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
 
-  const exportToExcel = () => {
-    if (!filteredItems.length) {
+  const exportToExcel = async () => {
+    try {
+      setExporting(true);
+      const result = await api.getFinishedGoods(token, {
+        search: search.trim() || undefined,
+        id: searchId.trim() || undefined,
+        sole_code: seriesFilter || undefined,
+        commission:
+          commissionFilter === "all" ? undefined : commissionFilter,
+      });
+      const exportItems = result.data || [];
+
+      if (!exportItems.length) {
+        showToast({
+          tone: "error",
+          title: "Nothing to export",
+          message: "No finished goods match the current filters.",
+        });
+        return;
+      }
+
+      const rows = exportItems.map((item) => ({
+        "FG.ID": item.id || "",
+        Name: item.name || "",
+        "Article Code": item.article_code || "",
+        "Sole Code": item.sole_code || "",
+        Color: item.color || "",
+        Size: item.size || "",
+        Stock: Number(item.quantity || 0),
+        Unit: item.unit || "",
+        "Min Qty": Number(item.min_quantity || 0),
+        ...(isAdmin
+          ? {
+              "Price (NPR)": Number(item.price || 0),
+              "India Price (INR)": getIndiaPriceFromNepalPrice(item.price) ?? "",
+            }
+          : {}),
+        Commission: getCommissionLabel(item),
+        "Inner Boxes Per Pair": Number(item.inner_box_per_pair || 0),
+        "Inner Boxes Per Outer Box": item.inner_boxes_per_outer_box || "",
+        Visibility: item.is_visible ? "Displayed" : "Hidden",
+        "Image URL": item.image_url ? `${APP_BASE_URL}${item.image_url}` : "",
+      }));
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+
+      worksheet["!cols"] = [
+        { wch: 8 },
+        { wch: 30 },
+        { wch: 16 },
+        { wch: 16 },
+        { wch: 14 },
+        { wch: 10 },
+        { wch: 12 },
+        { wch: 10 },
+        { wch: 10 },
+        ...(isAdmin ? [{ wch: 15 }, { wch: 18 }] : []),
+        { wch: 18 },
+        { wch: 20 },
+        { wch: 24 },
+        { wch: 12 },
+        { wch: 48 },
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Finished Goods");
+
+      const today = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(workbook, `finished-goods-${today}.xlsx`);
+
+      showToast({
+        tone: "success",
+        title: "Excel exported",
+        message: `${rows.length} matching row${rows.length === 1 ? "" : "s"} exported.`,
+      });
+    } catch (error) {
       showToast({
         tone: "error",
-        title: "Nothing to export",
-        message: "No finished goods match the current filter.",
+        title: "Export failed",
+        message: error.message || "Could not load the complete finished-goods report.",
       });
-      return;
+    } finally {
+      setExporting(false);
     }
-
-    const rows = filteredItems.map((item) => ({
-      "FG.ID": item.id || "",
-      Name: item.name || "",
-      "Article Code": item.article_code || "",
-      "Sole Code": item.sole_code || "",
-      Color: item.color || "",
-      Size: item.size || "",
-      Stock: Number(item.quantity || 0),
-      Unit: item.unit || "",
-      "Min Qty": Number(item.min_quantity || 0),
-      "Commission": getCommissionLabel(item),
-      "Inner Boxes Per Pair": Number(item.inner_box_per_pair || 0),
-      "Inner Boxes Per Outer Box": item.inner_boxes_per_outer_box || "",
-      Visibility: item.is_visible ? "Displayed" : "Hidden",
-      "Image URL": item.image_url ? `${APP_BASE_URL}${item.image_url}` : "",
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-
-    worksheet["!cols"] = [
-      { wch: 8 },
-      { wch: 30 },
-      { wch: 16 },
-      { wch: 16 },
-      { wch: 14 },
-      { wch: 10 },
-      { wch: 12 },
-      { wch: 10 },
-      { wch: 10 },
-      { wch: 18 },
-      { wch: 20 },
-      { wch: 24 },
-      { wch: 12 },
-      { wch: 48 },
-    ];
-
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Finished Goods");
-
-    const today = new Date().toISOString().slice(0, 10);
-    XLSX.writeFile(workbook, `finished-goods-${today}.xlsx`);
-
-    showToast({
-      tone: "success",
-      title: "Excel exported",
-      message: `${rows.length} row${rows.length === 1 ? "" : "s"} exported.`,
-    });
   };
 
   return (
@@ -703,8 +731,8 @@ export default function FinishedGoodsPage() {
         subtitle={isAdmin ? "Admin can create, manage, and control user visibility for finished goods." : "Product catalog including assigned hidden products."}
         icon="finishedGoods"
         actions={
-          <Button variant="secondary" icon="download" onClick={exportToExcel}>
-            Export Excel
+          <Button variant="secondary" icon="download" onClick={exportToExcel} disabled={exporting}>
+            {exporting ? "Preparing export…" : "Export Excel"}
           </Button>
         }
       >

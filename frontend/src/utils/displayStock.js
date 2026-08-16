@@ -28,3 +28,25 @@ export const getRoundedCartons = (quantity, pairsPerCarton) => {
 
   return Math.ceil(pairs / cartonSize);
 };
+
+export const getFullCartons = (quantity, pairsPerCarton) => {
+  const pairs = Number(quantity || 0);
+  const cartonSize = Number(pairsPerCarton || 0);
+
+  if (!Number.isFinite(pairs) || pairs <= 0 || !Number.isFinite(cartonSize) || cartonSize <= 0) {
+    return 0;
+  }
+
+  return Math.floor(pairs / cartonSize);
+};
+
+export const getLoosePairs = (quantity, pairsPerCarton) => {
+  const pairs = Math.max(0, Math.floor(Number(quantity || 0)));
+  const cartonSize = Math.floor(Number(pairsPerCarton || 0));
+
+  if (!Number.isFinite(pairs) || !Number.isFinite(cartonSize) || cartonSize <= 0) {
+    return 0;
+  }
+
+  return pairs % cartonSize;
+};

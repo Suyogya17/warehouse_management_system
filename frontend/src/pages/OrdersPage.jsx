@@ -22,7 +22,7 @@ const initialForm = {
   pan_number: "",
   transport_name: "",
   notes: "",
-  items: [{ finished_good_id: "", qty_ordered: 1 }],
+  items: [{ finished_good_id: "", carton_qty: 1, qty_ordered: 0 }],
 };
 
 const emptyOrderDateFilters = {
@@ -271,6 +271,21 @@ export default function OrdersPage() {
     [availability]
   );
 
+  const createOrderTotals = useMemo(
+    () =>
+      form.items.reduce(
+        (totals, item) =>
+          item.finished_good_id
+            ? {
+                cartons: totals.cartons + Number(item.carton_qty || 0),
+                pairs: totals.pairs + Number(item.qty_ordered || 0),
+              }
+            : totals,
+        { cartons: 0, pairs: 0 }
+      ),
+    [form.items]
+  );
+
   const knownPartiesForCurrentUser = useMemo(() => {
     return (orderFilterOptions.parties || []).filter(
       (party) => String(party.dealer_id) === String(user?.id)
@@ -311,18 +326,64 @@ export default function OrdersPage() {
     [availability]
   );
 
-  const updateItem = (index, key, value) => {
+  const updateOrderItemProduct = (index, productId) => {
+    const selected = availabilityById.get(String(productId));
     setForm((current) => ({
       ...current,
-      items: current.items.map((item, itemIndex) =>
-        itemIndex === index ? { ...item, [key]: value } : item
-      ),
+      items: current.items.map((item, itemIndex) => {
+        if (itemIndex !== index) return item;
+        const cartons = Math.max(1, Number(item.carton_qty || 1));
+        const pairsPerCarton = Number(selected?.inner_boxes_per_outer_box || 0);
+        return {
+          ...item,
+          finished_good_id: productId,
+          carton_qty: cartons,
+          qty_ordered: pairsPerCarton > 0 ? cartons * pairsPerCarton : 0,
+        };
+      }),
+    }));
+  };
+
+  const updateOrderItemCartons = (index, value) => {
+    setForm((current) => ({
+      ...current,
+      items: current.items.map((item, itemIndex) => {
+        if (itemIndex !== index) return item;
+        const selected = availabilityById.get(String(item.finished_good_id));
+        const pairsPerCarton = Number(selected?.inner_boxes_per_outer_box || 0);
+        const cartons = value === "" ? "" : Math.max(1, Math.floor(Number(value) || 1));
+        return {
+          ...item,
+          carton_qty: cartons,
+          qty_ordered:
+            cartons !== "" && pairsPerCarton > 0
+              ? Number(cartons) * pairsPerCarton
+              : 0,
+        };
+      }),
     }));
   };
 
   const submit = async (event) => {
     event.preventDefault();
     try {
+      const invalidItem = form.items.find((item) => {
+        const product = availabilityById.get(String(item.finished_good_id));
+        return (
+          !product ||
+          Number(product.inner_boxes_per_outer_box || 0) <= 0 ||
+          !Number.isInteger(Number(item.carton_qty)) ||
+          Number(item.carton_qty) < 1
+        );
+      });
+      if (invalidItem) {
+        showToast({
+          tone: "error",
+          title: "Complete the product quantity",
+          message: "Select a product with a valid pairs-per-CTN setting and enter at least 1 whole CTN.",
+        });
+        return;
+      }
       const payload = {
         ...form,
         customer_name: form.customer_name.trim(),
@@ -333,7 +394,12 @@ export default function OrdersPage() {
         notes: form.notes.trim(),
         items: form.items.map((item) => ({
           finished_good_id: Number(item.finished_good_id),
-          qty_ordered: Number(item.qty_ordered),
+          qty_ordered:
+            Number(item.carton_qty) *
+            Number(
+              availabilityById.get(String(item.finished_good_id))
+                ?.inner_boxes_per_outer_box || 0
+            ),
         })),
       };
       try {
@@ -916,6 +982,7 @@ export default function OrdersPage() {
 
   const renderOrderItems = (order) => {
     const items = order.items || [];
+    const warehouseFulfillments = order.warehouse_fulfillments || [];
     const totalPairs = items.reduce(
       (sum, item) => sum + Number(item.qty_ordered || 0),
       0
@@ -929,11 +996,75 @@ export default function OrdersPage() {
       ? formatNumber(totalCartons)
       : totalCartons.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
+    if (warehouseFulfillments.length) {
+      return (
+        <div className="min-w-[420px] space-y-2.5">
+          <div className="space-y-2">
+            {warehouseFulfillments.map((fulfillment) => {
+              const dnNumber =
+                fulfillment.delivery_note_number ||
+                fulfillment.warehouse_slip_number ||
+                "DN pending";
+              const fulfillmentCartons = Number(fulfillment.cartons || 0);
+              const fulfillmentCartonLabel = Number.isInteger(fulfillmentCartons)
+                ? formatNumber(fulfillmentCartons)
+                : fulfillmentCartons.toLocaleString(undefined, {
+                    maximumFractionDigits: 2,
+                  });
+
+              return (
+                <div
+                  key={`${order.id}:${fulfillment.warehouse_id}:${dnNumber}`}
+                  className="overflow-hidden rounded-xl border-2 border-slate-400 bg-white"
+                >
+                  <div className="border-b-2 border-slate-400 bg-slate-200 px-3 py-2">
+                    <p className="font-black text-slate-950">{dnNumber}</p>
+                    <p className="text-[11px] font-bold text-slate-700">
+                      {fulfillment.name || "Warehouse"}
+                    </p>
+                  </div>
+                  <div className="space-y-1.5 px-3 py-2.5">
+                    {(fulfillment.items || []).length ? (
+                      fulfillment.items.map((item) => (
+                        <div
+                          key={item.allocation_id || `${item.finished_good_id}:${item.quantity}`}
+                          className="text-xs font-semibold leading-5 text-slate-950"
+                        >
+                          {item.finished_good_id} - {item.article_code || item.product_name} - {formatNumber(item.quantity)} {item.unit || "pairs"}
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-xs font-semibold italic text-slate-600">
+                        {fulfillment.status === "REASSIGNED"
+                          ? "Items reassigned to another DN"
+                          : "No active items"}
+                      </p>
+                    )}
+                  </div>
+                  <div className="border-t-2 border-slate-400 bg-slate-100 px-3 py-2 text-xs font-black text-slate-950">
+                    {fulfillmentCartonLabel} CTN / {formatNumber(fulfillment.pairs || 0)} pairs
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-2 text-xs font-bold text-indigo-800">
+            Overall order: {cartonLabel} CTN
+            <span className="ml-1 font-medium text-indigo-600">
+              / {formatNumber(totalPairs)} pairs
+            </span>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-1.5">
         {items.map((item) => (
-          <div key={item.id} className="leading-5">
-            {item.product_name} - {formatNumber(item.qty_ordered)} {item.unit}
+          <div key={item.id} className="flex flex-wrap items-center gap-x-1.5 leading-5">
+            <span>{item.finished_good_id}</span>
+            <span>- {item.product_name}</span>
+            <span>- {formatNumber(item.qty_ordered)} {item.unit}</span>
           </div>
         ))}
         <div className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-2 text-xs font-bold text-indigo-800">
@@ -1348,10 +1479,17 @@ export default function OrdersPage() {
 
       <SectionCard
         title="Create order"
-        subtitle="Creating an order reserves available finished goods but does not reduce physical stock yet."
+        subtitle="Enter the customer first, then add products in whole cartons. The system calculates pairs automatically."
         icon="orders"
       >
         <form className="space-y-5" onSubmit={submit}>
+          <div className="flex items-center gap-3 border-b border-slate-200 pb-3">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-sm font-black text-white">1</span>
+            <div>
+              <h3 className="font-bold text-slate-900">Customer and delivery details</h3>
+              <p className="text-xs text-slate-500">Who is ordering, where it is going, and which transport will carry it.</p>
+            </div>
+          </div>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <Field label="Customer name" hint="Choose an existing party name when available to avoid duplicate spellings.">
               <TextInput
@@ -1451,76 +1589,114 @@ export default function OrdersPage() {
             </Field>
           </div>
 
+          <div className="flex items-center gap-3 border-b border-slate-200 pb-3 pt-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-sm font-black text-white">2</span>
+            <div>
+              <h3 className="font-bold text-slate-900">Products and cartons</h3>
+              <p className="text-xs text-slate-500">Select a product and enter CTN. Pairs are calculated using that product’s packing configuration.</p>
+            </div>
+          </div>
+
           <div className="space-y-3">
             {form.items.map((item, index) => {
               const selected = availabilityById.get(String(item.finished_good_id));
+              const pairsPerCarton = Number(selected?.inner_boxes_per_outer_box || 0);
+              const orderedPairs = Number(item.qty_ordered || 0);
+              const availablePairs = Number(selected?.available_qty || 0);
+              const availableCartons = pairsPerCarton > 0
+                ? Math.floor(availablePairs / pairsPerCarton)
+                : 0;
+              const exceedsStock = Boolean(selected) && orderedPairs > availablePairs;
               return (
                 <div
                   key={index}
-                  className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 md:grid-cols-[2fr_1fr_1fr_auto]"
+                  className={`rounded-2xl border p-4 ${exceedsStock ? "border-red-200 bg-red-50/60" : "border-slate-200 bg-slate-50/60"}`}
                 >
-                  <Select
-                    options={availability.map((product) => ({
-                      value: String(product.id),
-                      label: `${product.name} (${product.article_code}) - available ${formatNumber(product.available_qty)} ${product.unit}`,
-                    }))}
-                    value={
-                      availability
-                        .map((product) => ({
-                          value: String(product.id),
-                          label: `${product.name} (${product.article_code}) - available ${formatNumber(product.available_qty)} ${product.unit}`,
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <p className="text-sm font-bold text-slate-700">Item {index + 1}</p>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      disabled={form.items.length === 1}
+                      onClick={() =>
+                        setForm((current) => ({
+                          ...current,
+                          items: current.items.filter((_, itemIndex) => itemIndex !== index),
                         }))
-                        .find((opt) => opt.value === String(item.finished_good_id)) || null
-                    }
-                    onChange={(selected) =>
-                      updateItem(index, "finished_good_id", selected?.value || "")
-                    }
-                    placeholder="Search finished good..."
-                    isClearable
-                    menuPortalTarget={document.body}
-                    menuPosition="fixed"
-                    styles={{
-                      control: (base) => ({
-                        ...base,
-                        minHeight: "44px",
-                        borderRadius: "12px",
-                        borderColor: "#d1d5db",
-                        boxShadow: "none",
-                        fontSize: "14px",
-                      }),
-                      menuPortal: (base) => ({ ...base, zIndex: 9999 }),
-                    }}
-                  />
-                  <TextInput
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={item.qty_ordered}
-                    onChange={(event) => updateItem(index, "qty_ordered", event.target.value)}
-                    required
-                  />
-                  <div className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-600">
-                    Available: {selected ? `${formatNumber(selected.available_qty)} ${selected.unit}` : "-"}
+                      }
+                    >
+                      Remove
+                    </Button>
                   </div>
-                  <Button
-                    type="button"
-                    variant="danger"
-                    disabled={form.items.length === 1}
-                    onClick={() =>
-                      setForm((current) => ({
-                        ...current,
-                        items: current.items.filter((_, itemIndex) => itemIndex !== index),
-                      }))
-                    }
-                  >
-                    Remove
-                  </Button>
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_0.65fr_1fr_1fr]">
+                    <Field label="Product" hint="Search by product name or article code.">
+                      <Select
+                        options={availability.map((product) => ({
+                          value: String(product.id),
+                          label: `${product.article_code || product.name} · ${product.color || "No color"} · ${formatNumber(product.inner_boxes_per_outer_box || 0)} pairs/CTN`,
+                        }))}
+                        value={selected ? {
+                          value: String(selected.id),
+                          label: `${selected.article_code || selected.name} · ${selected.color || "No color"} · ${formatNumber(selected.inner_boxes_per_outer_box || 0)} pairs/CTN`,
+                        } : null}
+                        onChange={(option) => updateOrderItemProduct(index, option?.value || "")}
+                        placeholder="Search and select product..."
+                        isClearable
+                        menuPortalTarget={document.body}
+                        menuPosition="fixed"
+                        styles={{
+                          control: (base) => ({
+                            ...base,
+                            minHeight: "44px",
+                            borderRadius: "12px",
+                            borderColor: "#d1d5db",
+                            boxShadow: "none",
+                            fontSize: "14px",
+                          }),
+                          menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                        }}
+                      />
+                    </Field>
+                    <Field label="Order quantity (CTN)" hint="Whole cartons only.">
+                      <TextInput
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={item.carton_qty}
+                        onChange={(event) => updateOrderItemCartons(index, event.target.value)}
+                        required
+                      />
+                    </Field>
+                    <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-3.5 py-2.5">
+                      <p className="text-xs font-semibold text-indigo-600">Pairs calculated automatically</p>
+                      <p className="mt-1 text-lg font-black text-indigo-950">
+                        {selected && pairsPerCarton > 0 ? `${formatNumber(orderedPairs)} pairs` : "Select product"}
+                      </p>
+                      {selected && pairsPerCarton > 0 ? (
+                        <p className="text-xs text-indigo-700">{formatNumber(item.carton_qty || 0)} CTN × {formatNumber(pairsPerCarton)} pairs</p>
+                      ) : null}
+                    </div>
+                    <div className={`rounded-xl border px-3.5 py-2.5 ${exceedsStock ? "border-red-200 bg-white text-red-700" : "border-slate-200 bg-white text-slate-600"}`}>
+                      <p className="text-xs font-semibold">Available stock</p>
+                      <p className="mt-1 font-bold">{selected ? `${formatNumber(availableCartons)} CTN` : "Select product"}</p>
+                      {selected ? <p className="text-xs">{formatNumber(availablePairs)} pairs</p> : null}
+                      {exceedsStock ? <p className="mt-1 text-xs font-bold">Not enough available stock</p> : null}
+                    </div>
+                  </div>
                 </div>
               );
             })}
           </div>
 
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Order total</p>
+              <p className="text-lg font-black text-slate-950">
+                {formatNumber(createOrderTotals.cartons)} CTN / {formatNumber(createOrderTotals.pairs)} pairs
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
             <Button
               type="button"
               variant="secondary"
@@ -1528,15 +1704,16 @@ export default function OrdersPage() {
               onClick={() =>
                 setForm((current) => ({
                   ...current,
-                  items: [...current.items, { finished_good_id: "", qty_ordered: 1 }],
+                  items: [...current.items, { finished_good_id: "", carton_qty: 1, qty_ordered: 0 }],
                 }))
               }
             >
-              Add item
+              Add another product
             </Button>
             <Button type="submit" icon="check">
               Reserve order
             </Button>
+            </div>
           </div>
         </form>
       </SectionCard>
@@ -1784,7 +1961,7 @@ export default function OrdersPage() {
                 </div>
               ),
             },
-            { key: "items", label: "Items", minWidth: 340, render: renderOrderItems },
+            { key: "items", label: "Items by Warehouse DN", minWidth: 460, render: renderOrderItems },
             {
               key: "status",
               label: "Status",

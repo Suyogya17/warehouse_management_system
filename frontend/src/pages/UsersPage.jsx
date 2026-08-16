@@ -240,7 +240,7 @@ export default function UsersPage() {
                   ...current,
                   role: event.target.value,
                   regular_price_markup:
-                    event.target.value === "USER"
+                    ["USER", "ELDER"].includes(event.target.value)
                       ? current.regular_price_markup
                       : 0,
                 }))
@@ -316,7 +316,7 @@ export default function UsersPage() {
             </Field>
           )}
 
-          {form.role === "USER" && form.currency_code === "NPR" ? (
+          {["USER", "ELDER"].includes(form.role) && form.currency_code === "NPR" ? (
             <Field
               label="Regular product markup (NPR)"
               hint="Added to normal products only. Offer products are excluded."
@@ -376,7 +376,7 @@ export default function UsersPage() {
               key: "regular_price_markup",
               label: "Regular markup",
               render: (row) =>
-                row.role === "USER" &&
+                ["USER", "ELDER"].includes(row.role) &&
                 row.currency_code === "NPR" &&
                 Number(row.regular_price_markup || 0) > 0
                   ? `+${formatPrice(row.regular_price_markup, "NPR")}`

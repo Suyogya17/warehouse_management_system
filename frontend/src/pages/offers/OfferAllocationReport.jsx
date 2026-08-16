@@ -1,14 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
 import Button from "../../components/Button";
 import EmptyState from "../../components/EmptyState";
-import { getRoundedCartons } from "../../utils/displayStock";
 import { formatNumber } from "../../utils/format";
 import { OFFER_REPORT_PRODUCTS_PER_PAGE } from "./offerUtils";
 
-export default function OfferAllocationReport({ rows, purchases = [] }) {
+const getFullCartons = (quantity, pairsPerCarton) => {
+  const pairs = Number(quantity || 0);
+  const cartonSize = Number(pairsPerCarton || 0);
+  return Number.isFinite(pairs) && pairs > 0 && Number.isFinite(cartonSize) && cartonSize > 0
+    ? Math.floor(pairs / cartonSize)
+    : 0;
+};
+
+export default function OfferAllocationReport({
+  rows,
+  purchases = [],
+  customers = [],
+  onTransfer,
+}) {
   const [searchTerm, setSearchTerm] = useState("");
   const [userFilter, setUserFilter] = useState("ALL");
+  const [seriesFilter, setSeriesFilter] = useState("ALL");
   const [page, setPage] = useState(1);
+  const [transferRow, setTransferRow] = useState(null);
+  const [destinationUserId, setDestinationUserId] = useState("");
+  const [transferCartons, setTransferCartons] = useState(1);
+  const [transferReason, setTransferReason] = useState("");
+  const [transferring, setTransferring] = useState(false);
 
   const userOptions = useMemo(() => {
     const users = new Map();
@@ -29,6 +47,18 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
       })
     );
   }, [rows]);
+
+  const seriesOptions = useMemo(
+    () =>
+      [...new Set(rows.map((row) => String(row.sole_code || "").trim()).filter(Boolean))]
+        .sort((left, right) =>
+          left.localeCompare(right, undefined, {
+            numeric: true,
+            sensitivity: "base",
+          })
+        ),
+    [rows]
+  );
 
   const purchaseTotals = useMemo(() => {
     const totals = new Map();
@@ -76,12 +106,12 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
         return {
           ...row,
           ordered_pairs: orderedPairs,
-          ordered_cartons: getRoundedCartons(orderedPairs, pairsPerCarton),
+          ordered_cartons: getFullCartons(orderedPairs, pairsPerCarton),
           cancelled_pairs: cancelledPairs,
-          cancelled_cartons: getRoundedCartons(cancelledPairs, pairsPerCarton),
+          cancelled_cartons: getFullCartons(cancelledPairs, pairsPerCarton),
           order_count: totals?.order_ids.size || 0,
           remaining_pairs: remainingPairs,
-          remaining_cartons: getRoundedCartons(remainingPairs, pairsPerCarton),
+          remaining_cartons: getFullCartons(remainingPairs, pairsPerCarton),
         };
       }),
     [purchaseTotals, rows]
@@ -92,6 +122,12 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
     return reportRows.filter((row) => {
       const userKey = String(row.user_email || row.user_name || "").trim().toLowerCase();
       if (userFilter !== "ALL" && userKey !== userFilter) return false;
+      if (
+        seriesFilter !== "ALL" &&
+        String(row.sole_code || "").trim() !== seriesFilter
+      ) {
+        return false;
+      }
       const searchable = [
         row.article_code,
         row.product_name,
@@ -104,7 +140,7 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
         .join(" ");
       return terms.every((term) => searchable.includes(term));
     });
-  }, [reportRows, searchTerm, userFilter]);
+  }, [reportRows, searchTerm, seriesFilter, userFilter]);
 
   const productGroups = useMemo(() => {
     const groups = new Map();
@@ -125,7 +161,7 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
     page * OFFER_REPORT_PRODUCTS_PER_PAGE
   );
 
-  useEffect(() => setPage(1), [searchTerm, userFilter]);
+  useEffect(() => setPage(1), [searchTerm, seriesFilter, userFilter]);
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
@@ -170,6 +206,42 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
     (sum, row) => sum + Number(row.remaining_cartons || 0),
     0
   );
+
+  const openTransfer = (row) => {
+    setTransferRow(row);
+    setDestinationUserId("");
+    setTransferCartons(1);
+    setTransferReason("");
+  };
+
+  const closeTransfer = () => {
+    if (transferring) return;
+    setTransferRow(null);
+    setDestinationUserId("");
+    setTransferCartons(1);
+    setTransferReason("");
+  };
+
+  const submitTransfer = async (event) => {
+    event.preventDefault();
+    if (!transferRow || !onTransfer) return;
+    try {
+      setTransferring(true);
+      await onTransfer({
+        finished_good_id: Number(transferRow.finished_good_id),
+        source_user_id: Number(transferRow.user_id),
+        destination_user_id: Number(destinationUserId),
+        cartons: Number(transferCartons),
+        reason: transferReason.trim(),
+      });
+      closeTransfer();
+      setTransferRow(null);
+    } catch {
+      // The parent displays the API error and the window remains open for correction.
+    } finally {
+      setTransferring(false);
+    }
+  };
 
   const exportReport = async () => {
     const XLSX = await import("xlsx");
@@ -222,7 +294,7 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-2">
+        <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
           <input
             type="search"
             value={searchTerm}
@@ -241,6 +313,19 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
               <option key={option.key} value={option.key}>
                 {option.name}
                 {option.email ? ` · ${option.email}` : ""}
+              </option>
+            ))}
+          </select>
+          <select
+            value={seriesFilter}
+            onChange={(event) => setSeriesFilter(event.target.value)}
+            className="h-10 min-w-0 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-400"
+            aria-label="Filter allocation report by series"
+          >
+            <option value="ALL">All series</option>
+            {seriesOptions.map((series) => (
+              <option key={series} value={series}>
+                {series}
               </option>
             ))}
           </select>
@@ -293,7 +378,7 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
       {!visibleGroups.length ? (
         <EmptyState
           title="No offer allocation report found"
-          description="Try another product or selected user."
+          description="Try another product, series, or selected user."
         />
       ) : (
         visibleGroups.map((group) => {
@@ -380,12 +465,17 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
                     <p className="text-xs font-semibold text-slate-500">
                       {formatNumber(row.order_count)} offer order{row.order_count === 1 ? "" : "s"}
                     </p>
+                    {Number(row.remaining_cartons || 0) >= 1 && onTransfer ? (
+                      <Button type="button" size="sm" variant="secondary" onClick={() => openTransfer(row)}>
+                        Transfer balance
+                      </Button>
+                    ) : null}
                   </article>
                 ))}
               </div>
 
               <div className="touch-scroll hidden overflow-x-auto lg:block">
-                <table className="w-full min-w-[900px] text-left">
+                <table className="w-full min-w-[1020px] text-left">
                   <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
                     <tr>
                       <th className="px-4 py-3">Selected user</th>
@@ -395,6 +485,7 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
                       <th className="px-4 py-3">Balance</th>
                       <th className="px-4 py-3">Cancelled</th>
                       <th className="px-4 py-3">Orders</th>
+                      <th className="px-4 py-3">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -415,6 +506,15 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
                         <td className="px-4 py-3"><Quantity cartons={row.remaining_cartons} pairs={row.remaining_pairs} tone="amber" /></td>
                         <td className="px-4 py-3"><Quantity cartons={row.cancelled_cartons} pairs={row.cancelled_pairs} /></td>
                         <td className="px-4 py-3 text-sm font-black text-slate-800">{formatNumber(row.order_count)}</td>
+                        <td className="px-4 py-3">
+                          {Number(row.remaining_cartons || 0) >= 1 && onTransfer ? (
+                            <Button type="button" size="sm" variant="secondary" onClick={() => openTransfer(row)}>
+                              Transfer balance
+                            </Button>
+                          ) : (
+                            <span className="text-xs text-slate-400">No balance</span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -448,6 +548,84 @@ export default function OfferAllocationReport({ rows, purchases = [] }) {
           >
             Next
           </Button>
+        </div>
+      ) : null}
+
+      {transferRow ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true">
+          <form onSubmit={submitTransfer} className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-black text-slate-950">Transfer offer balance</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  {transferRow.article_code || transferRow.product_name} · from {transferRow.user_name}
+                </p>
+              </div>
+              <button type="button" onClick={closeTransfer} disabled={transferring} className="rounded-lg px-2 py-1 text-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close transfer window">
+                ×
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              Available to transfer: <strong>{formatNumber(transferRow.remaining_cartons)} CTN / {formatNumber(transferRow.remaining_pairs)} pairs</strong>. Already ordered quantities will not move.
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-semibold text-slate-700">Transfer to user</span>
+                <select
+                  required
+                  value={destinationUserId}
+                  onChange={(event) => setDestinationUserId(event.target.value)}
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+                >
+                  <option value="">Select destination user</option>
+                  {customers
+                    .filter((customer) => Number(customer.id) !== Number(transferRow.user_id))
+                    .sort((left, right) => String(left.name || left.email).localeCompare(String(right.name || right.email)))
+                    .map((customer) => (
+                      <option key={customer.id} value={customer.id}>
+                        {customer.name || customer.email}{customer.email ? ` · ${customer.email}` : ""}
+                      </option>
+                    ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-semibold text-slate-700">Quantity to transfer (CTN)</span>
+                <input
+                  required
+                  type="number"
+                  min="1"
+                  max={Math.floor(Number(transferRow.remaining_cartons || 0))}
+                  step="1"
+                  value={transferCartons}
+                  onChange={(event) => setTransferCartons(event.target.value)}
+                  className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-semibold text-slate-700">Reason</span>
+                <textarea
+                  required
+                  rows="3"
+                  maxLength="500"
+                  value={transferReason}
+                  onChange={(event) => setTransferReason(event.target.value)}
+                  placeholder="Example: Source user did not order; destination user requested the stock."
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+                />
+              </label>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <Button type="button" variant="secondary" onClick={closeTransfer} disabled={transferring}>Cancel</Button>
+              <Button type="submit" disabled={transferring || !destinationUserId || !transferReason.trim()}>
+                {transferring ? "Transferring…" : "Confirm transfer"}
+              </Button>
+            </div>
+          </form>
         </div>
       ) : null}
     </div>

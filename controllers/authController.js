@@ -5,6 +5,7 @@ const auditLog = require('../utils/auditLog');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 const { hasColumn } = require('../utils/schemaSupport');
 const { PRODUCT_VISIBILITY_PAGE_KEY, getUserPagePermissions } = require('../utils/userPagePermissions');
+const { resolveOfferAudienceUserId } = require('../utils/offerAccountLinks');
 
 const DEFAULT_EXCHANGE_RATES = {
   NPR: 1,
@@ -28,6 +29,9 @@ const normalizeRegularPriceMarkup = (value) => {
   if (!Number.isFinite(markup) || markup < 0) return 0;
   return Number(markup.toFixed(2));
 };
+
+const supportsRegularMarkupForRole = (role) =>
+  ['USER', 'ELDER'].includes(String(role || '').trim().toUpperCase());
 
 const getUserSelectColumns = async () => {
   const [supportsExchangeRate, supportsRegularPriceMarkup] = await Promise.all([
@@ -53,19 +57,36 @@ const mapPagePermissions = (rows = []) =>
   }, {});
 
 const buildUserPayload = async (user) => {
-  const pagePermissions = await getUserPagePermissions(user.id);
+  const [pagePermissions, pricingAccountId] = await Promise.all([
+    getUserPagePermissions(user.id),
+    resolveOfferAudienceUserId(user, query),
+  ]);
+  let pricingAccount = user;
+
+  if (Number(pricingAccountId) !== Number(user.id)) {
+    const linkedUsers = await query(
+      `SELECT ${await getUserSelectColumns()} FROM users WHERE id = ? LIMIT 1`,
+      [pricingAccountId]
+    );
+    if (linkedUsers.length) pricingAccount = linkedUsers[0];
+  }
 
   return {
     id: user.id,
     name: user.name,
     email: user.email,
     role: user.role,
-    country_code: user.country_code,
-    currency_code: user.currency_code,
-    exchange_rate: normalizeExchangeRate(user.exchange_rate, user.currency_code),
-    regular_price_markup: normalizeRegularPriceMarkup(
-      user.regular_price_markup
+    country_code: pricingAccount.country_code || user.country_code,
+    currency_code: pricingAccount.currency_code || user.currency_code,
+    exchange_rate: normalizeExchangeRate(
+      pricingAccount.exchange_rate,
+      pricingAccount.currency_code || user.currency_code
     ),
+    regular_price_markup: normalizeRegularPriceMarkup(
+      pricingAccount.regular_price_markup
+    ),
+    pricing_account_id: Number(pricingAccount.id || user.id),
+    pricing_account_email: pricingAccount.email || user.email,
     page_permissions: mapPagePermissions(pagePermissions),
   };
 };
@@ -112,7 +133,7 @@ const register = async (req, res, next) => {
     if (supportsRegularPriceMarkup) {
       userColumns.push('regular_price_markup');
       userValues.push(
-        role.toUpperCase() === 'USER' && locale.currencyCode === 'NPR'
+        supportsRegularMarkupForRole(role) && locale.currencyCode === 'NPR'
           ? normalizeRegularPriceMarkup(regular_price_markup)
           : 0
       );
@@ -141,7 +162,7 @@ const register = async (req, res, next) => {
       exchange_rate: supportsExchangeRate ? normalizeExchangeRate(exchange_rate, locale.currencyCode) : 1,
       regular_price_markup:
         supportsRegularPriceMarkup &&
-        role.toUpperCase() === 'USER' &&
+        supportsRegularMarkupForRole(role) &&
         locale.currencyCode === 'NPR'
           ? normalizeRegularPriceMarkup(regular_price_markup)
           : 0,
@@ -319,7 +340,7 @@ const updateUser = async (req, res, next) => {
       updateParams.push(
         regular_price_markup === undefined
           ? null
-          : role?.toUpperCase() === 'USER' &&
+          : supportsRegularMarkupForRole(role) &&
               (!currency_code || locale.currencyCode === 'NPR')
             ? normalizeRegularPriceMarkup(regular_price_markup)
             : 0

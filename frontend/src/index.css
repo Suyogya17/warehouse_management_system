@@ -2,6 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Desktop density
+ * ----------------
+ * Reproduce the denser view users get at roughly 80% browser zoom while
+ * preserving the real viewport dimensions used by sticky and full-height
+ * application layouts. Tailwind's rem-based typography, spacing, controls,
+ * and sidebar widths scale together. Smaller screens keep the normal size.
+ */
+@media (min-width: 1024px) {
+  html {
+    font-size: 80%;
+  }
+}
+
 .nepcha-api-progress {
   display: block;
   width: 38%;

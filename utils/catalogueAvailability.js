@@ -111,12 +111,12 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     req.query.include_hidden === '1' &&
     ['ADMIN', 'CO_ADMIN', 'MEMBER'].includes(req.user.role);
   const isOfferView = offerView && ['USER', 'ELDER'].includes(req.user.role);
-  const isLinkedElderOfferView = req.user.role === 'ELDER' && isOfferView;
-  const availabilityUserId = isLinkedElderOfferView
+  const isLinkedElderAccount = req.user.role === 'ELDER';
+  const availabilityUserId = isLinkedElderAccount
     ? await resolveOfferAudienceUserId(req.user, query)
     : Number(req.user.id);
   const usesCustomerOfferAudience =
-    req.user.role === 'USER' || isLinkedElderOfferView;
+    req.user.role === 'USER' || isLinkedElderAccount;
 
   let sql = `SELECT * FROM finished_goods WHERE ${
     supportsIsDeleted ? 'is_deleted = 0' : '1 = 1'

@@ -8,7 +8,7 @@ import { useAuth } from "../context/AuthContext";
 import { useProductInterestTracking } from "../hooks/useProductInterestTracking";
 import { useToast } from "../context/ToastContext";
 import { api } from "../services/api";
-import { getCustomerVisibleStock, getRoundedCartons } from "../utils/displayStock";
+import { getCustomerVisibleStock } from "../utils/displayStock";
 import { formatNumber } from "../utils/format";
 import OfferAllocationReport from "./offers/OfferAllocationReport";
 import OfferEditor from "./offers/OfferEditor";
@@ -23,6 +23,21 @@ import {
   getSeriesName,
   isActiveOffer,
 } from "./offers/offerUtils";
+
+const getFullCartons = (quantity, pairsPerCarton) => {
+  const pairs = Number(quantity || 0);
+  const cartonSize = Number(pairsPerCarton || 0);
+  return Number.isFinite(pairs) && pairs > 0 && Number.isFinite(cartonSize) && cartonSize > 0
+    ? Math.floor(pairs / cartonSize)
+    : 0;
+};
+
+const getOfferCartonSize = (product) => {
+  const snapshot = Number(product?.offer_pairs_per_carton_snapshot);
+  return isActiveOffer(product) && Number.isFinite(snapshot) && snapshot > 0
+    ? snapshot
+    : Number(product?.inner_boxes_per_outer_box || 0);
+};
 
 
 export default function OffersPage() {
@@ -69,6 +84,20 @@ export default function OffersPage() {
     () => new Map(availabilityProducts.map((product) => [Number(product.id), product])),
     [availabilityProducts]
   );
+
+  useEffect(() => {
+    if (!canManage) return;
+    api
+      .getAvailability(token, { include_hidden: 1 })
+      .then((result) => setAvailabilityProducts(result.data || []))
+      .catch((error) =>
+        showToast({
+          tone: "error",
+          title: "Could not load available offer stock",
+          message: error.message,
+        })
+      );
+  }, [canManage, showToast, token]);
   const currentCampaignUsageByUser = useMemo(() => {
     const usage = new Map();
     offerPurchases.forEach((purchase) => {
@@ -113,7 +142,7 @@ export default function OffersPage() {
         offer_starting_pairs: Number(
           product.offer_stock_quantity_snapshot ?? product.quantity ?? 0
         ),
-        offer_starting_cartons: getRoundedCartons(
+        offer_starting_cartons: getFullCartons(
           product.offer_stock_quantity_snapshot ?? product.quantity ?? 0,
           product.offer_pairs_per_carton_snapshot ??
             product.inner_boxes_per_outer_box
@@ -124,18 +153,19 @@ export default function OffersPage() {
         color: product.color,
         user_name: customer.name,
         user_email: customer.email,
+        user_id: Number(customer.id),
         audience: isForAllUsers ? "All users" : "Selected user",
         is_shown: true,
         assigned_percentage: target?.display_percentage ?? null,
         pairs_per_carton: pairsPerCarton,
         assigned_pairs: assignedPairs,
-        assigned_cartons: getRoundedCartons(assignedPairs, pairsPerCarton),
+        assigned_cartons: getFullCartons(assignedPairs, pairsPerCarton),
         ordered_pairs: orderedPairs,
         remaining_assigned_pairs: remainingAssignedPairs,
         visible_pairs: visiblePairs,
-        visible_cartons: getRoundedCartons(visiblePairs, pairsPerCarton),
+        visible_cartons: getFullCartons(visiblePairs, pairsPerCarton),
         globally_available_pairs: globallyAvailablePairs,
-        globally_available_cartons: getRoundedCartons(globallyAvailablePairs, pairsPerCarton),
+        globally_available_cartons: getFullCartons(globallyAvailablePairs, pairsPerCarton),
         stock_status: visiblePairs > 0 ? "IN STOCK" : "OUT OF STOCK",
       };
     });
@@ -156,7 +186,23 @@ export default function OffersPage() {
   }, [canManage, offers, products]);
 
   const stockFilterCandidates = useMemo(() => {
-    const source = canManage ? (showOnlyOffers ? offers : products) : offers;
+    const source = canManage
+      ? (showOnlyOffers ? offers : products).map((item) => {
+          const availability = offerAvailabilityById.get(Number(item.id));
+          return availability
+            ? {
+                ...item,
+                physical_stock: Number(
+                  availability.physical_stock ?? item.quantity ?? 0
+                ),
+                reserved_qty: Number(availability.reserved_qty || 0),
+                available_qty: Number(
+                  availability.available_qty ?? item.quantity ?? 0
+                ),
+              }
+            : item;
+        })
+      : offers;
     const q = search.trim().toLowerCase();
     return source.filter((item) => {
       const matchesSeries = !seriesFilter || getSeriesName(item.sole_code) === seriesFilter;
@@ -164,15 +210,19 @@ export default function OffersPage() {
         .some((value) => String(value || "").toLowerCase().includes(q));
       return matchesSeries && matchesSearch;
     });
-  }, [canManage, offers, products, search, seriesFilter, showOnlyOffers]);
+  }, [canManage, offerAvailabilityById, offers, products, search, seriesFilter, showOnlyOffers]);
   const offerStockCounts = useMemo(() => stockFilterCandidates.reduce((counts, item) => {
-    const available = canManage ? Number(item.quantity || 0) : getCustomerVisibleStock(item);
+    const available = canManage
+      ? Number(item.available_qty ?? item.quantity ?? 0)
+      : getCustomerVisibleStock(item);
     counts[available > 0 ? "IN_STOCK" : "OUT_OF_STOCK"] += 1;
     return counts;
   }, { IN_STOCK: 0, OUT_OF_STOCK: 0 }), [canManage, stockFilterCandidates]);
   const shownProducts = useMemo(() => stockFilterCandidates.filter((item) => {
     if (stockFilter === "ALL") return true;
-    const available = canManage ? Number(item.quantity || 0) : getCustomerVisibleStock(item);
+    const available = canManage
+      ? Number(item.available_qty ?? item.quantity ?? 0)
+      : getCustomerVisibleStock(item);
     return stockFilter === "IN_STOCK" ? available > 0 : available <= 0;
   }), [canManage, stockFilter, stockFilterCandidates]);
   const trackOfferInterest = useProductInterestTracking({
@@ -204,7 +254,7 @@ export default function OffersPage() {
 
   const beginEdit = (product) => {
     const savedTargets = product.offer_targets || [];
-    const pairsPerCarton = Number(product.inner_boxes_per_outer_box || 0);
+    const pairsPerCarton = getOfferCartonSize(product);
     const savedAsCartons =
       savedTargets.length > 0 &&
       savedTargets.every(
@@ -327,6 +377,29 @@ export default function OffersPage() {
     }
   };
 
+  const transferOfferBalance = async (transfer) => {
+    try {
+      await api.transferFinishedGoodOfferBalance(
+        transfer.finished_good_id,
+        transfer,
+        token
+      );
+      await loadOffers();
+      showToast({
+        tone: "success",
+        title: "Offer balance transferred",
+        message: `${transfer.cartons} CTN moved to the selected user.`,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Could not transfer balance",
+        message: error.data?.message || error.message,
+      });
+      throw error;
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader title={canManage ? "Product Offers" : "Offers"} description={canManage ? "Choose products, set the audience, and publish offers for customers." : "Browse products currently available as special offers."} />
@@ -358,6 +431,8 @@ export default function OffersPage() {
               <OfferAllocationReport
                 rows={offerStockByUserRows}
                 purchases={offerPurchases}
+                customers={customers}
+                onTransfer={transferOfferBalance}
               />
             )}
           </div>

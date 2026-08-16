@@ -2336,17 +2336,20 @@ const create = async (req, res, next) => {
           ? Math.max(0, effectiveDisplayQuantity - usedOfferQuantity)
           : effectiveDisplayQuantity;
 
-      // Step 1: actual available
+      // Admin and co-admin orders use the real unreserved stock. Customer-facing
+      // display/offer limits apply only when a USER places their own order.
       const available = Math.max(0, physicalStock - reservedQty);
-      // Step 2: cap at this product's display quantity
-      const displayAvailable = Math.min(remainingDisplayQuantity, available);
+      const orderableAvailable =
+        req.user.role === 'USER'
+          ? Math.min(remainingDisplayQuantity, available)
+          : available;
 
-      if (qty > displayAvailable) {
+      if (qty > orderableAvailable) {
         shortages.push({
           finished_good_id: id,
           product_name: p.name,
           requested: qty,
-          available: displayAvailable,
+          available: orderableAvailable,
         });
       }
     }

@@ -1,4 +1,4 @@
-const { query } = require('../config/db');
+const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
@@ -1319,6 +1319,269 @@ const setOffer = async (req, res, next) => {
   }
 };
 
+const transferOfferBalance = async (req, res, next) => {
+  const client = await getClient();
+  try {
+    const finishedGoodId = Number(req.params.id);
+    const sourceUserId = Number(req.body.source_user_id);
+    const destinationUserId = Number(req.body.destination_user_id);
+    const cartons = Number(req.body.cartons);
+    const reason = String(req.body.reason || '').trim().slice(0, 500);
+
+    if (
+      !Number.isInteger(finishedGoodId) ||
+      finishedGoodId <= 0 ||
+      !Number.isInteger(sourceUserId) ||
+      sourceUserId <= 0 ||
+      !Number.isInteger(destinationUserId) ||
+      destinationUserId <= 0 ||
+      sourceUserId === destinationUserId ||
+      !Number.isInteger(cartons) ||
+      cartons <= 0 ||
+      !reason
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Select two different users, enter a whole-number CTN quantity, and provide a reason.',
+      });
+    }
+
+    await client.query('START TRANSACTION');
+    const products = await client.query(
+      `SELECT id, name, article_code, color, offer_enabled, offer_all_users,
+              offer_campaign_id, inner_boxes_per_outer_box
+       FROM finished_goods
+       WHERE id = ? AND is_deleted = 0
+       FOR UPDATE`,
+      [finishedGoodId]
+    );
+    const product = products.rows[0];
+    if (!product || Number(product.offer_enabled) !== 1 || Number(product.offer_campaign_id || 0) <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'This product does not have an active offer period.' });
+    }
+    if (Number(product.offer_all_users) === 1) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Balance transfers are available only for offers separated between selected users.' });
+    }
+
+    const pairsPerCarton = Number(product.inner_boxes_per_outer_box || 0);
+    if (!Number.isInteger(pairsPerCarton) || pairsPerCarton <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'This product needs a valid pairs-per-CTN value before transferring.' });
+    }
+    const transferQuantity = cartons * pairsPerCarton;
+    const campaignId = Number(product.offer_campaign_id);
+
+    const campaignRows = await client.query(
+      `SELECT id, stock_quantity_snapshot
+       FROM finished_good_offer_campaigns
+       WHERE id = ? AND finished_good_id = ? AND status = 'ACTIVE'
+       FOR UPDATE`,
+      [campaignId, finishedGoodId]
+    );
+    const campaign = campaignRows.rows[0];
+    if (!campaign) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'The active offer campaign could not be found.' });
+    }
+
+    const users = await client.query(
+      `SELECT id, name, email FROM users
+       WHERE role = 'USER' AND id IN (?, ?)`,
+      [sourceUserId, destinationUserId]
+    );
+    if (users.rows.length !== 2) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Offer balance can only be transferred between valid USER accounts.' });
+    }
+    const userById = new Map(users.rows.map((user) => [Number(user.id), user]));
+
+    const currentTargetRows = await client.query(
+      `SELECT user_id, display_quantity, display_percentage
+       FROM finished_good_offer_users
+       WHERE finished_good_id = ? AND user_id IN (?, ?)
+       FOR UPDATE`,
+      [finishedGoodId, sourceUserId, destinationUserId]
+    );
+    const currentTargetByUser = new Map(
+      currentTargetRows.rows.map((row) => [Number(row.user_id), row])
+    );
+
+    const targetRows = await client.query(
+      `SELECT user_id, display_quantity
+       FROM finished_good_offer_campaign_users
+       WHERE campaign_id = ? AND user_id IN (?, ?)
+       FOR UPDATE`,
+      [campaignId, sourceUserId, destinationUserId]
+    );
+    const targetByUser = new Map(targetRows.rows.map((row) => [Number(row.user_id), row]));
+    let sourceTarget = targetByUser.get(sourceUserId);
+    const currentSourceTarget = currentTargetByUser.get(sourceUserId);
+
+    // Offers created before campaign allocations were introduced can have a valid
+    // live assignment without the matching campaign row. Reconcile that legacy
+    // record here so the campaign remains the permanent transfer/audit source.
+    if (!sourceTarget && currentSourceTarget) {
+      await client.query(
+        `INSERT INTO finished_good_offer_campaign_users (
+           campaign_id, user_id, display_quantity, display_percentage
+         ) VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           display_quantity = VALUES(display_quantity),
+           display_percentage = VALUES(display_percentage)`,
+        [
+          campaignId,
+          sourceUserId,
+          Number(currentSourceTarget.display_quantity || 0),
+          currentSourceTarget.display_percentage,
+        ]
+      );
+      sourceTarget = currentSourceTarget;
+      targetByUser.set(sourceUserId, currentSourceTarget);
+    }
+
+    if (!sourceTarget) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'The source user is not assigned to this offer.' });
+    }
+
+    const usageRows = await client.query(
+      `SELECT COALESCE(SUM(oi.qty_ordered), 0) AS used_quantity
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       WHERE oi.offer_campaign_id = ?
+         AND oi.finished_good_id = ?
+         AND oi.ordered_from_offer = 1
+         AND o.created_by = ?
+         AND o.status <> 'CANCELLED'`,
+      [campaignId, finishedGoodId, sourceUserId]
+    );
+    const sourceAssignedBefore = Number(sourceTarget.display_quantity || 0);
+    const sourceUsed = Number(usageRows.rows[0]?.used_quantity || 0);
+    const sourceBalance = Math.max(0, sourceAssignedBefore - sourceUsed);
+    if (transferQuantity > sourceBalance) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: `Only ${Math.floor(sourceBalance / pairsPerCarton)} CTN remain available for transfer from this user.`,
+      });
+    }
+
+    const destinationAssignedBefore = Number(
+      targetByUser.get(destinationUserId)?.display_quantity ??
+      currentTargetByUser.get(destinationUserId)?.display_quantity ??
+      0
+    );
+    const sourceAssignedAfter = sourceAssignedBefore - transferQuantity;
+    const destinationAssignedAfter = destinationAssignedBefore + transferQuantity;
+    const startingQuantity = Math.max(1, Number(campaign.stock_quantity_snapshot || 0));
+    const sourcePercentage = (sourceAssignedAfter / startingQuantity) * 100;
+    const destinationPercentage = (destinationAssignedAfter / startingQuantity) * 100;
+
+    if (sourceAssignedAfter > 0) {
+      await client.query(
+        `UPDATE finished_good_offer_campaign_users
+         SET display_quantity = ?, display_percentage = ?
+         WHERE campaign_id = ? AND user_id = ?`,
+        [sourceAssignedAfter, sourcePercentage, campaignId, sourceUserId]
+      );
+      await client.query(
+        `INSERT INTO finished_good_offer_users (
+           finished_good_id, user_id, display_quantity, display_percentage
+         ) VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           display_quantity = VALUES(display_quantity),
+           display_percentage = VALUES(display_percentage)`,
+        [finishedGoodId, sourceUserId, sourceAssignedAfter, sourcePercentage]
+      );
+    } else {
+      await client.query(
+        'DELETE FROM finished_good_offer_campaign_users WHERE campaign_id = ? AND user_id = ?',
+        [campaignId, sourceUserId]
+      );
+      await client.query(
+        'DELETE FROM finished_good_offer_users WHERE finished_good_id = ? AND user_id = ?',
+        [finishedGoodId, sourceUserId]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO finished_good_offer_campaign_users (
+         campaign_id, user_id, display_quantity, display_percentage
+       ) VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         display_quantity = VALUES(display_quantity),
+         display_percentage = VALUES(display_percentage)`,
+      [campaignId, destinationUserId, destinationAssignedAfter, destinationPercentage]
+    );
+    await client.query(
+      `INSERT INTO finished_good_offer_users (
+         finished_good_id, user_id, display_quantity, display_percentage
+       ) VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         display_quantity = VALUES(display_quantity),
+         display_percentage = VALUES(display_percentage)`,
+      [finishedGoodId, destinationUserId, destinationAssignedAfter, destinationPercentage]
+    );
+
+    await client.query('COMMIT');
+    clearCache();
+
+    const sourceUser = userById.get(sourceUserId);
+    const destinationUser = userById.get(destinationUserId);
+    try {
+      await auditLog({
+        ...getActor(req),
+        actionType: 'TRANSFER',
+        module: 'finished_goods',
+        entity_type: 'finished_good',
+        entity_id: finishedGoodId,
+        entityName: getProductName(product),
+        description: `Transferred ${cartons} CTN offer balance from ${sourceUser?.name || sourceUserId} to ${destinationUser?.name || destinationUserId}`,
+        metadata: {
+          offer_campaign_id: campaignId,
+          source_user_id: sourceUserId,
+          source_user_name: sourceUser?.name || null,
+          destination_user_id: destinationUserId,
+          destination_user_name: destinationUser?.name || null,
+          cartons,
+          quantity: transferQuantity,
+          pairs_per_carton: pairsPerCarton,
+          source_assigned_before: sourceAssignedBefore,
+          source_ordered_quantity: sourceUsed,
+          source_assigned_after: sourceAssignedAfter,
+          destination_assigned_before: destinationAssignedBefore,
+          destination_assigned_after: destinationAssignedAfter,
+          reason: reason || null,
+        },
+      });
+    } catch (auditError) {
+      console.error('Could not record offer balance transfer audit log:', auditError);
+    }
+
+    return res.json({
+      success: true,
+      message: `${cartons} CTN transferred to ${destinationUser?.name || 'the selected user'}.`,
+      data: {
+        finished_good_id: finishedGoodId,
+        offer_campaign_id: campaignId,
+        source_user_id: sourceUserId,
+        destination_user_id: destinationUserId,
+        cartons,
+        quantity: transferQuantity,
+      },
+    });
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   getAll,
   getFilters,
@@ -1332,5 +1595,6 @@ module.exports = {
   setPrice,
   setDisplayOrder,
   setDashboardFeatured,
-  setOffer
+  setOffer,
+  transferOfferBalance
 };

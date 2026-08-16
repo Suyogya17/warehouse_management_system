@@ -74,6 +74,32 @@ export const AuthProvider = ({ children }) => {
     }
   }, [auth.token, logout]);
 
+  useEffect(() => {
+    if (!auth.token) return undefined;
+
+    let cancelled = false;
+    api
+      .getProfile(auth.token)
+      .then((result) => {
+        if (cancelled || !result?.data) return;
+        const refreshedUser = normalizeUser(result.data);
+        setAuth((current) =>
+          current.token === auth.token
+            ? { ...current, user: refreshedUser }
+            : current
+        );
+      })
+      .catch((error) => {
+        // api.js handles expired sessions. Keep the cached profile only when a
+        // temporary network problem prevents this background refresh.
+        if (import.meta.env.DEV) console.error("Could not refresh user profile", error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [auth.token]);
+
   const login = useCallback(async (email, password, expectedRole) => {
     setLoading(true);
     try {

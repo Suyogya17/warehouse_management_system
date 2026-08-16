@@ -1,12 +1,33 @@
 import { useMemo } from "react";
 import Button from "../../components/Button";
-import { getRoundedCartons } from "../../utils/displayStock";
 import { formatNumber } from "../../utils/format";
 import {
   OFFER_PERCENTAGES_BY_EMAIL,
   getCartonAllocations,
   getPercentageAllocations,
 } from "./offerUtils";
+
+const getFullCartons = (quantity, pairsPerCarton) => {
+  const pairs = Number(quantity || 0);
+  const cartonSize = Number(pairsPerCarton || 0);
+  return Number.isFinite(pairs) && pairs > 0 && Number.isFinite(cartonSize) && cartonSize > 0
+    ? Math.floor(pairs / cartonSize)
+    : 0;
+};
+
+const getOfferAllocationPairs = (product) => {
+  const snapshot = Number(product?.offer_stock_quantity_snapshot);
+  return Number(product?.offer_enabled) === 1 && Number.isFinite(snapshot) && snapshot > 0
+    ? snapshot
+    : Number(product?.quantity || 0);
+};
+
+const getOfferPairsPerCarton = (product) => {
+  const snapshot = Number(product?.offer_pairs_per_carton_snapshot);
+  return Number(product?.offer_enabled) === 1 && Number.isFinite(snapshot) && snapshot > 0
+    ? snapshot
+    : Number(product?.inner_boxes_per_outer_box || 0);
+};
 
 const formatPercentage = (value) =>
   formatNumber(Math.round(Number(value || 0) * 100) / 100);
@@ -51,9 +72,9 @@ export default function OfferEditor({
   const hasZeroPercentageAllocation = form.offer_target_user_ids.some(
     (userId) => Number(allocations.get(Number(userId))?.cartons || 0) <= 0
   );
-  const totalPairs = Number(editing?.quantity || 0);
-  const pairsPerCarton = Number(editing?.inner_boxes_per_outer_box || 0);
-  const totalCartons = getRoundedCartons(
+  const totalPairs = getOfferAllocationPairs(editing);
+  const pairsPerCarton = getOfferPairsPerCarton(editing);
+  const totalCartons = getFullCartons(
     totalPairs,
     pairsPerCarton
   );
@@ -138,6 +159,11 @@ export default function OfferEditor({
               Divide the offer by percentage or whole CTN. Both values remain
               visible for every selected user.
             </p>
+            {Number(editing.offer_stock_quantity_snapshot || 0) > 0 ? (
+              <p className="mt-1 text-xs font-semibold text-indigo-700">
+                Active offer allocations use the original campaign starting stock.
+              </p>
+            ) : null}
           </div>
         </div>
 

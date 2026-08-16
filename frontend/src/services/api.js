@@ -548,6 +548,13 @@ export const api = {
       token
     ),
 
+  transferFinishedGoodOfferBalance: (id, payload, token) =>
+    apiRequest(
+      `/finished-goods/${id}/offer/transfer-balance`,
+      { method: "POST", body: JSON.stringify(payload) },
+      token
+    ),
+
   deleteFinishedGood: (id, token) =>
     apiRequest(`/finished-goods/${id}`, { method: "DELETE" }, token),
 

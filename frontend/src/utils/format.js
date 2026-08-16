@@ -70,8 +70,11 @@ export const getProductPriceForUser = (product = {}, user = {}) => {
   if (!Number.isFinite(amount)) return null;
   if (amount <= 0) return amount;
 
+  const usesRegularMarkup = ["USER", "ELDER"].includes(role);
   const regularMarkup =
-    role === "USER" && currency === "NPR" && !activeOffer
+    usesRegularMarkup &&
+    currency === "NPR" &&
+    !activeOffer
       ? Number(user?.regular_price_markup || 0)
       : 0;
 
