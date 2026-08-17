@@ -5,6 +5,8 @@ import {
   OFFER_PERCENTAGES_BY_EMAIL,
   getCartonAllocations,
   getPercentageAllocations,
+  isActiveOffer,
+  isExpiredOffer,
 } from "./offerUtils";
 
 const getFullCartons = (quantity, pairsPerCarton) => {
@@ -17,14 +19,14 @@ const getFullCartons = (quantity, pairsPerCarton) => {
 
 const getOfferAllocationPairs = (product) => {
   const snapshot = Number(product?.offer_stock_quantity_snapshot);
-  return Number(product?.offer_enabled) === 1 && Number.isFinite(snapshot) && snapshot > 0
+  return isActiveOffer(product) && Number.isFinite(snapshot) && snapshot > 0
     ? snapshot
-    : Number(product?.quantity || 0);
+    : Number(product?.available_qty ?? product?.quantity ?? 0);
 };
 
 const getOfferPairsPerCarton = (product) => {
   const snapshot = Number(product?.offer_pairs_per_carton_snapshot);
-  return Number(product?.offer_enabled) === 1 && Number.isFinite(snapshot) && snapshot > 0
+  return isActiveOffer(product) && Number.isFinite(snapshot) && snapshot > 0
     ? snapshot
     : Number(product?.inner_boxes_per_outer_box || 0);
 };
@@ -74,6 +76,11 @@ export default function OfferEditor({
   );
   const totalPairs = getOfferAllocationPairs(editing);
   const pairsPerCarton = getOfferPairsPerCarton(editing);
+  const activeOffer = isActiveOffer(editing);
+  const expiredOffer = isExpiredOffer(editing);
+  const previousCampaignPairs = Number(
+    editing?.offer_stock_quantity_snapshot || 0
+  );
   const totalCartons = getFullCartons(
     totalPairs,
     pairsPerCarton
@@ -159,9 +166,14 @@ export default function OfferEditor({
               Divide the offer by percentage or whole CTN. Both values remain
               visible for every selected user.
             </p>
-            {Number(editing.offer_stock_quantity_snapshot || 0) > 0 ? (
+            {activeOffer && previousCampaignPairs > 0 ? (
               <p className="mt-1 text-xs font-semibold text-indigo-700">
                 Active offer allocations use the original campaign starting stock.
+              </p>
+            ) : null}
+            {expiredOffer && previousCampaignPairs > 0 ? (
+              <p className="mt-1 text-xs font-semibold text-amber-700">
+                The expired offer started with {formatNumber(previousCampaignPairs)} pairs. This extension uses the stock currently available now.
               </p>
             ) : null}
           </div>
@@ -170,7 +182,7 @@ export default function OfferEditor({
         <div className="grid grid-cols-3 gap-2 text-center">
           <div className="rounded-xl bg-indigo-50 p-3">
             <p className="text-[10px] font-bold uppercase text-indigo-500">
-              Total product
+              {expiredOffer ? "Currently available" : "Total product"}
             </p>
             <p className="font-bold text-indigo-900">
               {formatNumber(totalCartons)} CTN

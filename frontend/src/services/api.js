@@ -485,6 +485,9 @@ export const api = {
   getFinishedGoodFilters: (token) =>
     apiRequest("/finished-goods/filters", {}, token),
 
+  getOfferAllocationHistory: (token) =>
+    apiRequest("/finished-goods/offer-allocation-history", {}, token),
+
   createFinishedGood: (payload, token) =>
     apiRequest(
       "/finished-goods",

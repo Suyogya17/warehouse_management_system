@@ -6,6 +6,7 @@ const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 const { hasColumn } = require('../utils/schemaSupport');
 const { PRODUCT_VISIBILITY_PAGE_KEY, getUserPagePermissions } = require('../utils/userPagePermissions');
 const { resolveOfferAudienceUserId } = require('../utils/offerAccountLinks');
+const { clearCache } = require('../middleware/cacheMiddleware');
 
 const DEFAULT_EXCHANGE_RATES = {
   NPR: 1,
@@ -32,6 +33,13 @@ const normalizeRegularPriceMarkup = (value) => {
 
 const supportsRegularMarkupForRole = (role) =>
   ['USER', 'ELDER'].includes(String(role || '').trim().toUpperCase());
+
+const normalizeProductAccessTemplate = (value) => {
+  const template = String(value || 'NONE').trim().toUpperCase();
+  return ['NONE', 'ALL_DEALERS', 'DEALER'].includes(template)
+    ? template
+    : 'NONE';
+};
 
 const getUserSelectColumns = async () => {
   const [supportsExchangeRate, supportsRegularPriceMarkup] = await Promise.all([
@@ -103,8 +111,70 @@ const register = async (req, res, next) => {
       currency_code,
       exchange_rate,
       regular_price_markup,
+      product_access_template,
+      copy_product_access_from_user_id,
     } = req.body;
     const locale = normalizeLocale(country_code, currency_code);
+    const normalizedRole = String(role || 'USER').trim().toUpperCase();
+    const accessTemplate = normalizeProductAccessTemplate(
+      product_access_template
+    );
+    let copiedProductIds = [];
+
+    if (
+      ['USER', 'ELDER', 'MEMBER'].includes(normalizedRole) &&
+      accessTemplate === 'ALL_DEALERS'
+    ) {
+      const visibleProducts = await query(
+        `SELECT DISTINCT upp.finished_good_id
+         FROM user_product_permissions upp
+         JOIN users source_user ON source_user.id = upp.user_id
+         JOIN finished_goods fg ON fg.id = upp.finished_good_id
+         WHERE source_user.role = 'USER'
+           AND upp.can_view = 1
+           AND fg.is_visible = 1`
+      );
+      copiedProductIds = visibleProducts.map((item) =>
+        Number(item.finished_good_id)
+      );
+    }
+
+    if (
+      ['USER', 'ELDER', 'MEMBER'].includes(normalizedRole) &&
+      accessTemplate === 'DEALER'
+    ) {
+      const sourceUserId = Number(copy_product_access_from_user_id);
+      if (!Number.isInteger(sourceUserId) || sourceUserId <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Select the dealer whose product access should be copied.',
+        });
+      }
+
+      const sourceUsers = await query(
+        `SELECT id FROM users WHERE id = ? AND role = 'USER' LIMIT 1`,
+        [sourceUserId]
+      );
+      if (!sourceUsers.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'The selected dealer account was not found.',
+        });
+      }
+
+      const visibleProducts = await query(
+        `SELECT upp.finished_good_id
+         FROM user_product_permissions upp
+         JOIN finished_goods fg ON fg.id = upp.finished_good_id
+         WHERE upp.user_id = ?
+           AND upp.can_view = 1
+           AND fg.is_visible = 1`,
+        [sourceUserId]
+      );
+      copiedProductIds = visibleProducts.map((item) =>
+        Number(item.finished_good_id)
+      );
+    }
     const [supportsExchangeRate, supportsRegularPriceMarkup] = await Promise.all([
       hasColumn('users', 'exchange_rate'),
       hasColumn('users', 'regular_price_markup'),
@@ -124,7 +194,7 @@ const register = async (req, res, next) => {
 
     const hashed = await bcrypt.hash(password, 10);
     const userColumns = ['name', 'email', 'password', 'role', 'country_code', 'currency_code'];
-    const userValues = [name, email, hashed, role.toUpperCase(), locale.countryCode, locale.currencyCode];
+    const userValues = [name, email, hashed, normalizedRole, locale.countryCode, locale.currencyCode];
 
     if (supportsExchangeRate) {
       userColumns.push('exchange_rate');
@@ -133,7 +203,7 @@ const register = async (req, res, next) => {
     if (supportsRegularPriceMarkup) {
       userColumns.push('regular_price_markup');
       userValues.push(
-        supportsRegularMarkupForRole(role) && locale.currencyCode === 'NPR'
+        supportsRegularMarkupForRole(normalizedRole) && locale.currencyCode === 'NPR'
           ? normalizeRegularPriceMarkup(regular_price_markup)
           : 0
       );
@@ -152,17 +222,32 @@ const register = async (req, res, next) => {
 
     const userId = result.insertId;
 
+    for (const finishedGoodId of [...new Set(copiedProductIds)]) {
+      const permissionInsert = await appendFiscalInsertFields(
+        'user_product_permissions',
+        ['user_id', 'finished_good_id', 'can_view'],
+        [userId, finishedGoodId, 1]
+      );
+      await query(
+        `INSERT INTO user_product_permissions (${permissionInsert.columns.join(', ')})
+         VALUES (${permissionInsert.columns.map(() => '?').join(', ')})`,
+        permissionInsert.values
+      );
+    }
+
+    if (copiedProductIds.length) clearCache();
+
     const user = await buildUserPayload({
       id: userId,
       name,
       email,
-      role: role.toUpperCase(),
+      role: normalizedRole,
       country_code: locale.countryCode,
       currency_code: locale.currencyCode,
       exchange_rate: supportsExchangeRate ? normalizeExchangeRate(exchange_rate, locale.currencyCode) : 1,
       regular_price_markup:
         supportsRegularPriceMarkup &&
-        supportsRegularMarkupForRole(role) &&
+        supportsRegularMarkupForRole(normalizedRole) &&
         locale.currencyCode === 'NPR'
           ? normalizeRegularPriceMarkup(regular_price_markup)
           : 0,
@@ -176,7 +261,11 @@ const register = async (req, res, next) => {
       detail: `User registered: ${email}`,
     });
 
-    return res.status(201).json({ success: true, data: user });
+    return res.status(201).json({
+      success: true,
+      data: user,
+      copied_product_count: [...new Set(copiedProductIds)].length,
+    });
   } catch (err) {
     next(err);
   }

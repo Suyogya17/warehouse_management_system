@@ -21,6 +21,8 @@ const initialForm = {
   currency_code: "NPR",
   exchange_rate: 1,
   regular_price_markup: 0,
+  product_access_template: "NONE",
+  copy_product_access_from_user_id: "",
 };
 
 const countries = [
@@ -83,11 +85,14 @@ export default function UsersPage() {
           message: "The users list was refreshed.",
         });
       } else {
-        await api.registerUser(form, token);
+        const result = await api.registerUser(form, token);
+        const copiedCount = Number(result.copied_product_count || 0);
         showToast({
           tone: "success",
           title: "User created",
-          message: "The users list was refreshed.",
+          message: copiedCount
+            ? `${copiedCount} visible products were copied into the new catalogue.`
+            : "The account was created with a custom empty catalogue.",
         });
       }
 
@@ -116,6 +121,8 @@ export default function UsersPage() {
       currency_code: row.currency_code || "NPR",
       exchange_rate: Number(row.exchange_rate || defaultExchangeRates[row.currency_code] || 1),
       regular_price_markup: Number(row.regular_price_markup || 0),
+      product_access_template: "NONE",
+      copy_product_access_from_user_id: "",
     });
     setShowPassword(false);
   };
@@ -243,6 +250,16 @@ export default function UsersPage() {
                     ["USER", "ELDER"].includes(event.target.value)
                       ? current.regular_price_markup
                       : 0,
+                  product_access_template: ["USER", "ELDER", "MEMBER"].includes(
+                    event.target.value
+                  )
+                    ? current.product_access_template
+                    : "NONE",
+                  copy_product_access_from_user_id: ["USER", "ELDER", "MEMBER"].includes(
+                    event.target.value
+                  )
+                    ? current.copy_product_access_from_user_id
+                    : "",
                 }))
               }
             >
@@ -333,6 +350,65 @@ export default function UsersPage() {
                   }))
                 }
               />
+            </Field>
+          ) : null}
+
+          {!editingId && ["USER", "ELDER", "MEMBER"].includes(form.role) ? (
+            <Field
+              label="Initial product catalogue"
+              hint="Copy visible products now. You can make individual show/hide changes later."
+            >
+              <SelectInput
+                value={form.product_access_template}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    product_access_template: event.target.value,
+                    copy_product_access_from_user_id:
+                      event.target.value === "DEALER"
+                        ? current.copy_product_access_from_user_id
+                        : "",
+                  }))
+                }
+              >
+                <option value="NONE">Start with no products</option>
+                <option value="ALL_DEALERS">All products shown to any dealer</option>
+                <option value="DEALER">Copy one individual dealer</option>
+              </SelectInput>
+            </Field>
+          ) : null}
+
+          {!editingId &&
+          ["USER", "ELDER", "MEMBER"].includes(form.role) &&
+          form.product_access_template === "DEALER" ? (
+            <Field
+              label="Copy catalogue from dealer"
+              hint="Only products currently visible to this dealer are copied."
+            >
+              <SelectInput
+                value={form.copy_product_access_from_user_id}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    copy_product_access_from_user_id: event.target.value,
+                  }))
+                }
+                required
+              >
+                <option value="">Select dealer</option>
+                {users
+                  .filter((account) => account.role === "USER")
+                  .sort((left, right) =>
+                    String(left.name || left.email).localeCompare(
+                      String(right.name || right.email)
+                    )
+                  )
+                  .map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name} · {account.email}
+                    </option>
+                  ))}
+              </SelectInput>
             </Field>
           ) : null}
 

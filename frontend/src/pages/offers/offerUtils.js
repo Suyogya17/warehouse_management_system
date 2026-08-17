@@ -22,6 +22,11 @@ export const isActiveOffer = (item) =>
   Number(item?.offer_enabled) === 1 &&
   (!item?.offer_ends_at || new Date(item.offer_ends_at).getTime() >= Date.now());
 
+export const isExpiredOffer = (item) =>
+  Number(item?.offer_enabled) === 1 &&
+  Boolean(item?.offer_ends_at) &&
+  new Date(item.offer_ends_at).getTime() < Date.now();
+
 export const getOfferGroupKey = (item) =>
   `${String(item.article_code || item.name || item.id).trim().toLowerCase()}::${String(item.sole_code || "").trim().toLowerCase()}`;
 
@@ -34,7 +39,7 @@ export const getOfferAllocationPairs = (product) => {
   const campaignSnapshot = Number(product?.offer_stock_quantity_snapshot);
   return isActiveOffer(product) && Number.isFinite(campaignSnapshot) && campaignSnapshot > 0
     ? campaignSnapshot
-    : Number(product?.quantity || 0);
+    : Number(product?.available_qty ?? product?.quantity ?? 0);
 };
 
 export const getOfferPairsPerCarton = (product) => {

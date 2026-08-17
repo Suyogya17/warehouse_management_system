@@ -11,6 +11,7 @@ fgRouter.get('/',       cacheResponse(15000), fgCtrl.getAll);
 fgRouter.get('/filters', cacheResponse(60000), fgCtrl.getFilters);
 fgRouter.put('/display-order', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDisplayOrder);
 fgRouter.put('/dashboard-featured', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDashboardFeatured);
+fgRouter.get('/offer-allocation-history', authorize('ADMIN', 'CO_ADMIN'), cacheResponse(15000), fgCtrl.getOfferAllocationHistory);
 fgRouter.get('/:id',    cacheResponse(15000), fgCtrl.getOne);
 fgRouter.post('/',      authorize('ADMIN', 'CO_ADMIN'), uploadMiddleware('image'), fgCtrl.create);
 fgRouter.put('/:id/visibility', authorizeAdminOrPagePermission(PRODUCT_VISIBILITY_PAGE_KEY, 'can_edit'), fgCtrl.setVisibility);

@@ -78,6 +78,24 @@ const canUseOrderCorrection = (user = {}) =>
       String(user.email || "").trim().toLowerCase()
     ));
 
+const getOrderItemSortLabel = (item = {}) =>
+  [
+    item.product_name || item.productName || item.article_code || item.articleCode || "",
+    item.color || "",
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+const sortOrderItemsByName = (items = []) =>
+  [...items].sort((left, right) =>
+    getOrderItemSortLabel(left).localeCompare(
+      getOrderItemSortLabel(right),
+      undefined,
+      { numeric: true, sensitivity: "base" }
+    )
+  );
+
 export default function OrdersPage() {
   const [orderSearch, setOrderSearch] = useState("");
   const [stockSearch, setStockSearch] = useState("");
@@ -981,7 +999,7 @@ export default function OrdersPage() {
   };
 
   const renderOrderItems = (order) => {
-    const items = order.items || [];
+    const items = sortOrderItemsByName(order.items || []);
     const warehouseFulfillments = order.warehouse_fulfillments || [];
     const totalPairs = items.reduce(
       (sum, item) => sum + Number(item.qty_ordered || 0),
@@ -1025,12 +1043,12 @@ export default function OrdersPage() {
                   </div>
                   <div className="space-y-1.5 px-3 py-2.5">
                     {(fulfillment.items || []).length ? (
-                      fulfillment.items.map((item) => (
+                      sortOrderItemsByName(fulfillment.items).map((item) => (
                         <div
                           key={item.allocation_id || `${item.finished_good_id}:${item.quantity}`}
                           className="text-xs font-semibold leading-5 text-slate-950"
                         >
-                          {item.finished_good_id} - {item.article_code || item.product_name} - {formatNumber(item.quantity)} {item.unit || "pairs"}
+                          {item.finished_good_id} - {item.article_code || item.product_name}{item.color ? ` - ${item.color}` : ""} - {formatNumber(item.quantity)} {item.unit || "pairs"}
                         </div>
                       ))
                     ) : (
@@ -1064,6 +1082,7 @@ export default function OrdersPage() {
           <div key={item.id} className="flex flex-wrap items-center gap-x-1.5 leading-5">
             <span>{item.finished_good_id}</span>
             <span>- {item.product_name}</span>
+            {item.color ? <span>- {item.color}</span> : null}
             <span>- {formatNumber(item.qty_ordered)} {item.unit}</span>
           </div>
         ))}
@@ -1159,6 +1178,11 @@ export default function OrdersPage() {
     const englishDate = formatEnglishDate(now, { includeTime: false });
     const nepaliDate = formatNepaliDate(now);
     const currentTime = now.toLocaleTimeString();
+    const orderPlacedEnglishDate = formatEnglishDate(preparedOrder.created_at, {
+      includeTime: false,
+    });
+    const orderPlacedNepaliDate = formatNepaliDate(preparedOrder.created_at);
+    const orderPlacedTime = formatTime(preparedOrder.created_at);
     const deliveryNoteNumber =
       preparedOrder.delivery_note_number ||
       (preparedOrder.warehouse_delivery_note_numbers || []).join(", ") ||
@@ -1236,6 +1260,15 @@ export default function OrdersPage() {
         left.displayOrder - right.displayOrder ||
         left.name.localeCompare(right.name)
     );
+    groups.forEach((group) => {
+      group.rows.sort((left, right) =>
+        getOrderItemSortLabel(left).localeCompare(
+          getOrderItemSortLabel(right),
+          undefined,
+          { numeric: true, sensitivity: "base" }
+        )
+      );
+    });
     const overallCartons = groups.reduce(
       (total, group) =>
         total + group.rows.reduce((sum, row) => sum + row.cartons, 0),
@@ -1295,7 +1328,7 @@ export default function OrdersPage() {
                   ${preparedOrder.delivery_note_number ? `<strong>Master DN:</strong> ${escapeHtml(deliveryNoteNumber)}<br/>` : ""}
                   <strong>Delivery Note:</strong> ${escapeHtml(page.warehouseSlipNumber)}<br/>
                   <strong>Warehouse:</strong> ${escapeHtml(page.name)}<br/>
-                  <strong>Warehouse Status:</strong> ${escapeHtml(page.status)}<br/>
+                  <strong>Order Placed:</strong> ${escapeHtml(orderPlacedEnglishDate)} · BS ${escapeHtml(orderPlacedNepaliDate)} · ${escapeHtml(orderPlacedTime)}<br/>
                   <strong>Created By:</strong> ${escapeHtml(preparedOrder.created_by_name || "-")}<br/>
                   <strong>Printed:</strong> ${escapeHtml(englishDate)} · ${escapeHtml(nepaliDate)} · ${escapeHtml(currentTime)}<br/>
                   <strong>Printed By:</strong> ${escapeHtml(user?.name || "User")}

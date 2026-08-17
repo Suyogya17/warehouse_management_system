@@ -28,6 +28,11 @@ const formatWarehouses = (warehouses = [], unit = "pairs") =>
 const getWarehouseTotal = (warehouses = []) =>
   warehouses.reduce((sum, warehouse) => sum + Number(warehouse.quantity || 0), 0);
 
+const getSeriesName = (soleCode = "") =>
+  String(soleCode)
+    .replace(/[-_\s]*sole$/i, "")
+    .trim();
+
 export default function StockPage() {
   const { token } = useAuth();
   const { showToast } = useToast();
@@ -35,6 +40,7 @@ export default function StockPage() {
   const [warehouseStock, setWarehouseStock] = useState([]);
   const [search, setSearch] = useState("");
   const [searchId, setSearchId] = useState("");
+  const [seriesFilter, setSeriesFilter] = useState("");
   const [stockFilter, setStockFilter] = useState("all");
 
   const load = useCallback(async () => {
@@ -71,6 +77,15 @@ export default function StockPage() {
     return groups;
   }, [warehouseStock]);
 
+  const seriesOptions = useMemo(
+    () =>
+      [...new Set(availability.map((item) => getSeriesName(item.sole_code)).filter(Boolean))]
+        .sort((a, b) =>
+          a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+        ),
+    [availability]
+  );
+
   const filteredAvailability = useMemo(() => {
     const q = search.trim().toLowerCase();
     const qId = searchId.trim().toLowerCase();
@@ -81,6 +96,8 @@ export default function StockPage() {
 
         if (stockFilter === "available" && available <= 0) return false;
         if (stockFilter === "out" && available > 0) return false;
+
+        if (seriesFilter && getSeriesName(item.sole_code) !== seriesFilter) return false;
 
         if (qId && !String(item.id || "").toLowerCase().includes(qId)) return false;
 
@@ -101,7 +118,7 @@ export default function StockPage() {
         );
       })
       .sort((a, b) => Number(b.available_qty || 0) - Number(a.available_qty || 0));
-  }, [availability, search, searchId, stockFilter, warehousesByProductId]);
+  }, [availability, search, searchId, seriesFilter, stockFilter, warehousesByProductId]);
 
   const exportToExcel = () => {
     if (!filteredAvailability.length) {
@@ -181,7 +198,7 @@ const totalAvailableCartons = filteredAvailability.reduce((sum, item) => sum + g
 
       <SectionCard title="Products Availability" icon="stock">
         <div className="p-4">
-          <div className="mb-4 grid gap-3 md:grid-cols-[80px_minmax(0,1fr)_180px_auto]">
+          <div className="mb-4 grid gap-3 md:grid-cols-[80px_minmax(0,1fr)_170px_180px_auto]">
             <input
               type="text"
               value={searchId}
@@ -196,6 +213,19 @@ const totalAvailableCartons = filteredAvailability.reduce((sum, item) => sum + g
               placeholder="Search product, article, sole, color, or size..."
               className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100"
             />
+            <select
+              value={seriesFilter}
+              onChange={(event) => setSeriesFilter(event.target.value)}
+              aria-label="Filter stock by series"
+              className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100"
+            >
+              <option value="">All series</option>
+              {seriesOptions.map((series) => (
+                <option key={series} value={series}>
+                  {series}
+                </option>
+              ))}
+            </select>
             <select
               value={stockFilter}
               onChange={(event) => setStockFilter(event.target.value)}
@@ -303,7 +333,7 @@ const totalAvailableCartons = filteredAvailability.reduce((sum, item) => sum + g
             rows={filteredAvailability}
             showToolbar={false}
             emptyTitle="No stock found"
-            emptyDescription="Try a different search or stock filter."
+            emptyDescription="Try a different search, series, or stock filter."
           />
          <div className="mt-3 flex justify-center gap-6 px-2">
   <span className="text-sm text-slate-500">

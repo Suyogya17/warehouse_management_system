@@ -11,6 +11,7 @@ import { api } from "../services/api";
 import { getCustomerVisibleStock } from "../utils/displayStock";
 import { formatNumber } from "../utils/format";
 import OfferAllocationReport from "./offers/OfferAllocationReport";
+import OfferAllocationHistory from "./offers/OfferAllocationHistory";
 import OfferEditor from "./offers/OfferEditor";
 import OfferProductGrid from "./offers/OfferProductGrid";
 import OfferPurchases from "./offers/OfferPurchases";
@@ -22,6 +23,7 @@ import {
   getOfferGroupKey,
   getSeriesName,
   isActiveOffer,
+  isExpiredOffer,
 } from "./offers/offerUtils";
 
 const getFullCartons = (quantity, pairsPerCarton) => {
@@ -59,11 +61,16 @@ export default function OffersPage() {
   const [seriesFilter, setSeriesFilter] = useState("");
   const [stockFilter, setStockFilter] = useState("ALL");
   const [showOnlyOffers, setShowOnlyOffers] = useState(false);
+  const [showExpiredOffers, setShowExpiredOffers] = useState(false);
+  const [expiredEndDate, setExpiredEndDate] = useState("");
   const [showOfferPurchases, setShowOfferPurchases] = useState(false);
   const [showOfferStockTable, setShowOfferStockTable] = useState(false);
   const [showOfferAllocationReport, setShowOfferAllocationReport] = useState(false);
+  const [showOfferHistory, setShowOfferHistory] = useState(false);
   const [loadingOfferStockTable, setLoadingOfferStockTable] = useState(false);
   const [loadingOfferAllocationReport, setLoadingOfferAllocationReport] = useState(false);
+  const [loadingOfferHistory, setLoadingOfferHistory] = useState(false);
+  const [offerHistoryRows, setOfferHistoryRows] = useState([]);
   const [offerPurchases, setOfferPurchases] = useState([]);
   const [loadingOfferPurchases, setLoadingOfferPurchases] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -80,6 +87,10 @@ export default function OffersPage() {
   });
   const [saving, setSaving] = useState(false);
   const offers = useMemo(() => products.filter(isActiveOffer), [products]);
+  const expiredOffers = useMemo(
+    () => products.filter(isExpiredOffer),
+    [products]
+  );
   const offerAvailabilityById = useMemo(
     () => new Map(availabilityProducts.map((product) => [Number(product.id), product])),
     [availabilityProducts]
@@ -187,7 +198,12 @@ export default function OffersPage() {
 
   const stockFilterCandidates = useMemo(() => {
     const source = canManage
-      ? (showOnlyOffers ? offers : products).map((item) => {
+      ? (showExpiredOffers
+          ? expiredOffers
+          : showOnlyOffers
+            ? offers
+            : products
+        ).map((item) => {
           const availability = offerAvailabilityById.get(Number(item.id));
           return availability
             ? {
@@ -208,9 +224,13 @@ export default function OffersPage() {
       const matchesSeries = !seriesFilter || getSeriesName(item.sole_code) === seriesFilter;
       const matchesSearch = !q || [item.name, item.article_code, item.sole_code, item.color]
         .some((value) => String(value || "").toLowerCase().includes(q));
-      return matchesSeries && matchesSearch;
+      const matchesExpiredEndDate =
+        !showExpiredOffers ||
+        !expiredEndDate ||
+        String(item.offer_ends_at || "").slice(0, 10) === expiredEndDate;
+      return matchesSeries && matchesSearch && matchesExpiredEndDate;
     });
-  }, [canManage, offerAvailabilityById, offers, products, search, seriesFilter, showOnlyOffers]);
+  }, [canManage, expiredEndDate, expiredOffers, offerAvailabilityById, offers, products, search, seriesFilter, showExpiredOffers, showOnlyOffers]);
   const offerStockCounts = useMemo(() => stockFilterCandidates.reduce((counts, item) => {
     const available = canManage
       ? Number(item.available_qty ?? item.quantity ?? 0)
@@ -247,7 +267,7 @@ export default function OffersPage() {
     return productGroups.slice(start, start + OFFER_PRODUCTS_PER_PAGE);
   }, [currentPage, productGroups]);
 
-  useEffect(() => { setCurrentPage(1); }, [search, seriesFilter, showOnlyOffers, stockFilter]);
+  useEffect(() => { setCurrentPage(1); }, [expiredEndDate, search, seriesFilter, showExpiredOffers, showOnlyOffers, stockFilter]);
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
@@ -315,6 +335,7 @@ export default function OffersPage() {
     }
     setShowOfferStockTable(false);
     setShowOfferAllocationReport(false);
+    setShowOfferHistory(false);
     setShowOfferPurchases(true);
     setLoadingOfferPurchases(true);
     try {
@@ -334,6 +355,7 @@ export default function OffersPage() {
     }
     setShowOfferPurchases(false);
     setShowOfferAllocationReport(false);
+    setShowOfferHistory(false);
     setShowOfferStockTable(true);
     setLoadingOfferStockTable(true);
     try {
@@ -357,6 +379,7 @@ export default function OffersPage() {
     }
     setShowOfferPurchases(false);
     setShowOfferStockTable(false);
+    setShowOfferHistory(false);
     setShowOfferAllocationReport(true);
     setLoadingOfferAllocationReport(true);
     try {
@@ -374,6 +397,30 @@ export default function OffersPage() {
       });
     } finally {
       setLoadingOfferAllocationReport(false);
+    }
+  };
+
+  const toggleOfferHistory = async () => {
+    if (showOfferHistory) {
+      setShowOfferHistory(false);
+      return;
+    }
+    setShowOfferPurchases(false);
+    setShowOfferStockTable(false);
+    setShowOfferAllocationReport(false);
+    setShowOfferHistory(true);
+    setLoadingOfferHistory(true);
+    try {
+      const result = await api.getOfferAllocationHistory(token);
+      setOfferHistoryRows(result.data || []);
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Could not load complete offer history",
+        message: error.message,
+      });
+    } finally {
+      setLoadingOfferHistory(false);
     }
   };
 
@@ -407,11 +454,13 @@ export default function OffersPage() {
       <SectionCard title={canManage ? "Manage offers" : "Current offers"} subtitle={`${offers.length} active offer${offers.length === 1 ? "" : "s"}`} icon="finishedGoods">
         {canManage && (
           <div className="mb-4 flex flex-wrap gap-2">
-            <Button type="button" variant={!showOnlyOffers && !showOfferPurchases && !showOfferStockTable && !showOfferAllocationReport ? "primary" : "secondary"} onClick={() => { setShowOnlyOffers(false); setShowOfferPurchases(false); setShowOfferStockTable(false); setShowOfferAllocationReport(false); }}>Show all products</Button>
-            <Button type="button" variant={showOnlyOffers && !showOfferPurchases && !showOfferStockTable && !showOfferAllocationReport ? "primary" : "secondary"} onClick={() => { setShowOnlyOffers(true); setShowOfferPurchases(false); setShowOfferStockTable(false); setShowOfferAllocationReport(false); }}>Show products in offer ({offers.length})</Button>
+            <Button type="button" variant={!showOnlyOffers && !showExpiredOffers && !showOfferPurchases && !showOfferStockTable && !showOfferAllocationReport && !showOfferHistory ? "primary" : "secondary"} onClick={() => { setShowOnlyOffers(false); setShowExpiredOffers(false); setShowOfferPurchases(false); setShowOfferStockTable(false); setShowOfferAllocationReport(false); setShowOfferHistory(false); }}>Show all products</Button>
+            <Button type="button" variant={showOnlyOffers && !showExpiredOffers && !showOfferPurchases && !showOfferStockTable && !showOfferAllocationReport && !showOfferHistory ? "primary" : "secondary"} onClick={() => { setShowOnlyOffers(true); setShowExpiredOffers(false); setShowOfferPurchases(false); setShowOfferStockTable(false); setShowOfferAllocationReport(false); setShowOfferHistory(false); }}>Show products in offer ({offers.length})</Button>
+            <Button type="button" variant={showExpiredOffers && !showOfferPurchases && !showOfferStockTable && !showOfferAllocationReport && !showOfferHistory ? "primary" : "secondary"} onClick={() => { setShowOnlyOffers(false); setShowExpiredOffers(true); setShowOfferPurchases(false); setShowOfferStockTable(false); setShowOfferAllocationReport(false); setShowOfferHistory(false); }}>Expired offers ({expiredOffers.length})</Button>
             <Button type="button" variant={showOfferPurchases ? "primary" : "secondary"} onClick={toggleOfferPurchases}>Offer purchases</Button>
             <Button type="button" variant={showOfferStockTable ? "primary" : "secondary"} onClick={toggleOfferStockTable}>Offer stock by user</Button>
             <Button type="button" variant={showOfferAllocationReport ? "primary" : "secondary"} onClick={toggleOfferAllocationReport}>Offer allocation report</Button>
+            <Button type="button" variant={showOfferHistory ? "primary" : "secondary"} onClick={toggleOfferHistory}>Offer history: beginning to now</Button>
           </div>
         )}
         {canManage && showOfferAllocationReport && (
@@ -451,6 +500,15 @@ export default function OffersPage() {
             {loadingOfferStockTable ? <p className="py-8 text-center text-sm text-slate-500">Loading offer stock by user...</p> : <OfferStockByUserTable rows={offerStockByUserRows} purchases={offerPurchases} />}
           </div>
         )}
+        {canManage && showOfferHistory ? (
+          <div className="mb-6 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
+            <div>
+              <h3 className="font-bold text-slate-900">Offer history: beginning to now</h3>
+              <p className="text-sm text-slate-500">Search every saved offer period and see the cumulative quantity assigned and ordered by each individual.</p>
+            </div>
+            <OfferAllocationHistory rows={offerHistoryRows} loading={loadingOfferHistory} />
+          </div>
+        ) : null}
         {canManage && showOfferPurchases ? (
           <OfferPurchases
             purchases={offerPurchases}
@@ -460,7 +518,8 @@ export default function OffersPage() {
         ) : null}
         {!showOfferPurchases &&
         !showOfferStockTable &&
-        !showOfferAllocationReport ? (
+        !showOfferAllocationReport &&
+        !showOfferHistory ? (
           <>
             <div className="mb-4 flex max-w-xs flex-col gap-1">
               <label
@@ -483,6 +542,23 @@ export default function OffersPage() {
                 ))}
               </select>
             </div>
+            {canManage && showExpiredOffers ? (
+              <div className="mb-4 flex max-w-xs flex-col gap-1">
+                <label
+                  htmlFor="expired-offer-end-date"
+                  className="text-xs font-medium text-slate-500"
+                >
+                  Offer ended on
+                </label>
+                <input
+                  id="expired-offer-end-date"
+                  type="date"
+                  value={expiredEndDate}
+                  onChange={(event) => setExpiredEndDate(event.target.value)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+                />
+              </div>
+            ) : null}
             <div
               className="mb-4 flex flex-wrap gap-2"
               aria-label="Filter products by stock"

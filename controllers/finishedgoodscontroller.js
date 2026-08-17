@@ -1059,6 +1059,145 @@ const setDashboardFeatured = async (req, res, next) => {
   }
 };
 
+// ─── OFFER ALLOCATION HISTORY ──────────────────────────────────────────────
+const getOfferAllocationHistory = async (req, res, next) => {
+  try {
+    if (!(await hasOfferCampaignSchema())) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Offer history requires sql/add-offer-campaign-allowances.sql.',
+      });
+    }
+
+    const [allocationResult, purchaseResult] = await Promise.all([
+      query(
+        `SELECT campaign.id AS offer_campaign_id,
+                campaign.finished_good_id,
+                campaign.offer_label,
+                campaign.status AS campaign_status,
+                campaign.created_at AS campaign_started_at,
+                campaign.offer_ends_at AS campaign_planned_end_at,
+                campaign.ended_at AS campaign_ended_at,
+                campaign.stock_quantity_snapshot AS offer_starting_pairs,
+                campaign.pairs_per_carton_snapshot AS pairs_per_carton,
+                audience.user_id,
+                audience.display_quantity AS assigned_pairs,
+                audience.display_percentage AS assigned_percentage,
+                account.name AS user_name,
+                account.email AS user_email,
+                product.name AS product_name,
+                product.article_code,
+                product.sole_code,
+                product.color,
+                product.size
+         FROM finished_good_offer_campaigns campaign
+         JOIN finished_good_offer_campaign_users audience
+           ON audience.campaign_id = campaign.id
+         JOIN users account ON account.id = audience.user_id
+         JOIN finished_goods product ON product.id = campaign.finished_good_id
+         ORDER BY campaign.created_at DESC, campaign.id DESC, account.name`
+      ),
+      query(
+        `SELECT item.offer_campaign_id,
+                item.finished_good_id,
+                customer.id AS user_id,
+                customer.name AS user_name,
+                customer.email AS user_email,
+                product.name AS product_name,
+                product.article_code,
+                product.sole_code,
+                product.color,
+                product.size,
+                COALESCE(campaign.offer_label, MAX(item.offer_label_snapshot), 'Legacy offer') AS offer_label,
+                COALESCE(campaign.status, 'LEGACY') AS campaign_status,
+                COALESCE(campaign.created_at, MIN(orders.created_at)) AS campaign_started_at,
+                campaign.offer_ends_at AS campaign_planned_end_at,
+                campaign.ended_at AS campaign_ended_at,
+                COALESCE(campaign.stock_quantity_snapshot, 0) AS offer_starting_pairs,
+                COALESCE(campaign.pairs_per_carton_snapshot, MAX(item.offer_pairs_per_carton_snapshot), MAX(product.inner_boxes_per_outer_box)) AS pairs_per_carton,
+                SUM(CASE WHEN orders.status = 'CANCELLED' THEN item.qty_ordered ELSE 0 END) AS cancelled_pairs,
+                SUM(CASE WHEN orders.status <> 'CANCELLED' THEN item.qty_ordered ELSE 0 END) AS ordered_pairs,
+                COUNT(DISTINCT CASE WHEN orders.status <> 'CANCELLED' THEN orders.id END) AS order_count,
+                MIN(orders.created_at) AS first_order_at,
+                MAX(orders.created_at) AS last_order_at
+         FROM order_items item
+         JOIN orders ON orders.id = item.order_id
+         LEFT JOIN finished_good_offer_campaigns campaign
+           ON campaign.id = item.offer_campaign_id
+         JOIN finished_goods product ON product.id = item.finished_good_id
+         LEFT JOIN users customer ON customer.id = orders.created_by
+         WHERE item.ordered_from_offer = 1
+         GROUP BY item.offer_campaign_id, item.finished_good_id,
+                  customer.id, customer.name, customer.email,
+                  product.name, product.article_code, product.sole_code,
+                  product.color, product.size, campaign.offer_label,
+                  campaign.status, campaign.created_at,
+                  campaign.offer_ends_at, campaign.ended_at,
+                  campaign.stock_quantity_snapshot,
+                  campaign.pairs_per_carton_snapshot
+         ORDER BY campaign.created_at DESC, campaign.id DESC, customer.name`
+      ),
+    ]);
+
+    const historyByKey = new Map();
+    const makeKey = (row) =>
+      `${Number(row.offer_campaign_id)}::${Number(
+        row.finished_good_id
+      )}::${Number(row.user_id)}`;
+
+    allocationResult.forEach((row) => {
+      historyByKey.set(makeKey(row), {
+        ...row,
+        offer_campaign_id: Number(row.offer_campaign_id),
+        finished_good_id: Number(row.finished_good_id),
+        user_id: Number(row.user_id),
+        offer_starting_pairs: Number(row.offer_starting_pairs || 0),
+        pairs_per_carton: Number(row.pairs_per_carton || 0),
+        assigned_pairs: Number(row.assigned_pairs || 0),
+        assigned_percentage:
+          row.assigned_percentage === null
+            ? null
+            : Number(row.assigned_percentage),
+        ordered_pairs: 0,
+        cancelled_pairs: 0,
+        order_count: 0,
+        first_order_at: null,
+        last_order_at: null,
+      });
+    });
+
+    purchaseResult.forEach((row) => {
+      const key = makeKey(row);
+      const existing = historyByKey.get(key) || {
+        ...row,
+        offer_campaign_id: Number(row.offer_campaign_id),
+        finished_good_id: Number(row.finished_good_id),
+        user_id: Number(row.user_id),
+        offer_starting_pairs: Number(row.offer_starting_pairs || 0),
+        pairs_per_carton: Number(row.pairs_per_carton || 0),
+        assigned_pairs: 0,
+        assigned_percentage: null,
+      };
+      historyByKey.set(key, {
+        ...existing,
+        ordered_pairs: Number(row.ordered_pairs || 0),
+        cancelled_pairs: Number(row.cancelled_pairs || 0),
+        order_count: Number(row.order_count || 0),
+        first_order_at: row.first_order_at || null,
+        last_order_at: row.last_order_at || null,
+      });
+    });
+
+    return res.json({
+      success: true,
+      data: [...historyByKey.values()],
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── PRODUCT OFFER ──────────────────────────────────────────────────────────
 const setOffer = async (req, res, next) => {
   try {
@@ -1595,6 +1734,7 @@ module.exports = {
   setPrice,
   setDisplayOrder,
   setDashboardFeatured,
+  getOfferAllocationHistory,
   setOffer,
   transferOfferBalance
 };
