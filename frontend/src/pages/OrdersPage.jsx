@@ -43,6 +43,15 @@ const statusTone = {
 };
 
 const PRINTABLE_DELIVERY_STATUSES = ["CONFIRMED", "PACKED", "DELIVERED"];
+const ORDER_STATUS_FILTER_STORAGE_KEY = "admin-orders-status-filter";
+const ORDER_STATUS_FILTER_VALUES = new Set([
+  "ALL",
+  "PENDING",
+  "CONFIRMED",
+  "PACKED",
+  "DELIVERED",
+  "CANCELLED",
+]);
 const CANCELLATION_OPTIONS = [
   { value: "DUPLICATE_ORDER", label: "Duplicate order" },
   { value: "CUSTOMER_CHANGED_MIND", label: "Customer changed mind" },
@@ -96,6 +105,28 @@ const sortOrderItemsByName = (items = []) =>
     )
   );
 
+const getAdminOrderProductLabel = (product = {}) =>
+  `${product.article_code || product.name} · ${
+    product.color || "No color"
+  } · ${formatNumber(product.inner_boxes_per_outer_box || 0)} pairs/CTN${
+    Number(product.is_visible) === 0 ? " · HIDDEN PRODUCT" : ""
+  }`;
+
+const formatWarehouseShortage = (shortage = {}) => {
+  if (shortage.reason === "FRAGMENTED_WAREHOUSE_STOCK") {
+    return `${shortage.product_name || "Product"}: ${formatNumber(
+      shortage.warehouse_stock || 0
+    )} pairs exist across warehouses, but they do not form the required ${formatNumber(
+      shortage.pairs_per_carton || 0
+    )}-pair complete carton in one warehouse`;
+  }
+  return `${shortage.product_name || "Product"}: requires ${formatNumber(
+    shortage.ordered_qty ?? shortage.requested ?? 0
+  )} pairs, ${formatNumber(
+    shortage.warehouse_stock ?? shortage.available ?? 0
+  )} pairs can currently be allocated`;
+};
+
 export default function OrdersPage() {
   const [orderSearch, setOrderSearch] = useState("");
   const [stockSearch, setStockSearch] = useState("");
@@ -117,7 +148,13 @@ export default function OrdersPage() {
   const [availability, setAvailability] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
   const [form, setForm] = useState(initialForm);
-  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [statusFilter, setStatusFilter] = useState(() => {
+    if (typeof window === "undefined") return "ALL";
+    const savedStatus = window.localStorage.getItem(
+      ORDER_STATUS_FILTER_STORAGE_KEY
+    );
+    return ORDER_STATUS_FILTER_VALUES.has(savedStatus) ? savedStatus : "ALL";
+  });
   const [dealerFilter, setDealerFilter] = useState(null);
   const [partyFilter, setPartyFilter] = useState(null);
   const [orderFilterOptions, setOrderFilterOptions] = useState({
@@ -150,6 +187,7 @@ export default function OrdersPage() {
   const [lockedOrderDetails, setLockedOrderDetails] = useState(null);
   const [lockedOrderHistory, setLockedOrderHistory] = useState([]);
   const [loadingLockedOrderHistory, setLoadingLockedOrderHistory] = useState(false);
+  const [exportingDnOrderId, setExportingDnOrderId] = useState(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -158,6 +196,10 @@ export default function OrdersPage() {
     }, 300);
     return () => window.clearTimeout(timer);
   }, [orderSearch]);
+
+  useEffect(() => {
+    window.localStorage.setItem(ORDER_STATUS_FILTER_STORAGE_KEY, statusFilter);
+  }, [statusFilter]);
 
   const loadOrders = useCallback(async () => {
     const result = await api.getOrders(token, {
@@ -1128,6 +1170,315 @@ export default function OrdersPage() {
   const formatPrintNumber = (value) =>
     Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 
+  const exportDeliveryNoteExcel = async (order = {}) => {
+    try {
+      setExportingDnOrderId(Number(order.id));
+      const prepared = await api.prepareOrderDeliveryNote(order.id, token);
+      const preparedOrder = prepared.data || {};
+      const fulfillments = preparedOrder.warehouse_fulfillments || [];
+      if (!fulfillments.length) {
+        throw new Error("This order has no warehouse delivery notes to export.");
+      }
+
+      const XLSX = await import("xlsx-js-style");
+      const cleanSheetName = (value, index) => {
+        const cleaned = String(value || `DN ${index + 1}`)
+          .replace(/[\\/?*:[\]]/g, "-")
+          .trim()
+          .slice(0, 31);
+        return cleaned || `DN ${index + 1}`;
+      };
+      const deliveryNoteNumbers = fulfillments
+        .map(
+          (fulfillment) =>
+            fulfillment.delivery_note_number ||
+            fulfillment.warehouse_slip_number
+        )
+        .filter(Boolean);
+      const workbook = XLSX.utils.book_new();
+      const usedSheetNames = new Set();
+      const printedAt = new Date();
+      const orderPlacedEnglishDate = formatEnglishDate(
+        preparedOrder.created_at,
+        { includeTime: false }
+      );
+      const orderPlacedNepaliDate = formatNepaliDate(preparedOrder.created_at);
+      const orderPlacedTime = formatTime(preparedOrder.created_at);
+      const printedEnglishDate = formatEnglishDate(printedAt, {
+        includeTime: false,
+      });
+      const printedNepaliDate = formatNepaliDate(printedAt);
+      const printedTime = printedAt.toLocaleTimeString();
+      const borderSide = {
+        style: "thin",
+        color: { rgb: "111111" },
+      };
+      const border = {
+        top: borderSide,
+        bottom: borderSide,
+        left: borderSide,
+        right: borderSide,
+      };
+      const applyCellStyle = (sheet, range, style) => {
+        const decoded = XLSX.utils.decode_range(range);
+        for (let rowIndex = decoded.s.r; rowIndex <= decoded.e.r; rowIndex += 1) {
+          for (
+            let columnIndex = decoded.s.c;
+            columnIndex <= decoded.e.c;
+            columnIndex += 1
+          ) {
+            const address = XLSX.utils.encode_cell({
+              r: rowIndex,
+              c: columnIndex,
+            });
+            if (!sheet[address]) sheet[address] = { t: "s", v: "" };
+            sheet[address].s = {
+              ...(sheet[address].s || {}),
+              ...style,
+              border: style.border || sheet[address].s?.border,
+            };
+          }
+        }
+      };
+
+      fulfillments.forEach((fulfillment, fulfillmentIndex) => {
+        const dnNumber =
+          fulfillment.delivery_note_number ||
+          fulfillment.warehouse_slip_number ||
+          `DN ${fulfillmentIndex + 1}`;
+        const sourceItems = sortOrderItemsByName(fulfillment.items || []);
+        const rowsPerPage = 25;
+        const itemPages = [];
+        for (let itemIndex = 0; itemIndex < sourceItems.length; itemIndex += rowsPerPage) {
+          itemPages.push(sourceItems.slice(itemIndex, itemIndex + rowsPerPage));
+        }
+        if (!itemPages.length) itemPages.push([]);
+
+        itemPages.forEach((pageItems, pageIndex) => {
+          const overallCartons = Number(fulfillment.cartons || 0);
+          const overallPairs = Number(fulfillment.pairs || 0);
+          const pageCartons = pageItems.reduce((total, item) => {
+            const pairsPerCarton = Number(item.pairs_per_carton || 0);
+            return (
+              total +
+              (pairsPerCarton > 0
+                ? Number(item.quantity || 0) / pairsPerCarton
+                : 0)
+            );
+          }, 0);
+          const pagePairs = pageItems.reduce(
+            (total, item) => total + Number(item.quantity || 0),
+            0
+          );
+          const leftDetails = [
+            `Order ID: #${preparedOrder.id}`,
+            `Delivery Note: ${dnNumber}`,
+            `Warehouse: ${fulfillment.name || "-"}`,
+            `Order Placed: ${orderPlacedEnglishDate} · BS ${orderPlacedNepaliDate} · ${orderPlacedTime}`,
+            `Created By: ${preparedOrder.created_by_name || "-"}`,
+            `Printed: ${printedEnglishDate} · ${printedNepaliDate} · ${printedTime}`,
+            `Printed By: ${user?.name || "User"}`,
+          ].join("\n");
+          const rightDetails = [
+            `Customer: ${preparedOrder.customer_name || "-"}`,
+            `Phone: ${preparedOrder.customer_phone || "-"}`,
+            `Address: ${preparedOrder.customer_address || "-"}`,
+            `PAN: ${preparedOrder.pan_number || "-"}`,
+            `Transport: ${preparedOrder.transport_name || "-"}`,
+          ].join("\n");
+          const tableRows = Array.from({ length: rowsPerPage }, (_, rowIndex) => {
+            const item = pageItems[rowIndex];
+            if (!item) return ["", "", "", "", "", "", ""];
+            const pairs = Number(item.quantity || 0);
+            const pairsPerCarton = Number(item.pairs_per_carton || 0);
+            return [
+              pageIndex * rowsPerPage + rowIndex + 1,
+              Number(item.finished_good_id || 0) || "",
+              item.size || "-",
+              item.product_name || item.article_code || "-",
+              fulfillment.name || "-",
+              pairsPerCarton > 0 ? pairs / pairsPerCarton : "",
+              pairs,
+            ];
+          });
+          const sheetRows = [
+            ["DELIVERY NOTE", "", "", "", "", "", `Page ${pageIndex + 1} of ${itemPages.length}`],
+            [`${dnNumber} · ${fulfillment.name || "Warehouse"} · Overall Total: ${formatPrintNumber(overallCartons)} CTN`, "", "", "", "", "", ""],
+            [leftDetails, "", "", "", rightDetails, "", ""],
+            ["", "", "", "", "", "", ""],
+            ["", "", "", "", "", "", ""],
+            ["", "", "", "", "", "", ""],
+            ["", "", "", "", "", "", ""],
+            ["", "", "", "", "", "", ""],
+            ["S.No", "F.G. ID", "Size", "Description of Goods", "Warehouse", "Carton", "Pairs"],
+            ...tableRows,
+            ["This page", "", "", "", "", pageCartons, pagePairs],
+            [`${fulfillment.name || "Warehouse"} total`, "", "", "", "", overallCartons, overallPairs],
+            ["", "", "", "", "", "", ""],
+            ["___________________\nPacked / Delivered By", "", "___________________\nChecked By", "", "", "___________________\nReceived By", ""],
+          ];
+          const sheet = XLSX.utils.aoa_to_sheet(sheetRows);
+          sheet["!merges"] = [
+            { s: { r: 0, c: 0 }, e: { r: 0, c: 5 } },
+            { s: { r: 1, c: 0 }, e: { r: 1, c: 6 } },
+            { s: { r: 2, c: 0 }, e: { r: 7, c: 3 } },
+            { s: { r: 2, c: 4 }, e: { r: 7, c: 6 } },
+            { s: { r: 34, c: 0 }, e: { r: 34, c: 4 } },
+            { s: { r: 35, c: 0 }, e: { r: 35, c: 4 } },
+            { s: { r: 37, c: 0 }, e: { r: 37, c: 1 } },
+            { s: { r: 37, c: 2 }, e: { r: 37, c: 4 } },
+            { s: { r: 37, c: 5 }, e: { r: 37, c: 6 } },
+          ];
+          sheet["!cols"] = [
+            { wch: 7 },
+            { wch: 10 },
+            { wch: 11 },
+            { wch: 36 },
+            { wch: 21 },
+            { wch: 11 },
+            { wch: 11 },
+          ];
+          sheet["!rows"] = Array.from({ length: sheetRows.length }, (_, rowIndex) => ({
+            hpt:
+              rowIndex === 0
+                ? 27
+                : rowIndex === 1
+                  ? 23
+                  : rowIndex >= 2 && rowIndex <= 7
+                    ? 18
+                    : rowIndex === 37
+                      ? 38
+                      : 20,
+          }));
+          sheet["!margins"] = {
+            left: 0.3,
+            right: 0.3,
+            top: 0.35,
+            bottom: 0.35,
+            header: 0.1,
+            footer: 0.1,
+          };
+          sheet["!pageSetup"] = {
+            paperSize: 9,
+            orientation: "portrait",
+            fitToWidth: 1,
+            fitToHeight: 1,
+          };
+
+          applyCellStyle(sheet, "A1:F1", {
+            font: { name: "Arial", sz: 20, bold: true },
+            alignment: { horizontal: "center", vertical: "center" },
+          });
+          applyCellStyle(sheet, "G1:G1", {
+            font: { name: "Arial", sz: 10, bold: true },
+            alignment: { horizontal: "right", vertical: "center" },
+          });
+          applyCellStyle(sheet, "A2:G2", {
+            font: { name: "Arial", sz: 13, bold: true },
+            alignment: { horizontal: "center", vertical: "center" },
+            border,
+          });
+          applyCellStyle(sheet, "A3:D8", {
+            font: { name: "Arial", sz: 11 },
+            alignment: {
+              horizontal: "left",
+              vertical: "top",
+              wrapText: true,
+            },
+            border,
+          });
+          applyCellStyle(sheet, "E3:G8", {
+            font: { name: "Arial", sz: 11 },
+            alignment: {
+              horizontal: "left",
+              vertical: "top",
+              wrapText: true,
+            },
+            border,
+          });
+          applyCellStyle(sheet, "A9:G9", {
+            font: { name: "Arial", sz: 11, bold: true },
+            fill: {
+              patternType: "solid",
+              fgColor: { rgb: "E7E7E7" },
+            },
+            alignment: { horizontal: "center", vertical: "center", wrapText: true },
+            border,
+          });
+          applyCellStyle(sheet, "A10:G34", {
+            font: { name: "Arial", sz: 10 },
+            alignment: { vertical: "center", wrapText: true },
+            border,
+          });
+          applyCellStyle(sheet, "A35:G36", {
+            font: { name: "Arial", sz: 11, bold: true },
+            alignment: { vertical: "center" },
+            border,
+          });
+          applyCellStyle(sheet, "F10:G36", {
+            alignment: { horizontal: "right", vertical: "center" },
+          });
+          applyCellStyle(sheet, "A38:G38", {
+            font: { name: "Arial", sz: 10, bold: true },
+            alignment: { horizontal: "center", vertical: "bottom", wrapText: true },
+          });
+
+          const baseSheetName = `${dnNumber}${
+            itemPages.length > 1 ? ` P${pageIndex + 1}` : ""
+          }`;
+          let sheetName = cleanSheetName(baseSheetName, fulfillmentIndex);
+          let suffix = 2;
+          while (usedSheetNames.has(sheetName)) {
+            const suffixText = `-${suffix}`;
+            sheetName = `${cleanSheetName(baseSheetName, fulfillmentIndex).slice(
+              0,
+              31 - suffixText.length
+            )}${suffixText}`;
+            suffix += 1;
+          }
+          usedSheetNames.add(sheetName);
+          XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
+        });
+      });
+
+      const reference = deliveryNoteNumbers.length
+        ? deliveryNoteNumbers.join("-")
+        : `order-${preparedOrder.id}`;
+      const safeReference = reference
+        .replace(/[^a-z0-9-]+/gi, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80);
+      XLSX.writeFile(
+        workbook,
+        `${safeReference || `order-${preparedOrder.id}`}-delivery-notes.xlsx`,
+        { cellDates: true, cellStyles: true }
+      );
+      showToast({
+        tone: "success",
+        title: "DN Excel exported",
+        message: `${fulfillments.length} warehouse DN${
+          fulfillments.length === 1 ? "" : "s"
+        } exported in separate sheets.`,
+      });
+    } catch (error) {
+      const shortages = Array.isArray(error.data?.shortages)
+        ? error.data.shortages
+        : [];
+      const shortageDetails = shortages
+        .map(formatWarehouseShortage)
+        .join(" · ");
+      showToast({
+        tone: "error",
+        title: "Could not export DN Excel",
+        message: shortageDetails
+          ? `${error.message} ${shortageDetails}`
+          : error.message,
+      });
+    } finally {
+      setExportingDnOrderId(null);
+    }
+  };
+
   const printDeliveryNote = async (order = {}) => {
     const printWindow = window.open("", "_blank", "width=1000,height=760");
 
@@ -1154,15 +1505,7 @@ export default function OrdersPage() {
         ? error.data.shortages
         : [];
       const shortageDetails = shortages
-        .map((shortage) => {
-          const required = Number(
-            shortage.ordered_qty ?? shortage.requested ?? 0
-          );
-          const available = Number(
-            shortage.warehouse_stock ?? shortage.available ?? 0
-          );
-          return `${shortage.product_name || "Product"}: requires ${formatNumber(required)} pairs, ${formatNumber(available)} pairs can currently be allocated`;
-        })
+        .map(formatWarehouseShortage)
         .join(" · ");
       showToast({
         tone: "error",
@@ -1667,11 +2010,11 @@ export default function OrdersPage() {
                       <Select
                         options={availability.map((product) => ({
                           value: String(product.id),
-                          label: `${product.article_code || product.name} · ${product.color || "No color"} · ${formatNumber(product.inner_boxes_per_outer_box || 0)} pairs/CTN`,
+                          label: getAdminOrderProductLabel(product),
                         }))}
                         value={selected ? {
                           value: String(selected.id),
-                          label: `${selected.article_code || selected.name} · ${selected.color || "No color"} · ${formatNumber(selected.inner_boxes_per_outer_box || 0)} pairs/CTN`,
+                          label: getAdminOrderProductLabel(selected),
                         } : null}
                         onChange={(option) => updateOrderItemProduct(index, option?.value || "")}
                         placeholder="Search and select product..."
@@ -2076,15 +2419,28 @@ export default function OrdersPage() {
                     return (
                       <div className="grid gap-1">
                         {canPrint ? (
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm"
-                            title="Prepare one separate paper for each warehouse under the same DN"
-                            onClick={() => printDeliveryNote(row)}
-                          >
-                            🖨️ DN
-                          </Button>
+                          <>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm"
+                              title="Prepare one separate paper for each warehouse under the same DN"
+                              onClick={() => printDeliveryNote(row)}
+                            >
+                              🖨️ DN
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm"
+                              disabled={exportingDnOrderId === Number(row.id)}
+                              onClick={() => exportDeliveryNoteExcel(row)}
+                            >
+                              {exportingDnOrderId === Number(row.id)
+                                ? "Exporting DN..."
+                                : "Export DN Excel"}
+                            </Button>
+                          </>
                         ) : null}
 
                         {canChangeStatus ? (

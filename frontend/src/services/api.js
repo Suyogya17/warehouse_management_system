@@ -638,10 +638,23 @@ export const api = {
     apiRequest("/permissions/percentage-allocations", {}, token),
   getProductPercentageAllocationHistory: (token) =>
     apiRequest("/permissions/percentage-allocation-history", {}, token),
-  saveProductPercentageAllocations: (id, targets, token) =>
+  saveProductPercentageAllocations: (
+    id,
+    targets,
+    token,
+    allocationScope = "EXCLUSIVE",
+    publicQuantity = 0
+  ) =>
     apiRequest(
       `/permissions/percentage-allocations/${id}`,
-      { method: "PUT", body: JSON.stringify({ targets }) },
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          targets,
+          allocation_scope: allocationScope,
+          public_quantity: publicQuantity,
+        }),
+      },
       token
     ),
 

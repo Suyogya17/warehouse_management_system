@@ -40,23 +40,45 @@ export default function ProductPercentagePage() {
   const [selectedUserIds, setSelectedUserIds] = useState([]);
   const [percentages, setPercentages] = useState({});
   const [cartonQuantities, setCartonQuantities] = useState({});
+  const [pairQuantities, setPairQuantities] = useState({});
   const [divisionMode, setDivisionMode] = useState("PERCENTAGE");
+  const [allocationScope, setAllocationScope] = useState("CONTROLLED");
+  const [publicPairQuantity, setPublicPairQuantity] = useState(0);
+  const [publicUsedQuantity, setPublicUsedQuantity] = useState(0);
+  const [controlledUsedByUser, setControlledUsedByUser] = useState({});
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const [
         productResult,
+        availabilityResult,
         userResult,
         allocationResult,
         historyResult,
       ] = await Promise.all([
         api.getFinishedGoods(token),
+        api.getAvailability(token, { includeHidden: true }),
         api.getUsers(token),
         api.getProductPercentageAllocations(token),
         api.getProductPercentageAllocationHistory(token),
       ]);
-      setProducts(productResult.data || []);
+      const availabilityById = new Map(
+        (availabilityResult.data || []).map((product) => [
+          Number(product.id),
+          product,
+        ])
+      );
+      setProducts(
+        (productResult.data || []).map((product) => ({
+          ...product,
+          available_qty:
+            availabilityById.get(Number(product.id))?.available_qty ??
+            product.quantity,
+          reserved_qty:
+            availabilityById.get(Number(product.id))?.reserved_qty ?? 0,
+        }))
+      );
       setUsers(
         (userResult.data || []).filter(
           (user) => String(user.role || "").toUpperCase() === "USER"
@@ -174,8 +196,22 @@ export default function ProductPercentagePage() {
   const openEditor = (product) => {
     const saved = allocationsByProduct.get(Number(product.id)) || [];
     const pairsPerCarton = Number(product.inner_boxes_per_outer_box || 0);
+    const savedScope = String(
+      saved[0]?.allocation_scope || "CONTROLLED"
+    ).toUpperCase();
     setEditing(product);
-    setDivisionMode("PERCENTAGE");
+    setDivisionMode(savedScope === "CONTROLLED" ? "PAIRS" : "PERCENTAGE");
+    setAllocationScope(savedScope);
+    setPublicPairQuantity(Number(saved[0]?.public_quantity || 0));
+    setPublicUsedQuantity(Number(saved[0]?.public_used_quantity || 0));
+    setControlledUsedByUser(
+      Object.fromEntries(
+        saved.map((target) => [
+          Number(target.user_id),
+          Number(target.ordered_quantity || 0),
+        ])
+      )
+    );
     setSelectedUserIds(saved.map((target) => Number(target.user_id)));
     setPercentages(
       Object.fromEntries(
@@ -195,6 +231,14 @@ export default function ProductPercentagePage() {
         ])
       )
     );
+    setPairQuantities(
+      Object.fromEntries(
+        saved.map((target) => [
+          Number(target.user_id),
+          Number(target.allocation_quantity || 0),
+        ])
+      )
+    );
   };
 
   const percentageTargets = selectedUserIds.map((userId) => ({
@@ -205,12 +249,97 @@ export default function ProductPercentagePage() {
     user_id: Number(userId),
     cartons: cartonQuantities[userId],
   }));
+  const pairTargets = selectedUserIds.map((userId) => ({
+    user_id: Number(userId),
+    pairs: pairQuantities[userId],
+  }));
+  const editorAvailablePairs = Number(
+    editing?.available_qty ?? editing?.quantity ?? 0
+  );
+  const controlledUsedPairs = Object.values(controlledUsedByUser).reduce(
+    (sum, quantity) => sum + Number(quantity || 0),
+    Number(publicUsedQuantity || 0)
+  );
+  // A controlled allocation stores each user's lifetime allowance. Available
+  // stock excludes pending orders and delivered stock, so add the recorded
+  // controlled usage back when converting exact CTN/pairs to percentages.
+  const editorAllocationBasePairs =
+    allocationScope === "CONTROLLED"
+      ? editorAvailablePairs + controlledUsedPairs
+      : editorAvailablePairs;
   const calculatedAllocations = useMemo(
-    () =>
-      divisionMode === "CTN"
-        ? getCartonAllocations(editing, cartonTargets)
-        : getPercentageAllocations(editing, percentageTargets),
-    [cartonTargets, divisionMode, editing, percentageTargets]
+    () => {
+      if (divisionMode === "CTN") {
+        if (allocationScope === "CONTROLLED") {
+          const pairsPerCarton = Number(
+            editing?.inner_boxes_per_outer_box || 0
+          );
+          return new Map(
+            cartonTargets
+              .filter(
+                (target) =>
+                  Number(target.cartons) > 0 && pairsPerCarton > 0
+              )
+              .map((target) => {
+                const cartons = Number(target.cartons);
+                const pairs = Math.floor(cartons * pairsPerCarton);
+                return [
+                  Number(target.user_id),
+                  {
+                    user_id: Number(target.user_id),
+                    cartons,
+                    pairs,
+                    percentage:
+                      editorAllocationBasePairs > 0
+                        ? (pairs / editorAllocationBasePairs) * 100
+                        : 0,
+                  },
+                ];
+              })
+          );
+        }
+        return getCartonAllocations(editing, cartonTargets);
+      }
+      if (divisionMode === "PAIRS") {
+        const pairsPerCarton = Number(
+          editing?.inner_boxes_per_outer_box || 0
+        );
+        return new Map(
+          pairTargets
+            .filter((target) => Number(target.pairs) > 0)
+            .map((target) => {
+              const pairs = Math.floor(Number(target.pairs));
+              return [
+                Number(target.user_id),
+                {
+                  user_id: Number(target.user_id),
+                  pairs,
+                  cartons: pairsPerCarton > 0 ? pairs / pairsPerCarton : 0,
+                  percentage:
+                    editorAllocationBasePairs > 0
+                      ? (pairs / editorAllocationBasePairs) * 100
+                      : 0,
+                },
+              ];
+            })
+        );
+      }
+      return getPercentageAllocations(
+        allocationScope === "CONTROLLED"
+          ? { ...editing, available_qty: editorAllocationBasePairs }
+          : editing,
+        percentageTargets
+      );
+    },
+    [
+      allocationScope,
+      cartonTargets,
+      divisionMode,
+      editing,
+      editorAllocationBasePairs,
+      pairTargets,
+      percentageTargets,
+    ]
   );
   const percentageTotal = [...calculatedAllocations.values()].reduce(
     (sum, allocation) => sum + Number(allocation.percentage || 0),
@@ -224,18 +353,51 @@ export default function ProductPercentagePage() {
     (sum, allocation) => sum + Number(allocation.pairs || 0),
     0
   );
-  const editorTotalPairs = Number(editing?.quantity || 0);
+  const editorTotalPairs = editorAvailablePairs;
   const editorTotalCartons = getRoundedCartons(
-    editorTotalPairs,
+    editorAllocationBasePairs,
     editing?.inner_boxes_per_outer_box
   );
-  const unassignedCartons = Math.max(0, editorTotalCartons - assignedCartons);
-  const unassignedPairs = Math.max(0, editorTotalPairs - assignedPairs);
+  const unassignedPairs = Math.max(
+    0,
+    editorAllocationBasePairs - assignedPairs
+  );
+  const editorPairsPerCarton = Number(
+    editing?.inner_boxes_per_outer_box || 0
+  );
+  const unassignedCartons =
+    editorPairsPerCarton > 0 ? unassignedPairs / editorPairsPerCarton : 0;
   const hasInvalidAllocation = selectedUserIds.some(
     (userId) =>
       Number(calculatedAllocations.get(Number(userId))?.cartons || 0) <= 0
   );
-  const allocationExceedsStock = assignedCartons > editorTotalCartons;
+  const controlledPersonalRemainingPairs = [...calculatedAllocations.entries()].reduce(
+    (sum, [userId, allocation]) =>
+      sum +
+      Math.max(
+        0,
+        Number(allocation.pairs || 0) -
+          Number(controlledUsedByUser[Number(userId)] || 0)
+      ),
+    0
+  );
+  const controlledPublicRemainingPairs = Math.max(
+    0,
+    Number(publicPairQuantity || 0) - Number(publicUsedQuantity || 0)
+  );
+  const controlledReleasedRemainingPairs =
+    controlledPersonalRemainingPairs + controlledPublicRemainingPairs;
+  const allocationBelowUsed =
+    allocationScope === "CONTROLLED" &&
+    [...calculatedAllocations.entries()].some(
+      ([userId, allocation]) =>
+        Number(allocation.pairs || 0) <
+        Number(controlledUsedByUser[Number(userId)] || 0)
+    );
+  const allocationExceedsStock =
+    allocationScope === "CONTROLLED"
+      ? controlledReleasedRemainingPairs > editorTotalPairs
+      : assignedPairs > editorTotalPairs;
 
   const changeDivisionMode = (nextMode) => {
     if (nextMode === divisionMode) return;
@@ -247,6 +409,15 @@ export default function ProductPercentagePage() {
             Number(
               calculatedAllocations.get(Number(userId))?.cartons || 0
             ),
+          ])
+        )
+      );
+    } else if (nextMode === "PAIRS") {
+      setPairQuantities(
+        Object.fromEntries(
+          selectedUserIds.map((userId) => [
+            Number(userId),
+            Number(calculatedAllocations.get(Number(userId))?.pairs || 0),
           ])
         )
       );
@@ -273,15 +444,23 @@ export default function ProductPercentagePage() {
       return {
         user_id: Number(userId),
         allocation_percentage:
-          divisionMode === "CTN"
-            ? Number(allocation?.percentage || 0)
-            : Number(percentages[userId]),
+          divisionMode === "PERCENTAGE"
+            ? Number(percentages[userId])
+            : Number(allocation?.percentage || 0),
         allocation_quantity: Number(allocation?.pairs || 0),
       };
     });
     try {
       setSaving(true);
-      await api.saveProductPercentageAllocations(editing.id, targets, token);
+      await api.saveProductPercentageAllocations(
+        editing.id,
+        targets,
+        token,
+        allocationScope,
+        allocationScope === "CONTROLLED"
+          ? Number(publicPairQuantity || 0)
+          : 0
+      );
       showToast({
         tone: "success",
         title: "Product quantity separated",
@@ -328,13 +507,13 @@ export default function ProductPercentagePage() {
       <PageHeader
         eyebrow="Product access"
         title="Product Percentage / CTN Allocation"
-        description="Separate normal product stock between selected users by percentage or whole cartons."
+        description="Protect product quantities for selected users, or make a product exclusive to them. Allocate by percentage or whole cartons."
         icon="users"
       />
 
       <SectionCard
         title="Products"
-        subtitle="An allocated product is visible only to its selected users. Their orders reduce their personal balance."
+        subtitle="Exclusive allocations hide the product from other users. Private allocations protect selected quantities while other permitted users share the remainder."
         icon="finishedGoods"
         actions={
           <div className="grid w-full gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(260px,1fr)_190px_180px_auto]">
@@ -402,7 +581,7 @@ export default function ProductPercentagePage() {
                 product.inner_boxes_per_outer_box || 0
               );
               const totalCartons = getRoundedCartons(
-                product.quantity,
+                product.available_qty ?? product.quantity,
                 pairsPerCarton
               );
               const assignedPairs = targets.reduce(
@@ -414,6 +593,26 @@ export default function ProductPercentagePage() {
                 pairsPerCarton > 0
                   ? Math.floor(assignedPairs / pairsPerCarton)
                   : 0;
+              const savedAllocationScope = String(
+                targets[0]?.allocation_scope || "EXCLUSIVE"
+              ).toUpperCase();
+              const personalRemainingPairs = targets.reduce(
+                (sum, target) =>
+                  sum + Number(target.remaining_quantity || 0),
+                0
+              );
+              const publicRemainingPairs = Number(
+                targets[0]?.public_remaining_quantity || 0
+              );
+              const currentlyAvailablePairs = Number(
+                product.available_qty ?? product.quantity ?? 0
+              );
+              const unreleasedPairs = Math.max(
+                0,
+                currentlyAvailablePairs -
+                  personalRemainingPairs -
+                  publicRemainingPairs
+              );
               return (
                 <article
                   key={product.id}
@@ -434,16 +633,26 @@ export default function ProductPercentagePage() {
                     </div>
                     <StatusBadge tone={targets.length ? "success" : "neutral"}>
                       {targets.length
-                        ? `${targets.length} selected`
+                        ? `${targets.length} · ${
+                            String(
+                              targets[0]?.allocation_scope || "EXCLUSIVE"
+                            ).toUpperCase() === "CONTROLLED"
+                              ? "Controlled"
+                              : String(
+                                    targets[0]?.allocation_scope || "EXCLUSIVE"
+                                  ).toUpperCase() === "PRIVATE"
+                                ? "Private qty"
+                                : "Exclusive"
+                          }`
                         : "Not allocated"}
                     </StatusBadge>
                   </div>
 
                   <div className="mt-4 grid grid-cols-3 gap-2 text-center">
                     <div className="rounded-xl bg-slate-50 px-2 py-2">
-                      <p className="text-[10px] uppercase text-slate-400">Stock</p>
+                      <p className="text-[10px] uppercase text-slate-400">Available</p>
                       <p className="font-bold text-slate-900">
-                        {formatNumber(product.quantity)}
+                        {formatNumber(product.available_qty ?? product.quantity)}
                       </p>
                     </div>
                     <div className="rounded-xl bg-indigo-50 px-2 py-2">
@@ -514,6 +723,35 @@ export default function ProductPercentagePage() {
                           </div>
                         );
                       })}
+                    </div>
+                  ) : null}
+
+                  {targets.length && savedAllocationScope === "CONTROLLED" ? (
+                    <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl border border-violet-200 bg-violet-50 p-3 text-center">
+                      <div>
+                        <p className="text-[10px] font-bold uppercase text-violet-500">
+                          Personal left
+                        </p>
+                        <p className="text-xs font-black text-violet-950">
+                          {formatNumber(personalRemainingPairs)} pairs
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-bold uppercase text-violet-500">
+                          Public left
+                        </p>
+                        <p className="text-xs font-black text-violet-950">
+                          {formatNumber(publicRemainingPairs)} pairs
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-bold uppercase text-slate-500">
+                          Unreleased
+                        </p>
+                        <p className="text-xs font-black text-slate-950">
+                          {formatNumber(unreleasedPairs)} pairs
+                        </p>
+                      </div>
                     </div>
                   ) : null}
 
@@ -640,7 +878,7 @@ export default function ProductPercentagePage() {
               },
               {
                 key: "assigned_quantity",
-                label: "Assigned",
+                label: "Assigned / protected",
                 exportValue: (row) =>
                   row.has_snapshot
                     ? `${row.assigned_cartons} CTN / ${row.assigned_quantity} pairs / ${row.percentage_total}%`
@@ -652,6 +890,11 @@ export default function ProductPercentagePage() {
                       <p className="text-xs text-slate-500">
                         {formatNumber(row.assigned_quantity)} pairs ·{" "}
                         {formatPercentage(row.percentage_total)}%
+                      </p>
+                      <p className="text-[10px] font-bold uppercase text-indigo-600">
+                        {row.allocation_scope === "PRIVATE"
+                          ? "Private quantity"
+                          : "Exclusive users"}
                       </p>
                     </div>
                   ) : (
@@ -777,11 +1020,121 @@ export default function ProductPercentagePage() {
                   Allocate {editing.article_code || editing.name}
                 </h2>
                 <p className="text-sm text-slate-500">
-                  Divide the product by percentage or whole CTN. Both values
-                  stay visible while you allocate.
+                  Choose whether this product is exclusive to selected users or
+                  only protects their assigned quantity from other users.
                 </p>
               </div>
             </div>
+
+            <div className="mt-4 grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2 lg:grid-cols-3">
+              <button
+                type="button"
+                onClick={() => setAllocationScope("CONTROLLED")}
+                className={`rounded-xl border p-3 text-left transition ${
+                  allocationScope === "CONTROLLED"
+                    ? "border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100"
+                    : "border-slate-200 bg-white hover:border-slate-300"
+                }`}
+              >
+                <span className="block text-sm font-bold text-slate-950">
+                  Controlled release
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-slate-600">
+                  Everything starts hidden. Release exact personal quantities
+                  now, add another user later, and release a shared public
+                  balance only when you choose.
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllocationScope("PRIVATE")}
+                className={`rounded-xl border p-3 text-left transition ${
+                  allocationScope === "PRIVATE"
+                    ? "border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100"
+                    : "border-slate-200 bg-white hover:border-slate-300"
+                }`}
+              >
+                <span className="block text-sm font-bold text-slate-950">
+                  Private quantity + public remainder
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-slate-600">
+                  Protect the assigned CTN/pairs for selected users. Other
+                  permitted users can see and order only the quantity left
+                  outside this private allocation.
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllocationScope("EXCLUSIVE")}
+                className={`rounded-xl border p-3 text-left transition ${
+                  allocationScope === "EXCLUSIVE"
+                    ? "border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100"
+                    : "border-slate-200 bg-white hover:border-slate-300"
+                }`}
+              >
+                <span className="block text-sm font-bold text-slate-950">
+                  Exclusive selected users
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-slate-600">
+                  Current behaviour. The whole product is hidden from every
+                  unselected user, regardless of the unassigned balance.
+                </span>
+              </button>
+            </div>
+
+            {allocationScope === "CONTROLLED" ? (
+              <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50 p-4">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <p className="text-sm font-bold text-violet-950">
+                      Public release
+                    </p>
+                    <p className="text-xs text-violet-700">
+                      This balance is shared by every permitted user. Keep it at
+                      zero while the remaining stock must stay hidden.
+                    </p>
+                  </div>
+                  <p className="text-xs font-semibold text-violet-700">
+                    Already ordered publicly: {formatNumber(publicUsedQuantity)} pairs
+                  </p>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="text-xs font-bold uppercase text-violet-800">
+                    Public CTN
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={
+                        editorPairsPerCarton > 0
+                          ? Number(publicPairQuantity || 0) / editorPairsPerCarton
+                          : 0
+                      }
+                      onChange={(event) =>
+                        setPublicPairQuantity(
+                          Math.max(0, Number(event.target.value || 0)) *
+                            editorPairsPerCarton
+                        )
+                      }
+                      className="mt-1 h-10 w-full rounded-lg border border-violet-200 bg-white px-3 text-sm"
+                    />
+                  </label>
+                  <label className="text-xs font-bold uppercase text-violet-800">
+                    Public pairs
+                    <input
+                      type="number"
+                      min={publicUsedQuantity}
+                      step="1"
+                      value={publicPairQuantity}
+                      onChange={(event) =>
+                        setPublicPairQuantity(event.target.value)
+                      }
+                      className="mt-1 h-10 w-full rounded-lg border border-violet-200 bg-white px-3 text-sm"
+                    />
+                  </label>
+                </div>
+              </div>
+            ) : null}
 
             <div className="mt-4 grid grid-cols-3 gap-2 text-center">
               <div className="rounded-xl bg-indigo-50 p-3">
@@ -820,7 +1173,7 @@ export default function ProductPercentagePage() {
             </div>
 
             <div className="mt-4 rounded-xl border border-slate-200 p-1">
-              <div className="grid grid-cols-2 gap-1">
+              <div className="grid grid-cols-3 gap-1">
                 <button
                   type="button"
                   onClick={() => changeDivisionMode("PERCENTAGE")}
@@ -842,6 +1195,17 @@ export default function ProductPercentagePage() {
                   }`}
                 >
                   Divide by CTN
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeDivisionMode("PAIRS")}
+                  className={`rounded-lg px-3 py-2 text-sm font-semibold ${
+                    divisionMode === "PAIRS"
+                      ? "bg-indigo-600 text-white"
+                      : "text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  Divide by pairs
                 </button>
               </div>
             </div>
@@ -880,6 +1244,12 @@ export default function ProductPercentagePage() {
                             ...current,
                             [userId]: current[userId] || 1,
                           }));
+                          setPairQuantities((current) => ({
+                            ...current,
+                            [userId]:
+                              current[userId] ||
+                              Number(editing.inner_boxes_per_outer_box || 1),
+                          }));
                         }
                       }}
                     />
@@ -899,28 +1269,41 @@ export default function ProductPercentagePage() {
                       ) : null}
                     </div>
                     <label className="text-[11px] font-semibold uppercase text-slate-500">
-                      {divisionMode === "CTN" ? "CTN" : "Percentage"}
+                      {divisionMode === "CTN"
+                        ? "CTN"
+                        : divisionMode === "PAIRS"
+                          ? "Pairs"
+                          : "Percentage"}
                       <input
                         type="number"
-                        min={divisionMode === "CTN" ? "1" : "0.01"}
+                        min={divisionMode === "PERCENTAGE" ? "0.01" : "1"}
                         max={
                           divisionMode === "CTN"
                             ? editorTotalCartons
-                            : "100"
+                            : divisionMode === "PAIRS"
+                              ? editorAllocationBasePairs
+                              : "100"
                         }
-                        step={divisionMode === "CTN" ? "1" : "0.01"}
+                        step={divisionMode === "PERCENTAGE" ? "0.01" : "1"}
                         required={checked}
                         disabled={!checked}
                         value={
                           checked
                             ? divisionMode === "CTN"
                               ? cartonQuantities[userId] ?? ""
-                              : percentage
+                              : divisionMode === "PAIRS"
+                                ? pairQuantities[userId] ?? ""
+                                : percentage
                             : ""
                         }
                         onChange={(event) => {
                           if (divisionMode === "CTN") {
                             setCartonQuantities((current) => ({
+                              ...current,
+                              [userId]: event.target.value,
+                            }));
+                          } else if (divisionMode === "PAIRS") {
+                            setPairQuantities((current) => ({
                               ...current,
                               [userId]: event.target.value,
                             }));
@@ -947,7 +1330,7 @@ export default function ProductPercentagePage() {
               }`}
             >
               <p>
-                Total assigned: {formatPercentage(percentageTotal)}% ·{" "}
+                {allocationScope === "PRIVATE" ? "Total protected" : "Total assigned"}: {formatPercentage(percentageTotal)}% ·{" "}
                 {formatNumber(assignedCartons)} CTN ·{" "}
                 {formatNumber(assignedPairs)} pairs
               </p>
@@ -958,6 +1341,18 @@ export default function ProductPercentagePage() {
                 {formatNumber(unassignedCartons)} CTN ·{" "}
                 {formatNumber(unassignedPairs)} pairs
               </p>
+              {allocationScope === "CONTROLLED" ? (
+                <>
+                  <p className="mt-2">
+                    Public remaining: {formatNumber(controlledPublicRemainingPairs)} pairs
+                  </p>
+                  <p className="mt-1 font-bold">
+                    Still unreleased / hidden: {formatNumber(
+                      Math.max(0, editorTotalPairs - controlledReleasedRemainingPairs)
+                    )} pairs
+                  </p>
+                </>
+              ) : null}
             </div>
             {allocationExceedsStock ? (
               <p className="mt-2 text-sm font-medium text-red-600">
@@ -968,6 +1363,12 @@ export default function ProductPercentagePage() {
               <p className="mt-2 text-sm font-medium text-red-600">
                 The stock is too small to give every selected user at least one
                 full carton.
+              </p>
+            ) : null}
+            {allocationBelowUsed ? (
+              <p className="mt-2 text-sm font-medium text-red-600">
+                A user allocation cannot be lower than what that user has
+                already ordered.
               </p>
             ) : null}
 
@@ -984,11 +1385,18 @@ export default function ProductPercentagePage() {
                 icon="check"
                 disabled={
                   saving ||
-                  !selectedUserIds.length ||
+                  (!selectedUserIds.length &&
+                    !(
+                      allocationScope === "CONTROLLED" &&
+                      Number(publicPairQuantity || 0) > 0
+                    )) ||
                   percentageTotal <= 0 ||
                   percentageTotal > 100 ||
                   allocationExceedsStock ||
-                  hasInvalidAllocation
+                  hasInvalidAllocation ||
+                  allocationBelowUsed ||
+                  (allocationScope === "CONTROLLED" &&
+                    Number(publicPairQuantity || 0) < publicUsedQuantity)
                 }
               >
                 {saving ? "Saving" : "Save allocation"}

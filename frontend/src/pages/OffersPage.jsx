@@ -86,6 +86,7 @@ export default function OffersPage() {
     offer_division_mode: "PERCENTAGE",
   });
   const [saving, setSaving] = useState(false);
+  const [exportingOffers, setExportingOffers] = useState(false);
   const offers = useMemo(() => products.filter(isActiveOffer), [products]);
   const expiredOffers = useMemo(
     () => products.filter(isExpiredOffer),
@@ -245,6 +246,46 @@ export default function OffersPage() {
       : getCustomerVisibleStock(item);
     return stockFilter === "IN_STOCK" ? available > 0 : available <= 0;
   }), [canManage, stockFilter, stockFilterCandidates]);
+  const exportOfferProducts = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return offers
+      .map((item) => {
+        const availability = offerAvailabilityById.get(Number(item.id));
+        return availability
+          ? {
+              ...item,
+              physical_stock: Number(
+                availability.physical_stock ?? item.quantity ?? 0
+              ),
+              reserved_qty: Number(availability.reserved_qty || 0),
+              available_qty: Number(
+                availability.available_qty ?? item.quantity ?? 0
+              ),
+            }
+          : item;
+      })
+      .filter((item) => {
+        const available = Number(item.available_qty ?? item.quantity ?? 0);
+        const matchesSeries =
+          !seriesFilter || getSeriesName(item.sole_code) === seriesFilter;
+        const matchesSearch =
+          !q ||
+          [item.id, item.name, item.article_code, item.sole_code, item.color]
+            .some((value) =>
+              String(value || "").toLowerCase().includes(q)
+            );
+        const matchesStock =
+          stockFilter === "ALL" ||
+          (stockFilter === "IN_STOCK" ? available > 0 : available <= 0);
+        return matchesSeries && matchesSearch && matchesStock;
+      });
+  }, [
+    offerAvailabilityById,
+    offers,
+    search,
+    seriesFilter,
+    stockFilter,
+  ]);
   const trackOfferInterest = useProductInterestTracking({
     token,
     search,
@@ -447,6 +488,257 @@ export default function OffersPage() {
     }
   };
 
+  const exportActiveOffers = async () => {
+    if (!exportOfferProducts.length) {
+      showToast({
+        tone: "error",
+        title: "Nothing to export",
+        message: "No active offers match the current filters.",
+      });
+      return;
+    }
+
+    try {
+      setExportingOffers(true);
+      const XLSX = await import("xlsx");
+      const customerById = new Map(
+        customers.map((customer) => [Number(customer.id), customer])
+      );
+      const asDate = (value) => {
+        if (!value) return null;
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+      };
+      const fullCartons = (pairs, cartonSize) =>
+        getFullCartons(pairs, cartonSize);
+      const loosePairs = (pairs, cartonSize) => {
+        const quantity = Math.max(0, Math.floor(Number(pairs || 0)));
+        const size = Math.max(0, Math.floor(Number(cartonSize || 0)));
+        return size > 0 ? quantity % size : quantity;
+      };
+      const dealerColumns = [
+        ...new Set(
+          exportOfferProducts.flatMap((product) =>
+            (product.offer_targets || []).map((target) =>
+              Number(target.user_id)
+            )
+          )
+        ),
+      ]
+        .map((userId) => {
+          const customer = customerById.get(userId);
+          const dealerName =
+            customer?.name || customer?.email || `User ${userId}`;
+          return {
+            userId,
+            name: dealerName,
+            columnLabel: `${dealerName} (ID ${userId})`,
+          };
+        })
+        .sort((left, right) =>
+          left.name.localeCompare(right.name, undefined, {
+            numeric: true,
+            sensitivity: "base",
+          })
+        );
+
+      const productRows = exportOfferProducts.map((product) => {
+        const cartonSize = getOfferCartonSize(product);
+        const availablePairs = Number(
+          product.available_qty ?? product.quantity ?? 0
+        );
+        const startingPairs = Number(
+          product.offer_stock_quantity_snapshot ?? product.quantity ?? 0
+        );
+        const targets = product.offer_targets || [];
+        const targetNames = targets.map((target) => {
+          const customer = customerById.get(Number(target.user_id));
+          return customer?.name || customer?.email || `User ${target.user_id}`;
+        });
+        const dealerAllocationSummary = targets
+          .map((target) => {
+            const customer = customerById.get(Number(target.user_id));
+            const dealerName =
+              customer?.name || customer?.email || `User ${target.user_id}`;
+            const assignedPairs = Number(target.display_quantity || 0);
+            const assignedCartons = fullCartons(assignedPairs, cartonSize);
+            const assignedLoosePairs = loosePairs(assignedPairs, cartonSize);
+            return `${dealerName}: ${assignedCartons} CTN${
+              assignedLoosePairs > 0 ? ` + ${assignedLoosePairs} loose pairs` : ""
+            } / ${assignedPairs} pairs`;
+          })
+          .join("; ");
+        const targetByUserId = new Map(
+          targets.map((target) => [Number(target.user_id), target])
+        );
+        const dealerQuantityColumns = Object.fromEntries(
+          dealerColumns.flatMap((dealer) => {
+            const target = targetByUserId.get(dealer.userId);
+            const assignedPairs = target
+              ? Number(target.display_quantity || 0)
+              : null;
+            return [
+              [
+                `${dealer.columnLabel} Full CTN`,
+                assignedPairs === null
+                  ? null
+                  : fullCartons(assignedPairs, cartonSize),
+              ],
+              [`${dealer.columnLabel} Pairs`, assignedPairs],
+            ];
+          })
+        );
+        return {
+          "FG.ID": Number(product.id),
+          Article: product.article_code || "",
+          Product: product.name || "",
+          Series: getSeriesName(product.sole_code) || product.sole_code || "",
+          Color: product.color || "",
+          Size: product.size || "",
+          "Offer label": product.offer_label || "Special offer",
+          "Offer period ID": Number(product.offer_campaign_id || 0) || "",
+          "Offer started": asDate(product.offer_campaign_started_at),
+          "Offer ends": asDate(product.offer_ends_at),
+          Audience:
+            Number(product.offer_all_users ?? 1) === 1
+              ? "All users"
+              : "Selected users",
+          "Selected users": targetNames.join(", "),
+          "Dealer allocations":
+            Number(product.offer_all_users ?? 1) === 1
+              ? "Shared with all permitted dealers"
+              : dealerAllocationSummary,
+          ...dealerQuantityColumns,
+          "Starting pairs": startingPairs,
+          "Starting full CTN": fullCartons(startingPairs, cartonSize),
+          "Starting loose pairs": loosePairs(startingPairs, cartonSize),
+          "Physical stock pairs": Number(
+            product.physical_stock ?? product.quantity ?? 0
+          ),
+          "Reserved pairs": Number(product.reserved_qty || 0),
+          "Available pairs": availablePairs,
+          "Available full CTN": fullCartons(availablePairs, cartonSize),
+          "Available loose pairs": loosePairs(availablePairs, cartonSize),
+          "Pairs per CTN": Number(cartonSize || 0),
+          "Original price NPR": Number(product.price || 0),
+          "Offer price NPR":
+            Number(product.price || 0) > 0
+              ? Number(product.price || 0) + 50
+              : null,
+          "Stock status": availablePairs > 0 ? "In stock" : "Out of stock",
+        };
+      });
+
+      const allocationRows = exportOfferProducts.flatMap((product) => {
+        const cartonSize = getOfferCartonSize(product);
+        if (Number(product.offer_all_users ?? 1) === 1) {
+          return [
+            {
+              "FG.ID": Number(product.id),
+              Article: product.article_code || product.name || "",
+              Series: getSeriesName(product.sole_code) || product.sole_code || "",
+              Color: product.color || "",
+              Audience: "All users",
+              Dealer: "All permitted dealers",
+              Email: "",
+              "Assigned percentage": null,
+              "Assigned pairs": null,
+              "Assigned full CTN": null,
+              "Assigned loose pairs": null,
+            },
+          ];
+        }
+        return (product.offer_targets || []).map((target) => {
+          const customer = customerById.get(Number(target.user_id));
+          const assignedPairs = Number(target.display_quantity || 0);
+          return {
+            "FG.ID": Number(product.id),
+            Article: product.article_code || product.name || "",
+            Series: getSeriesName(product.sole_code) || product.sole_code || "",
+            Color: product.color || "",
+            Audience: "Selected user",
+            Dealer: customer?.name || `User ${target.user_id}`,
+            Email: customer?.email || "",
+            "Assigned percentage":
+              target.display_percentage === null ||
+              target.display_percentage === undefined
+                ? null
+                : Number(target.display_percentage) / 100,
+            "Assigned pairs": assignedPairs,
+            "Assigned full CTN": fullCartons(assignedPairs, cartonSize),
+            "Assigned loose pairs": loosePairs(assignedPairs, cartonSize),
+          };
+        });
+      });
+
+      const productsSheet = XLSX.utils.json_to_sheet(productRows, {
+        cellDates: true,
+      });
+      productsSheet["!cols"] = [
+        { wch: 8 }, { wch: 18 }, { wch: 30 }, { wch: 16 },
+        { wch: 16 }, { wch: 10 }, { wch: 20 }, { wch: 15 },
+        { wch: 20 }, { wch: 20 }, { wch: 16 }, { wch: 38 },
+        { wch: 60 },
+        ...dealerColumns.flatMap(() => [{ wch: 22 }, { wch: 20 }]),
+        { wch: 14 }, { wch: 17 }, { wch: 19 },
+        { wch: 20 }, { wch: 14 }, { wch: 15 }, { wch: 18 },
+        { wch: 20 }, { wch: 14 }, { wch: 18 }, { wch: 16 },
+        { wch: 15 },
+      ];
+      productsSheet["!autofilter"] = {
+        ref: productsSheet["!ref"],
+      };
+
+      const allocationSheet = XLSX.utils.json_to_sheet(allocationRows);
+      allocationSheet["!cols"] = [
+        { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 16 },
+        { wch: 18 }, { wch: 24 }, { wch: 30 }, { wch: 20 },
+        { wch: 16 }, { wch: 19 }, { wch: 20 },
+      ];
+      allocationSheet["!autofilter"] = {
+        ref: allocationSheet["!ref"],
+      };
+      const allocationRange = XLSX.utils.decode_range(
+        allocationSheet["!ref"] || "A1:A1"
+      );
+      for (let row = 1; row <= allocationRange.e.r; row += 1) {
+        const percentageCell = allocationSheet[
+          XLSX.utils.encode_cell({ r: row, c: 7 })
+        ];
+        if (percentageCell && typeof percentageCell.v === "number") {
+          percentageCell.z = "0.00%";
+        }
+      }
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, productsSheet, "Active Offers");
+      XLSX.utils.book_append_sheet(
+        workbook,
+        allocationSheet,
+        "Dealer Allocations"
+      );
+      const today = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(workbook, `active-offers-${today}.xlsx`, {
+        cellDates: true,
+      });
+      showToast({
+        tone: "success",
+        title: "Offers exported",
+        message: `${productRows.length} active offer product${
+          productRows.length === 1 ? "" : "s"
+        } exported.`,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Could not export offers",
+        message: error.message,
+      });
+    } finally {
+      setExportingOffers(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader title={canManage ? "Product Offers" : "Offers"} description={canManage ? "Choose products, set the audience, and publish offers for customers." : "Browse products currently available as special offers."} />
@@ -461,6 +753,16 @@ export default function OffersPage() {
             <Button type="button" variant={showOfferStockTable ? "primary" : "secondary"} onClick={toggleOfferStockTable}>Offer stock by user</Button>
             <Button type="button" variant={showOfferAllocationReport ? "primary" : "secondary"} onClick={toggleOfferAllocationReport}>Offer allocation report</Button>
             <Button type="button" variant={showOfferHistory ? "primary" : "secondary"} onClick={toggleOfferHistory}>Offer history: beginning to now</Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={exportActiveOffers}
+              disabled={exportingOffers || !exportOfferProducts.length}
+            >
+              {exportingOffers
+                ? "Exporting..."
+                : `Export active offers (${exportOfferProducts.length})`}
+            </Button>
           </div>
         )}
         {canManage && showOfferAllocationReport && (
