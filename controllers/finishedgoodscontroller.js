@@ -86,6 +86,9 @@ const getAll = async (req, res, next) => {
       'user_product_permissions',
       'allocation_quantity'
     );
+    const supportsAllocationScope = supportsPercentageAllocations
+      ? await hasColumn('user_product_permissions', 'allocation_scope')
+      : false;
 
     let sql = '';
     let params = [];
@@ -137,7 +140,18 @@ const getAll = async (req, res, next) => {
               AND deny.user_id = ?
               AND deny.can_view = 0
           )
-          ${supportsPercentageAllocations ? `AND (
+          ${supportsPercentageAllocations ? supportsAllocationScope ? `AND (
+            NOT EXISTS (
+              SELECT 1 FROM user_product_permissions allocated
+              WHERE allocated.finished_good_id = fg.id
+                AND allocated.allocation_quantity IS NOT NULL
+                AND COALESCE(allocated.allocation_scope, 'EXCLUSIVE') = 'EXCLUSIVE'
+            )
+            OR (
+              upp.allocation_quantity IS NOT NULL
+              AND COALESCE(upp.allocation_scope, 'EXCLUSIVE') = 'EXCLUSIVE'
+            )
+          )` : `AND (
             NOT EXISTS (
               SELECT 1 FROM user_product_permissions allocated
               WHERE allocated.finished_good_id = fg.id
@@ -355,6 +369,9 @@ const getOne = async (req, res, next) => {
       'user_product_permissions',
       'allocation_quantity'
     );
+    const supportsAllocationScope = supportsPercentageAllocations
+      ? await hasColumn('user_product_permissions', 'allocation_scope')
+      : false;
 
     let sql;
     let params = [req.params.id];
@@ -378,7 +395,18 @@ const getOne = async (req, res, next) => {
               AND deny.user_id = ?
               AND deny.can_view = 0
           )
-          ${supportsPercentageAllocations ? `AND (
+          ${supportsPercentageAllocations ? supportsAllocationScope ? `AND (
+            NOT EXISTS (
+              SELECT 1 FROM user_product_permissions allocated
+              WHERE allocated.finished_good_id = fg.id
+                AND allocated.allocation_quantity IS NOT NULL
+                AND COALESCE(allocated.allocation_scope, 'EXCLUSIVE') = 'EXCLUSIVE'
+            )
+            OR (
+              upp.allocation_quantity IS NOT NULL
+              AND COALESCE(upp.allocation_scope, 'EXCLUSIVE') = 'EXCLUSIVE'
+            )
+          )` : `AND (
             NOT EXISTS (
               SELECT 1 FROM user_product_permissions allocated
               WHERE allocated.finished_good_id = fg.id

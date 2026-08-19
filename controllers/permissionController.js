@@ -1,7 +1,7 @@
 // src/controllers/permissionController.js
 const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
-const { hasColumn } = require('../utils/schemaSupport');
+const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 const { clearCache } = require('../middleware/cacheMiddleware');
 
@@ -83,12 +83,15 @@ const revokeAccess = async (req, res, next) => {
       'user_product_permissions',
       'allocation_quantity'
     );
+    const supportsAllocationScope = supportsAllocations
+      ? await hasColumn('user_product_permissions', 'allocation_scope')
+      : false;
 
     const updated = await query(
       `UPDATE user_product_permissions
        SET can_view = 0${
          supportsAllocations
-           ? ', allocation_percentage = NULL, allocation_quantity = NULL, allocation_started_at = NULL'
+           ? `, allocation_percentage = NULL, allocation_quantity = NULL, allocation_started_at = NULL${supportsAllocationScope ? ', allocation_scope = NULL' : ''}`
            : ''
        }
        WHERE user_id = ? AND finished_good_id = ?`,
@@ -199,30 +202,86 @@ const getPercentageAllocations = async (req, res, next) => {
       'order_items',
       'ordered_from_offer'
     );
+    const supportsAllocationScope = await hasColumn(
+      'user_product_permissions',
+      'allocation_scope'
+    );
+    const supportsControlledPool = await hasTable(
+      'product_controlled_release_pools'
+    );
+    const supportsControlledUsage =
+      (await hasColumn('order_items', 'controlled_personal_quantity')) &&
+      (await hasColumn('order_items', 'controlled_public_quantity'));
 
     const rows = await query(
       `SELECT upp.finished_good_id, upp.user_id,
               upp.allocation_percentage, upp.allocation_quantity,
               upp.allocation_started_at,
+              ${supportsAllocationScope ? "COALESCE(upp.allocation_scope, 'EXCLUSIVE')" : "'EXCLUSIVE'"} AS allocation_scope,
               u.name AS user_name, u.email AS user_email,
-              COALESCE(SUM(oi.qty_ordered), 0) AS ordered_quantity
+              COALESCE(SUM(${
+                supportsAllocationScope && supportsControlledUsage
+                  ? `CASE
+                       WHEN COALESCE(upp.allocation_scope, 'EXCLUSIVE') = 'CONTROLLED'
+                         THEN oi.controlled_personal_quantity
+                       ELSE oi.qty_ordered
+                     END`
+                  : 'oi.qty_ordered'
+              }), 0) AS ordered_quantity
        FROM user_product_permissions upp
        JOIN users u ON u.id = upp.user_id
+       ${supportsControlledPool ? 'LEFT JOIN product_controlled_release_pools controlled_pool ON controlled_pool.finished_good_id = upp.finished_good_id' : ''}
        LEFT JOIN orders o
          ON o.created_by = upp.user_id
         AND o.status <> 'CANCELLED'
-        AND o.created_at >= upp.allocation_started_at
+        AND ${
+          supportsAllocationScope
+            ? `(
+                 (
+                   COALESCE(upp.allocation_scope, 'EXCLUSIVE') = 'CONTROLLED'
+                   AND ${supportsControlledPool ? 'o.created_at >= controlled_pool.created_at' : '1 = 1'}
+                 )
+                 OR (
+                   COALESCE(upp.allocation_scope, 'EXCLUSIVE') <> 'CONTROLLED'
+                   AND o.created_at >= upp.allocation_started_at
+                 )
+               )`
+            : 'o.created_at >= upp.allocation_started_at'
+        }
        LEFT JOIN order_items oi
          ON oi.order_id = o.id
         AND oi.finished_good_id = upp.finished_good_id
-        ${supportsOfferSnapshots ? 'AND COALESCE(oi.ordered_from_offer, 0) = 0' : ''}
+        ${supportsOfferSnapshots ? supportsAllocationScope ? "AND (COALESCE(upp.allocation_scope, 'EXCLUSIVE') = 'CONTROLLED' OR COALESCE(oi.ordered_from_offer, 0) = 0)" : 'AND COALESCE(oi.ordered_from_offer, 0) = 0' : ''}
        WHERE upp.allocation_percentage IS NOT NULL
          AND upp.allocation_quantity IS NOT NULL
        GROUP BY upp.finished_good_id, upp.user_id,
                 upp.allocation_percentage, upp.allocation_quantity,
-                upp.allocation_started_at, u.name, u.email
+                upp.allocation_started_at${supportsAllocationScope ? ', upp.allocation_scope' : ''}, u.name, u.email
        ORDER BY upp.finished_good_id, upp.allocation_percentage DESC, u.name`
     );
+
+    let controlledPoolByProduct = new Map();
+    if (supportsControlledPool && supportsControlledUsage) {
+      const poolRows = await query(
+        `SELECT pool.finished_good_id, pool.public_quantity,
+                COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED'
+                  THEN oi.controlled_public_quantity ELSE 0 END), 0) AS public_used_quantity
+         FROM product_controlled_release_pools pool
+         LEFT JOIN order_items oi ON oi.finished_good_id = pool.finished_good_id
+         LEFT JOIN orders o ON o.id = oi.order_id
+           AND o.created_at >= pool.created_at
+         GROUP BY pool.finished_good_id, pool.public_quantity`
+      );
+      controlledPoolByProduct = new Map(
+        poolRows.rows.map((row) => [
+          Number(row.finished_good_id),
+          {
+            public_quantity: Number(row.public_quantity || 0),
+            public_used_quantity: Number(row.public_used_quantity || 0),
+          },
+        ])
+      );
+    }
 
     return res.json({
       success: true,
@@ -239,6 +298,23 @@ const getPercentageAllocations = async (req, res, next) => {
           remaining_quantity: Math.max(
             0,
             allocationQuantity - orderedQuantity
+          ),
+          public_quantity:
+            controlledPoolByProduct.get(Number(row.finished_good_id))
+              ?.public_quantity || 0,
+          public_used_quantity:
+            controlledPoolByProduct.get(Number(row.finished_good_id))
+              ?.public_used_quantity || 0,
+          public_remaining_quantity: Math.max(
+            0,
+            Number(
+              controlledPoolByProduct.get(Number(row.finished_good_id))
+                ?.public_quantity || 0
+            ) -
+              Number(
+                controlledPoolByProduct.get(Number(row.finished_good_id))
+                  ?.public_used_quantity || 0
+              )
           ),
         };
       }),
@@ -312,6 +388,9 @@ const getPercentageAllocationHistory = async (req, res, next) => {
         unassigned_quantity: Number(metadata.unassigned_quantity || 0),
         unassigned_cartons: Number(metadata.unassigned_cartons || 0),
         percentage_total: Number(metadata.percentage_total || 0),
+        allocation_scope: String(
+          metadata.allocation_scope || 'EXCLUSIVE'
+        ).toUpperCase(),
         targets: Array.isArray(metadata.targets) ? metadata.targets : [],
         has_snapshot: Number(metadata.snapshot_version || 0) > 0,
         detail: row.detail,
@@ -347,9 +426,14 @@ const getPercentageAllocationHistory = async (req, res, next) => {
         'order_items',
         'ordered_from_offer'
       );
+      const supportsControlledUsage = await hasColumn(
+        'order_items',
+        'controlled_personal_quantity'
+      );
       const orderResult = await query(
         `SELECT oi.finished_good_id, o.created_by AS user_id,
-                o.created_at, SUM(oi.qty_ordered) AS ordered_quantity
+                o.created_at, SUM(oi.qty_ordered) AS ordered_quantity,
+                ${supportsControlledUsage ? 'SUM(oi.controlled_personal_quantity)' : '0'} AS controlled_personal_quantity
          FROM order_items oi
          JOIN orders o ON o.id = oi.order_id
          WHERE o.status <> 'CANCELLED'
@@ -370,6 +454,9 @@ const getPercentageAllocationHistory = async (req, res, next) => {
       ordersByProductUser.get(key).push({
         created_at: row.created_at,
         ordered_quantity: Number(row.ordered_quantity || 0),
+        controlled_personal_quantity: Number(
+          row.controlled_personal_quantity || 0
+        ),
       });
     });
 
@@ -384,7 +471,10 @@ const getPercentageAllocationHistory = async (req, res, next) => {
           (sum, order) => {
             const orderedAt = new Date(order.created_at).getTime();
             return orderedAt >= periodStart && orderedAt < periodEnd
-              ? sum + order.ordered_quantity
+              ? sum +
+                  (row.allocation_scope === 'CONTROLLED'
+                    ? order.controlled_personal_quantity
+                    : order.ordered_quantity)
               : sum;
           },
           0
@@ -443,6 +533,48 @@ const savePercentageAllocations = async (req, res, next) => {
           'Product percentage allocations require sql/add-product-percentage-allocations.sql.',
       });
     }
+    const supportsAllocationScope = await hasColumn(
+      'user_product_permissions',
+      'allocation_scope'
+    );
+    const allocationScope = String(
+      req.body.allocation_scope || 'EXCLUSIVE'
+    ).trim().toUpperCase();
+    if (!['EXCLUSIVE', 'PRIVATE', 'CONTROLLED'].includes(allocationScope)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Allocation mode must be EXCLUSIVE, PRIVATE, or CONTROLLED.',
+      });
+    }
+    if (allocationScope === 'PRIVATE' && !supportsAllocationScope) {
+      return res.status(409).json({
+        success: false,
+        message:
+          'Private quantity allocation requires sql/add-private-product-allocations.sql.',
+      });
+    }
+    const publicQuantity = Math.max(
+      0,
+      Math.floor(Number(req.body.public_quantity || 0))
+    );
+    const supportsControlledPool = await hasTable(
+      'product_controlled_release_pools'
+    );
+    const supportsControlledUsage =
+      (await hasColumn('order_items', 'controlled_personal_quantity')) &&
+      (await hasColumn('order_items', 'controlled_public_quantity'));
+    if (
+      allocationScope === 'CONTROLLED' &&
+      (!supportsAllocationScope ||
+        !supportsControlledPool ||
+        !supportsControlledUsage)
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          'Controlled release requires sql/add-private-product-allocations.sql.',
+      });
+    }
 
     const normalizedTargets = targets.map((target) => ({
       user_id: Number(target.user_id),
@@ -495,6 +627,110 @@ const savePercentageAllocations = async (req, res, next) => {
         message: 'Product not found.',
       });
     }
+    const assignedQuantity = normalizedTargets.reduce(
+      (sum, target) => sum + Number(target.allocation_quantity || 0),
+      0
+    );
+    const supportsWarehouseDelivery = await hasColumn(
+      'order_item_warehouse_allocations',
+      'allocation_status'
+    );
+    const reservationRows = await query(
+      `SELECT COALESCE(SUM(${
+        supportsWarehouseDelivery
+          ? `GREATEST(
+              0,
+              oi.qty_ordered - COALESCE(delivered.delivered_quantity, 0)
+            )`
+          : 'oi.qty_ordered'
+      }), 0) AS reserved_quantity
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       ${
+         supportsWarehouseDelivery
+           ? `LEFT JOIN (
+                SELECT order_item_id, SUM(quantity) AS delivered_quantity
+                FROM order_item_warehouse_allocations
+                WHERE allocation_status = 'DEDUCTED'
+                GROUP BY order_item_id
+              ) delivered ON delivered.order_item_id = oi.id`
+           : ''
+       }
+       WHERE oi.finished_good_id = ?
+         AND o.status IN ('PENDING', 'CONFIRMED', 'PACKED')`,
+      [finishedGoodId]
+    );
+    const availableQuantity = Math.max(
+      0,
+      Number(productRows.rows[0].quantity || 0) -
+        Number(reservationRows.rows?.[0]?.reserved_quantity || 0)
+    );
+    let controlledUsageByUser = new Map();
+    let controlledPublicUsed = 0;
+    if (allocationScope === 'CONTROLLED') {
+      const usageRows = await query(
+        `SELECT o.created_by AS user_id,
+                COALESCE(SUM(oi.controlled_personal_quantity), 0) AS personal_used,
+                COALESCE(SUM(oi.controlled_public_quantity), 0) AS public_used
+         FROM order_items oi
+         JOIN orders o ON o.id = oi.order_id
+         JOIN product_controlled_release_pools pool
+           ON pool.finished_good_id = oi.finished_good_id
+          AND o.created_at >= pool.created_at
+         WHERE oi.finished_good_id = ?
+           AND o.status <> 'CANCELLED'
+         GROUP BY o.created_by`,
+        [finishedGoodId]
+      );
+      controlledUsageByUser = new Map(
+        usageRows.rows.map((row) => [
+          Number(row.user_id),
+          Number(row.personal_used || 0),
+        ])
+      );
+      controlledPublicUsed = usageRows.rows.reduce(
+        (sum, row) => sum + Number(row.public_used || 0),
+        0
+      );
+      const belowUsedTarget = normalizedTargets.find(
+        (target) =>
+          target.allocation_quantity <
+          Number(controlledUsageByUser.get(target.user_id) || 0)
+      );
+      if (belowUsedTarget) {
+        return res.status(409).json({
+          success: false,
+          message:
+            'A user allocation cannot be reduced below the quantity that user has already ordered.',
+        });
+      }
+      if (publicQuantity < controlledPublicUsed) {
+        return res.status(409).json({
+          success: false,
+          message:
+            'Public release cannot be reduced below the quantity already ordered publicly.',
+        });
+      }
+    }
+    const controlledRemainingQuantity =
+      allocationScope === 'CONTROLLED'
+        ? normalizedTargets.reduce(
+            (sum, target) =>
+              sum +
+              Math.max(
+                0,
+                target.allocation_quantity -
+                  Number(controlledUsageByUser.get(target.user_id) || 0)
+              ),
+            0
+          ) + Math.max(0, publicQuantity - controlledPublicUsed)
+        : assignedQuantity;
+    if (controlledRemainingQuantity > availableQuantity) {
+      return res.status(409).json({
+        success: false,
+        message: `Only ${availableQuantity} unreserved pairs are available to allocate or release.`,
+      });
+    }
 
     let targetUsers = [];
     if (normalizedTargets.length) {
@@ -519,6 +755,7 @@ const savePercentageAllocations = async (req, res, next) => {
        SET allocation_percentage = NULL,
            allocation_quantity = NULL,
            allocation_started_at = NULL
+           ${supportsAllocationScope ? ', allocation_scope = NULL' : ''}
        WHERE finished_good_id = ?`,
       [finishedGoodId]
     );
@@ -530,38 +767,61 @@ const savePercentageAllocations = async (req, res, next) => {
              allocation_percentage = ?,
              allocation_quantity = ?,
              allocation_started_at = NOW()
+             ${supportsAllocationScope ? ', allocation_scope = ?' : ''}
          WHERE user_id = ? AND finished_good_id = ?`,
         [
           target.allocation_percentage,
           target.allocation_quantity,
+          ...(supportsAllocationScope ? [allocationScope] : []),
           target.user_id,
           finishedGoodId,
         ]
       );
       if (!updated.affectedRows) {
+        const allocationColumns = [
+          'user_id',
+          'finished_good_id',
+          'can_view',
+          'allocation_percentage',
+          'allocation_quantity',
+          'allocation_started_at',
+          ...(supportsAllocationScope ? ['allocation_scope'] : []),
+        ];
+        const allocationValues = [
+          target.user_id,
+          finishedGoodId,
+          1,
+          target.allocation_percentage,
+          target.allocation_quantity,
+          new Date(),
+          ...(supportsAllocationScope ? [allocationScope] : []),
+        ];
         const permissionInsert = await appendFiscalInsertFields(
           'user_product_permissions',
-          [
-            'user_id',
-            'finished_good_id',
-            'can_view',
-            'allocation_percentage',
-            'allocation_quantity',
-            'allocation_started_at',
-          ],
-          [
-            target.user_id,
-            finishedGoodId,
-            1,
-            target.allocation_percentage,
-            target.allocation_quantity,
-            new Date(),
-          ]
+          allocationColumns,
+          allocationValues
         );
         await query(
           `INSERT INTO user_product_permissions (${permissionInsert.columns.join(', ')})
            VALUES (${permissionInsert.columns.map(() => '?').join(', ')})`,
           permissionInsert.values
+        );
+      }
+    }
+
+    if (supportsControlledPool) {
+      if (allocationScope === 'CONTROLLED') {
+        await query(
+          `INSERT INTO product_controlled_release_pools
+             (finished_good_id, public_quantity)
+           VALUES (?, ?)
+           ON DUPLICATE KEY UPDATE public_quantity = VALUES(public_quantity)`,
+          [finishedGoodId, publicQuantity]
+        );
+      } else {
+        await query(
+          'DELETE FROM product_controlled_release_pools WHERE finished_good_id = ?',
+          [finishedGoodId]
         );
       }
     }
@@ -581,10 +841,6 @@ const savePercentageAllocations = async (req, res, next) => {
     const totalQuantity = Number(product.quantity || 0);
     const totalCartons =
       pairsPerCarton > 0 ? Math.ceil(totalQuantity / pairsPerCarton) : 0;
-    const assignedQuantity = normalizedTargets.reduce(
-      (sum, target) => sum + Number(target.allocation_quantity || 0),
-      0
-    );
     const assignedCartons =
       pairsPerCarton > 0
         ? normalizedTargets.reduce(
@@ -623,6 +879,9 @@ const savePercentageAllocations = async (req, res, next) => {
         unassigned_quantity: Math.max(0, totalQuantity - assignedQuantity),
         unassigned_cartons: Math.max(0, totalCartons - assignedCartons),
         percentage_total: percentageTotal,
+        allocation_scope: allocationScope,
+        public_quantity: publicQuantity,
+        public_used_quantity: controlledPublicUsed,
         targets: normalizedTargets.map((target) => {
           const targetUser = userById.get(Number(target.user_id));
           return {
@@ -645,6 +904,8 @@ const savePercentageAllocations = async (req, res, next) => {
       data: {
         finished_good_id: finishedGoodId,
         percentage_total: percentageTotal,
+        allocation_scope: allocationScope,
+        public_quantity: publicQuantity,
         targets: normalizedTargets,
       },
     });

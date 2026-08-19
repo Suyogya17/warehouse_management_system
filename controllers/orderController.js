@@ -905,6 +905,166 @@ const releasePlannedWarehouseAllocations = async (client, orderId, remove = fals
   );
 };
 
+const buildCartonSafeWarehousePlan = ({
+  stocks = [],
+  quantity = 0,
+  pairsPerCarton = 0,
+  productName = 'product',
+}) => {
+  const requestedQuantity = Math.max(0, Number(quantity || 0));
+  const cartonSize = Math.max(0, Number(pairsPerCarton || 0));
+  const candidates = stocks.map((stock, index) => ({
+    stock,
+    index,
+    available: Math.max(
+      0,
+      Number(stock.available_quantity ?? stock.quantity ?? 0)
+    ),
+    allocated: 0,
+  }));
+  const totalAvailable = candidates.reduce(
+    (sum, candidate) => sum + candidate.available,
+    0
+  );
+
+  if (totalAvailable + 0.001 < requestedQuantity) {
+    const error = new Error(
+      `Not enough unallocated warehouse stock for ${productName}.`
+    );
+    error.statusCode = 422;
+    error.shortage = {
+      product_name: productName,
+      ordered_qty: requestedQuantity,
+      warehouse_stock: totalAvailable,
+    };
+    throw error;
+  }
+
+  const allocateFromCandidates = (orderedCandidates, targetQuantity) => {
+    let remainingQuantity = targetQuantity;
+    for (const candidate of orderedCandidates) {
+      if (remainingQuantity <= 0.001) break;
+      const unusedQuantity = Math.max(
+        0,
+        candidate.available - candidate.allocated
+      );
+      const allocatedQuantity = Math.min(unusedQuantity, remainingQuantity);
+      if (allocatedQuantity <= 0.001) continue;
+      candidate.allocated += allocatedQuantity;
+      remainingQuantity -= allocatedQuantity;
+    }
+    return remainingQuantity;
+  };
+
+  if (cartonSize <= 0.001) {
+    allocateFromCandidates(candidates, requestedQuantity);
+    return candidates
+      .filter((candidate) => candidate.allocated > 0.001)
+      .map((candidate) => ({
+        stock: candidate.stock,
+        quantity: candidate.allocated,
+      }));
+  }
+
+  const completeCartons = Math.floor(
+    (requestedQuantity + 0.001) / cartonSize
+  );
+  const completeCartonQuantity = completeCartons * cartonSize;
+  const looseQuantity = Math.max(
+    0,
+    requestedQuantity - completeCartonQuantity
+  );
+  const completeCartonCapacity = candidates.reduce(
+    (sum, candidate) =>
+      sum + Math.floor((candidate.available + 0.001) / cartonSize) * cartonSize,
+    0
+  );
+
+  if (completeCartonCapacity + 0.001 < completeCartonQuantity) {
+    const error = new Error(
+      `Stock fragmented across warehouses for ${productName}. A complete carton contains ${cartonSize} pairs. Transfer stock to one warehouse or correct the warehouse stock before preparing the DN.`
+    );
+    error.statusCode = 422;
+    error.shortage = {
+      reason: 'FRAGMENTED_WAREHOUSE_STOCK',
+      product_name: productName,
+      ordered_qty: requestedQuantity,
+      warehouse_stock: totalAvailable,
+      pairs_per_carton: cartonSize,
+      complete_cartons_required: completeCartons,
+      complete_cartons_available: Math.floor(
+        completeCartonCapacity / cartonSize
+      ),
+    };
+    throw error;
+  }
+
+  if (completeCartonQuantity > 0.001) {
+    const singleWarehouse = candidates.find(
+      (candidate) =>
+        Math.floor((candidate.available + 0.001) / cartonSize) * cartonSize +
+          0.001 >=
+        completeCartonQuantity
+    );
+
+    if (singleWarehouse) {
+      singleWarehouse.allocated += completeCartonQuantity;
+    } else {
+      let remainingCompleteQuantity = completeCartonQuantity;
+      const cartonCandidates = [...candidates].sort((left, right) => {
+        const leftCapacity =
+          Math.floor((left.available + 0.001) / cartonSize) * cartonSize;
+        const rightCapacity =
+          Math.floor((right.available + 0.001) / cartonSize) * cartonSize;
+        return rightCapacity - leftCapacity || left.index - right.index;
+      });
+      for (const candidate of cartonCandidates) {
+        if (remainingCompleteQuantity <= 0.001) break;
+        const cartonCapacity =
+          Math.floor((candidate.available + 0.001) / cartonSize) * cartonSize;
+        const allocatedQuantity = Math.min(
+          cartonCapacity,
+          remainingCompleteQuantity
+        );
+        if (allocatedQuantity <= 0.001) continue;
+        candidate.allocated += allocatedQuantity;
+        remainingCompleteQuantity -= allocatedQuantity;
+      }
+    }
+  }
+
+  if (looseQuantity > 0.001) {
+    const looseCandidates = [...candidates].sort((left, right) => {
+      const leftUsed = left.allocated > 0.001 ? 0 : 1;
+      const rightUsed = right.allocated > 0.001 ? 0 : 1;
+      return leftUsed - rightUsed || left.index - right.index;
+    });
+    const looseRemaining = allocateFromCandidates(
+      looseCandidates,
+      looseQuantity
+    );
+    if (looseRemaining > 0.001) {
+      const error = new Error(
+        `Not enough warehouse stock to allocate the loose pairs for ${productName}.`
+      );
+      error.statusCode = 422;
+      error.shortage = {
+        product_name: productName,
+        ordered_qty: requestedQuantity,
+        warehouse_stock: totalAvailable,
+      };
+      throw error;
+    }
+  }
+
+  return candidates
+    .filter((candidate) => candidate.allocated > 0.001)
+    .map((candidate) => ({
+      stock: candidate.stock,
+      quantity: candidate.allocated,
+    }));
+};
+
 const ensurePlannedWarehouseAllocations = async (client, orderId, userId) => {
   const capabilities = await getWarehouseAllocationCapabilities();
   if (!capabilities.supportsPlanning) {
@@ -917,7 +1077,8 @@ const ensurePlannedWarehouseAllocations = async (client, orderId, userId) => {
 
   const itemsResult = await client.query(
     `SELECT item.id, item.order_id, item.finished_good_id, item.qty_ordered,
-            product.name AS product_name
+            product.name AS product_name,
+            product.inner_boxes_per_outer_box
      FROM order_items item
      JOIN finished_goods product ON product.id = item.finished_good_id
      WHERE item.order_id = ?
@@ -1012,41 +1173,23 @@ const ensurePlannedWarehouseAllocations = async (client, orderId, userId) => {
       ])
     );
 
-    const availableTotal = stockResult.rows.reduce(
-      (sum, stock) =>
-        sum +
-        Math.max(
+    const stockPlan = buildCartonSafeWarehousePlan({
+      stocks: stockResult.rows.map((stock) => ({
+        ...stock,
+        available_quantity: Math.max(
           0,
           Number(stock.quantity || 0) -
             Number(plannedByWarehouse.get(Number(stock.warehouse_id)) || 0)
         ),
-      0
-    );
+      })),
+      quantity: remaining,
+      pairsPerCarton: item.inner_boxes_per_outer_box,
+      productName: item.product_name,
+    });
 
-    if (availableTotal + 0.001 < remaining) {
-      const error = new Error(
-        `Not enough unallocated warehouse stock for ${item.product_name}.`
-      );
-      error.statusCode = 422;
-      error.shortage = {
-        product_name: item.product_name,
-        ordered_qty: remaining,
-        warehouse_stock: availableTotal,
-      };
-      throw error;
-    }
-
-    for (const stock of stockResult.rows) {
-      if (remaining <= 0.001) break;
-
-      const available = Math.max(
-        0,
-        Number(stock.quantity || 0) -
-          Number(plannedByWarehouse.get(Number(stock.warehouse_id)) || 0)
-      );
-      if (available <= 0) continue;
-
-      const allocatedQuantity = Math.min(available, remaining);
+    for (const plannedStock of stockPlan) {
+      const stock = plannedStock.stock;
+      const allocatedQuantity = plannedStock.quantity;
       const printGroup = resolveWarehousePrintGroup(
         stock.warehouse_id,
         stock.warehouse_name,
@@ -1332,27 +1475,16 @@ const allocateWarehouseStockForDelivery = async (client, item, userId) => {
     [item.finished_good_id]
   );
 
-  const totalWarehouseQty = warehouseStock.rows.reduce(
-    (sum, row) => sum + Number(row.quantity || 0),
-    0
-  );
+  const stockPlan = buildCartonSafeWarehousePlan({
+    stocks: warehouseStock.rows,
+    quantity: remaining,
+    pairsPerCarton: item.inner_boxes_per_outer_box,
+    productName: item.product_name,
+  });
 
-  if (totalWarehouseQty < remaining) {
-    const error = new Error('Not enough warehouse stock to deliver this order');
-    error.statusCode = 422;
-    error.shortage = {
-      product_name: item.product_name,
-      ordered_qty: Number(item.qty_ordered),
-      warehouse_stock: totalWarehouseQty,
-    };
-    throw error;
-  }
-
-  for (const stock of warehouseStock.rows) {
-    if (remaining <= 0) break;
-
-    const available = Number(stock.quantity || 0);
-    const deduct = Math.min(available, remaining);
+  for (const plannedStock of stockPlan) {
+    const stock = plannedStock.stock;
+    const deduct = plannedStock.quantity;
 
     await client.query(
       `UPDATE finished_good_warehouse_stock
@@ -2073,12 +2205,23 @@ const create = async (req, res, next) => {
       'user_product_permissions',
       'allocation_quantity'
     );
+    const supportsAllocationScope = supportsPercentageAllocations
+      ? await hasColumn('user_product_permissions', 'allocation_scope')
+      : false;
+    const supportsControlledRelease =
+      supportsAllocationScope &&
+      (await hasTable('product_controlled_release_pools')) &&
+      (await hasColumn('order_items', 'controlled_personal_quantity')) &&
+      (await hasColumn('order_items', 'controlled_public_quantity'));
 
+    const canOrderHiddenProducts = ['ADMIN', 'CO_ADMIN'].includes(
+      String(req.user.role || '').toUpperCase()
+    );
     let productSql = `
       SELECT id, name, article_code, sole_code, color, quantity, price, inner_boxes_per_outer_box${supportsIndiaPrice ? ', india_price' : ''}${supportsDisplayQuantity ? ', display_quantity' : ''}${supportsOfferAudience ? ', offer_enabled, offer_label, offer_ends_at, offer_all_users' : ''}${supportsOfferCampaigns ? ', offer_campaign_id' : ''}
       FROM finished_goods
       WHERE is_deleted = 0
-        AND is_visible = 1
+        ${canOrderHiddenProducts ? '' : 'AND is_visible = 1'}
         AND id IN ${clause}
     `;
     const productParams = [...params];
@@ -2094,7 +2237,21 @@ const create = async (req, res, next) => {
         WHERE upp.finished_good_id = finished_goods.id
           AND upp.user_id = ?
           AND upp.can_view = 0
-      )${supportsPercentageAllocations ? ` AND (
+      )${supportsPercentageAllocations ? supportsAllocationScope ? ` AND (
+        NOT EXISTS (
+          SELECT 1 FROM user_product_permissions allocated
+          WHERE allocated.finished_good_id = finished_goods.id
+            AND allocated.allocation_quantity IS NOT NULL
+            AND COALESCE(allocated.allocation_scope, 'EXCLUSIVE') = 'EXCLUSIVE'
+        )
+        OR EXISTS (
+          SELECT 1 FROM user_product_permissions own_allocation
+          WHERE own_allocation.finished_good_id = finished_goods.id
+            AND own_allocation.user_id = ?
+            AND own_allocation.allocation_quantity IS NOT NULL
+            AND COALESCE(own_allocation.allocation_scope, 'EXCLUSIVE') = 'EXCLUSIVE'
+        )
+      )` : ` AND (
         NOT EXISTS (
           SELECT 1 FROM user_product_permissions allocated
           WHERE allocated.finished_good_id = finished_goods.id
@@ -2220,21 +2377,39 @@ const create = async (req, res, next) => {
                 upp.allocation_quantity,
                 upp.allocation_percentage,
                 upp.allocation_started_at,
-                COALESCE(SUM(oi.qty_ordered), 0) AS used_quantity
+                ${supportsAllocationScope ? "COALESCE(upp.allocation_scope, 'EXCLUSIVE')" : "'EXCLUSIVE'"} AS allocation_scope,
+                COALESCE(SUM(${
+                  supportsControlledRelease
+                    ? `CASE
+                         WHEN upp.allocation_scope = 'CONTROLLED'
+                           THEN oi.controlled_personal_quantity
+                         ELSE oi.qty_ordered
+                       END`
+                    : 'oi.qty_ordered'
+                }), 0) AS used_quantity
          FROM user_product_permissions upp
+         ${supportsControlledRelease ? 'LEFT JOIN product_controlled_release_pools controlled_pool ON controlled_pool.finished_good_id = upp.finished_good_id' : ''}
          LEFT JOIN orders o
            ON o.created_by = upp.user_id
           AND o.status <> 'CANCELLED'
-          AND o.created_at >= upp.allocation_started_at
+          AND ${
+            supportsControlledRelease
+              ? `(
+                   (upp.allocation_scope = 'CONTROLLED' AND o.created_at >= controlled_pool.created_at)
+                   OR (COALESCE(upp.allocation_scope, 'EXCLUSIVE') <> 'CONTROLLED'
+                     AND o.created_at >= upp.allocation_started_at)
+                 )`
+              : 'o.created_at >= upp.allocation_started_at'
+          }
          LEFT JOIN order_items oi
            ON oi.order_id = o.id
           AND oi.finished_good_id = upp.finished_good_id
-          ${supportsOfferOrderSnapshots ? 'AND COALESCE(oi.ordered_from_offer, 0) = 0' : ''}
+          ${supportsOfferOrderSnapshots ? supportsAllocationScope ? "AND (COALESCE(upp.allocation_scope, 'EXCLUSIVE') = 'CONTROLLED' OR COALESCE(oi.ordered_from_offer, 0) = 0)" : 'AND COALESCE(oi.ordered_from_offer, 0) = 0' : ''}
          WHERE upp.user_id = ?
            AND upp.allocation_quantity IS NOT NULL
            AND upp.finished_good_id IN ${clause}
          GROUP BY upp.finished_good_id, upp.allocation_quantity,
-                  upp.allocation_percentage, upp.allocation_started_at`,
+                  upp.allocation_percentage, upp.allocation_started_at${supportsAllocationScope ? ', upp.allocation_scope' : ''}`,
         [req.user.id, ...params]
       );
       userPercentageAllocations = new Map(
@@ -2250,10 +2425,115 @@ const create = async (req, res, next) => {
                 0,
                 assignedQuantity - usedQuantity
               ),
+              scope: String(row.allocation_scope || 'EXCLUSIVE').toUpperCase(),
             },
           ];
         })
       );
+    }
+
+    const privateAllocationSummary = new Map();
+    if (req.user.role === 'USER' && supportsAllocationScope) {
+      const privateRows = await client.query(
+        `SELECT upp.finished_good_id, upp.user_id,
+                upp.allocation_quantity,
+                COALESCE(SUM(oi.qty_ordered), 0) AS used_quantity
+         FROM user_product_permissions upp
+         LEFT JOIN orders o
+           ON o.created_by = upp.user_id
+          AND o.status <> 'CANCELLED'
+          AND o.created_at >= upp.allocation_started_at
+         LEFT JOIN order_items oi
+           ON oi.order_id = o.id
+          AND oi.finished_good_id = upp.finished_good_id
+          ${supportsOfferOrderSnapshots ? 'AND COALESCE(oi.ordered_from_offer, 0) = 0' : ''}
+         WHERE upp.allocation_scope = 'PRIVATE'
+           AND upp.allocation_quantity IS NOT NULL
+           AND upp.finished_good_id IN ${clause}
+         GROUP BY upp.finished_good_id, upp.user_id, upp.allocation_quantity`,
+        params
+      );
+      privateRows.rows.forEach((row) => {
+        const productId = Number(row.finished_good_id);
+        const remaining = Math.max(
+          0,
+          Number(row.allocation_quantity || 0) - Number(row.used_quantity || 0)
+        );
+        privateAllocationSummary.set(
+          productId,
+          Number(privateAllocationSummary.get(productId) || 0) + remaining
+        );
+      });
+    }
+
+    const controlledReleaseByProduct = new Map();
+    if (req.user.role === 'USER' && supportsControlledRelease) {
+      const controlledProducts = await client.query(
+        `SELECT DISTINCT upp.finished_good_id
+         FROM user_product_permissions upp
+         WHERE upp.allocation_scope = 'CONTROLLED'
+           AND upp.finished_good_id IN ${clause}
+         UNION
+         SELECT pool.finished_good_id
+         FROM product_controlled_release_pools pool
+         WHERE pool.finished_good_id IN ${clause}`,
+        [...params, ...params]
+      );
+      const poolRows = await client.query(
+        `SELECT * FROM product_controlled_release_pools
+         WHERE finished_good_id IN ${clause}
+         FOR UPDATE`,
+        params
+      );
+      const poolByProduct = new Map(
+        poolRows.rows.map((row) => [Number(row.finished_good_id), row])
+      );
+      const personalRows = await client.query(
+        `SELECT finished_good_id, allocation_quantity
+         FROM user_product_permissions
+         WHERE user_id = ?
+           AND allocation_scope = 'CONTROLLED'
+           AND finished_good_id IN ${clause}`,
+        [req.user.id, ...params]
+      );
+      const personalByProduct = new Map(
+        personalRows.rows.map((row) => [
+          Number(row.finished_good_id),
+          Number(row.allocation_quantity || 0),
+        ])
+      );
+      const usageRows = await client.query(
+        `SELECT oi.finished_good_id,
+                COALESCE(SUM(CASE WHEN o.created_by = ?
+                  THEN oi.controlled_personal_quantity ELSE 0 END), 0) AS personal_used,
+                COALESCE(SUM(oi.controlled_public_quantity), 0) AS public_used
+         FROM order_items oi
+         JOIN orders o ON o.id = oi.order_id
+         JOIN product_controlled_release_pools pool
+           ON pool.finished_good_id = oi.finished_good_id
+          AND o.created_at >= pool.created_at
+         WHERE o.status <> 'CANCELLED'
+           AND oi.finished_good_id IN ${clause}
+         GROUP BY oi.finished_good_id`,
+        [req.user.id, ...params]
+      );
+      const usageByProduct = new Map(
+        usageRows.rows.map((row) => [Number(row.finished_good_id), row])
+      );
+      controlledProducts.rows.forEach((row) => {
+        const productId = Number(row.finished_good_id);
+        const usage = usageByProduct.get(productId) || {};
+        const personalQuantity = Number(personalByProduct.get(productId) || 0);
+        const personalUsed = Number(usage.personal_used || 0);
+        const publicQuantity = Number(
+          poolByProduct.get(productId)?.public_quantity || 0
+        );
+        const publicUsed = Number(usage.public_used || 0);
+        controlledReleaseByProduct.set(productId, {
+          personal_remaining: Math.max(0, personalQuantity - personalUsed),
+          public_remaining: Math.max(0, publicQuantity - publicUsed),
+        });
+      });
     }
 
     const reserved = await getReservedByProduct(
@@ -2306,16 +2586,35 @@ const create = async (req, res, next) => {
 
     // Availability check — mirrors getAvailability exactly
     const shortages = [];
+    const controlledSplitByProduct = new Map();
     for (const [id, qty] of requested.entries()) {
       const p = productMap.get(id);
       const physicalStock = Number(p.quantity ?? 0);
       const reservedQty = reserved.get(id) || 0;
+      const available = Math.max(0, physicalStock - reservedQty);
       const displayQuantity = supportsDisplayQuantity
         ? getProductDisplayQuantity(p)
         : DEFAULT_DISPLAY_QUANTITY;
       const userOfferTarget = userOfferTargets.get(Number(id));
       const offerIsActive = isActiveOfferProduct(p);
       const percentageAllocation = userPercentageAllocations.get(Number(id));
+      const controlledRelease = controlledReleaseByProduct.get(Number(id));
+      const privateRemaining = Number(
+        privateAllocationSummary.get(Number(id)) || 0
+      );
+      const publicAvailable = Math.max(0, available - privateRemaining);
+      const privateUserLimit =
+        percentageAllocation?.scope === 'PRIVATE'
+          ? Math.min(displayQuantity, publicAvailable) +
+            percentageAllocation.remaining_quantity
+          : null;
+      const privateAccessibleAvailable = Math.min(
+        available,
+        publicAvailable +
+          (percentageAllocation?.scope === 'PRIVATE'
+            ? percentageAllocation.remaining_quantity
+            : 0)
+      );
       const effectiveDisplayQuantity =
         req.user.role === 'USER' &&
         offerIsActive &&
@@ -2325,8 +2624,8 @@ const create = async (req, res, next) => {
           : req.user.role === 'USER' &&
               !offerIsActive &&
               percentageAllocation
-            ? percentageAllocation.remaining_quantity
-            : displayQuantity;
+            ? privateUserLimit ?? percentageAllocation.remaining_quantity
+            : Math.min(displayQuantity, publicAvailable);
       const usedOfferQuantity =
         req.user.role === 'USER' && offerIsActive
           ? Number(campaignUsage.get(Number(p.offer_campaign_id)) || 0)
@@ -2338,11 +2637,26 @@ const create = async (req, res, next) => {
 
       // Admin and co-admin orders use the real unreserved stock. Customer-facing
       // display/offer limits apply only when a USER places their own order.
-      const available = Math.max(0, physicalStock - reservedQty);
-      const orderableAvailable =
-        req.user.role === 'USER'
-          ? Math.min(remainingDisplayQuantity, available)
+      const orderableAvailable = controlledRelease
+        ? Math.min(
+            available,
+            controlledRelease.personal_remaining +
+              controlledRelease.public_remaining
+          )
+        : req.user.role === 'USER'
+          ? Math.min(remainingDisplayQuantity, privateAccessibleAvailable)
           : available;
+
+      if (controlledRelease && qty <= orderableAvailable) {
+        const personalQuantity = Math.min(
+          qty,
+          controlledRelease.personal_remaining
+        );
+        controlledSplitByProduct.set(Number(id), {
+          personal_quantity: personalQuantity,
+          public_quantity: qty - personalQuantity,
+        });
+      }
 
       if (qty > orderableAvailable) {
         shortages.push({
@@ -2429,6 +2743,19 @@ const create = async (req, res, next) => {
           : null;
       const orderItemColumns = ['order_id', 'finished_good_id', 'qty_ordered'];
       const orderItemValues = [orderId, item.finished_good_id, item.qty_ordered];
+      if (supportsControlledRelease) {
+        const controlledSplit = controlledSplitByProduct.get(
+          Number(item.finished_good_id)
+        );
+        orderItemColumns.push(
+          'controlled_personal_quantity',
+          'controlled_public_quantity'
+        );
+        orderItemValues.push(
+          Number(controlledSplit?.personal_quantity || 0),
+          Number(controlledSplit?.public_quantity || 0)
+        );
+      }
       if (supportsOfferOrderSnapshots) {
         orderItemColumns.push('ordered_from_offer', 'offer_label_snapshot', 'offer_display_percentage', 'offer_display_quantity', 'offer_price_snapshot', 'offer_pairs_per_carton_snapshot');
         orderItemValues.push(offerSnapshot ? 1 : 0, offerSnapshot?.offer_label_snapshot ?? null, offerSnapshot?.offer_display_percentage ?? null, offerSnapshot?.offer_display_quantity ?? null, offerSnapshot?.offer_price_snapshot ?? null, offerSnapshot?.offer_pairs_per_carton_snapshot ?? null);
@@ -2485,6 +2812,13 @@ const create = async (req, res, next) => {
 
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({
+        success: false,
+        message: err.message,
+        ...(err.shortage ? { shortages: [err.shortage] } : {}),
+      });
+    }
     next(err);
   } finally {
     client.release();
@@ -2582,6 +2916,11 @@ const correctItems = async (req, res, next) => {
       'order_items',
       'price_currency_snapshot'
     );
+    const supportsControlledRelease =
+      (await hasColumn('user_product_permissions', 'allocation_scope')) &&
+      (await hasTable('product_controlled_release_pools')) &&
+      (await hasColumn('order_items', 'controlled_personal_quantity')) &&
+      (await hasColumn('order_items', 'controlled_public_quantity'));
     let correctionRegularMarkup = 0;
     let correctionCurrency = 'NPR';
     if (supportsRegularPriceMarkup) {
@@ -2601,6 +2940,94 @@ const correctItems = async (req, res, next) => {
       }
     }
     const oldItemByProduct = new Map(oldItemsResult.rows.map((item) => [Number(item.finished_good_id), item]));
+    const controlledCorrectionSplit = new Map();
+    if (supportsControlledRelease) {
+      const poolRows = await client.query(
+        `SELECT * FROM product_controlled_release_pools
+         WHERE finished_good_id IN ${clause}
+         FOR UPDATE`,
+        params
+      );
+      const poolByProduct = new Map(
+        poolRows.rows.map((row) => [Number(row.finished_good_id), row])
+      );
+      if (poolByProduct.size) {
+        const personalRows = await client.query(
+          `SELECT finished_good_id, allocation_quantity
+           FROM user_product_permissions
+           WHERE user_id = ?
+             AND allocation_scope = 'CONTROLLED'
+             AND finished_good_id IN ${clause}`,
+          [order.created_by, ...params]
+        );
+        const personalByProduct = new Map(
+          personalRows.rows.map((row) => [
+            Number(row.finished_good_id),
+            Number(row.allocation_quantity || 0),
+          ])
+        );
+        const usageRows = await client.query(
+          `SELECT oi.finished_good_id,
+                  COALESCE(SUM(CASE WHEN o.created_by = ?
+                    THEN oi.controlled_personal_quantity ELSE 0 END), 0) AS personal_used,
+                  COALESCE(SUM(oi.controlled_public_quantity), 0) AS public_used
+           FROM order_items oi
+           JOIN orders o ON o.id = oi.order_id
+           JOIN product_controlled_release_pools pool
+             ON pool.finished_good_id = oi.finished_good_id
+            AND o.created_at >= pool.created_at
+           WHERE o.status <> 'CANCELLED'
+             AND o.id <> ?
+             AND oi.finished_good_id IN ${clause}
+           GROUP BY oi.finished_good_id`,
+          [order.created_by, order.id, ...params]
+        );
+        const usageByProduct = new Map(
+          usageRows.rows.map((row) => [Number(row.finished_good_id), row])
+        );
+        const controlledShortages = [];
+        correctedItems.forEach((item) => {
+          const pool = poolByProduct.get(item.finished_good_id);
+          if (!pool) return;
+          const usage = usageByProduct.get(item.finished_good_id) || {};
+          const personalRemaining = Math.max(
+            0,
+            Number(personalByProduct.get(item.finished_good_id) || 0) -
+              Number(usage.personal_used || 0)
+          );
+          const publicRemaining = Math.max(
+            0,
+            Number(pool.public_quantity || 0) -
+              Number(usage.public_used || 0)
+          );
+          if (item.qty_ordered > personalRemaining + publicRemaining) {
+            controlledShortages.push({
+              product_name: item.product.name,
+              requested: item.qty_ordered,
+              available: personalRemaining + publicRemaining,
+            });
+            return;
+          }
+          const personalQuantity = Math.min(
+            item.qty_ordered,
+            personalRemaining
+          );
+          controlledCorrectionSplit.set(item.finished_good_id, {
+            personal_quantity: personalQuantity,
+            public_quantity: item.qty_ordered - personalQuantity,
+          });
+        });
+        if (controlledShortages.length) {
+          await client.query('ROLLBACK');
+          return res.status(422).json({
+            success: false,
+            message:
+              'This correction exceeds the customer’s controlled-release balance.',
+            shortages: controlledShortages,
+          });
+        }
+      }
+    }
     if (supportsOfferCampaigns) {
       const campaignIds = correctedItems
         .map((item) => oldItemByProduct.get(item.finished_good_id)?.offer_campaign_id)
@@ -2682,6 +3109,17 @@ const correctItems = async (req, res, next) => {
       const columns = ['order_id', 'finished_good_id', 'qty_ordered'];
       const values = [order.id, item.finished_good_id, item.qty_ordered];
       const oldItem = oldItemByProduct.get(Number(item.finished_good_id));
+      if (supportsControlledRelease) {
+        const split = controlledCorrectionSplit.get(item.finished_good_id);
+        columns.push(
+          'controlled_personal_quantity',
+          'controlled_public_quantity'
+        );
+        values.push(
+          Number(split?.personal_quantity || 0),
+          Number(split?.public_quantity || 0)
+        );
+      }
       if (supportsOfferOrderSnapshots) {
         columns.push('ordered_from_offer', 'offer_label_snapshot', 'offer_display_percentage', 'offer_display_quantity', 'offer_price_snapshot', 'offer_pairs_per_carton_snapshot');
         values.push(
@@ -2977,7 +3415,8 @@ const updateStatus = async (req, res, next) => {
     if (status === 'DELIVERED') {
       const { clause: oClause, params: oParams } = buildInClause([order.id]);
       const itemsRes = await client.query(
-        `SELECT oi.*, fg.name AS product_name, fg.quantity
+        `SELECT oi.*, fg.name AS product_name, fg.quantity,
+                fg.inner_boxes_per_outer_box
          FROM order_items oi
          JOIN finished_goods fg ON fg.id = oi.finished_good_id
          WHERE oi.order_id IN ${oClause}`,
@@ -3082,6 +3521,13 @@ const updateStatus = async (req, res, next) => {
     });
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({
+        success: false,
+        message: err.message,
+        ...(err.shortage ? { shortages: [err.shortage] } : {}),
+      });
+    }
     next(err);
   } finally {
     client.release();

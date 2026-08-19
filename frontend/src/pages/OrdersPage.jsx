@@ -1619,7 +1619,9 @@ export default function OrdersPage() {
     );
     // Each actual warehouse starts on its own paper. A warehouse only continues
     // onto another paper when its own item count cannot fit safely on one A4 page.
-    const rowsPerPage = 25;
+    // Windows and macOS Chrome use slightly different print font metrics.
+    // Twenty rows leaves enough room for totals and signatures on both.
+    const rowsPerPage = 20;
     const pages = groups.flatMap((group) => {
       const chunks = [];
       for (let index = 0; index < group.rows.length; index += rowsPerPage) {
@@ -1739,7 +1741,7 @@ export default function OrdersPage() {
             * { box-sizing: border-box; }
             body { margin: 0; color: #000; font-family: Arial, sans-serif; font-size: 16px; }
             @page { size: A4 portrait; margin: 8mm; }
-            .print-page { position: relative; width: 194mm; height: 279mm; overflow: hidden; padding-bottom: 4mm; page-break-after: always; break-after: page; }
+            .print-page { position: relative; width: 194mm; min-height: 260mm; height: auto; overflow: visible; padding-bottom: 6mm; page-break-after: always; break-after: page; }
             .print-page.last { page-break-after: auto; break-after: auto; }
             .page-indicator { position: absolute; top: 3px; right: 0; font-size: 14px; font-weight: 700; }
             .header { text-align: center; font-size: 26px; font-weight: 800; letter-spacing: .08em; }
@@ -1767,7 +1769,7 @@ export default function OrdersPage() {
             tr, .totals, .signature { break-inside: avoid; page-break-inside: avoid; }
             @media print {
               html, body { width: 210mm; }
-              .print-page { min-height: 0; }
+              .print-page { min-height: 260mm; }
             }
             @media screen { body { background: #e5e7eb; padding: 20px; } .print-page { margin: 0 auto 20px; background: white; } }
           </style>
@@ -1807,7 +1809,7 @@ export default function OrdersPage() {
           totalsMarginTop +
           signature.getBoundingClientRect().height +
           signatureMarginTop +
-          8;
+          16;
         const availableRowsHeight = Math.max(
           0,
           pageRect.height -

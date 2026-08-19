@@ -89,6 +89,7 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     supportsOfferUsers,
     supportsOfferCampaigns,
     supportsPercentageAllocations,
+    supportsAllocationScope,
     supportsOfferOrderSnapshots,
     supportsOfferPriceAdjustments,
   ] = await Promise.all([
@@ -101,15 +102,21 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     hasTable('finished_good_offer_users'),
     hasOfferCampaignSchema(),
     hasColumn('user_product_permissions', 'allocation_quantity'),
+    hasColumn('user_product_permissions', 'allocation_scope'),
     hasColumn('order_items', 'ordered_from_offer'),
     hasTable('user_series_offer_price_adjustments'),
   ]);
   const supportsOfferUserQuantity = supportsOfferUsers
     ? await hasColumn('finished_good_offer_users', 'display_quantity')
     : false;
+  const supportsControlledRelease =
+    supportsAllocationScope &&
+    (await hasTable('product_controlled_release_pools')) &&
+    (await hasColumn('order_items', 'controlled_personal_quantity')) &&
+    (await hasColumn('order_items', 'controlled_public_quantity'));
   const includeHidden =
     req.query.include_hidden === '1' &&
-    ['ADMIN', 'CO_ADMIN', 'MEMBER'].includes(req.user.role);
+    ['ADMIN', 'CO_ADMIN'].includes(req.user.role);
   const isOfferView = offerView && ['USER', 'ELDER'].includes(req.user.role);
   const isLinkedElderAccount = req.user.role === 'ELDER';
   const availabilityUserId = isLinkedElderAccount
@@ -152,19 +159,35 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
         AND upp.can_view = 0
     )`;
     if (supportsPercentageAllocations) {
-      sql += ` AND (
-        NOT EXISTS (
-          SELECT 1 FROM user_product_permissions allocated
-          WHERE allocated.finished_good_id = finished_goods.id
-            AND allocated.allocation_quantity IS NOT NULL
-        )
-        OR EXISTS (
-          SELECT 1 FROM user_product_permissions own_allocation
-          WHERE own_allocation.finished_good_id = finished_goods.id
-            AND own_allocation.user_id = ?
-            AND own_allocation.allocation_quantity IS NOT NULL
-        )
-      )`;
+      sql += supportsAllocationScope
+        ? ` AND (
+            NOT EXISTS (
+              SELECT 1 FROM user_product_permissions allocated
+              WHERE allocated.finished_good_id = finished_goods.id
+                AND allocated.allocation_quantity IS NOT NULL
+                AND COALESCE(allocated.allocation_scope, 'EXCLUSIVE') = 'EXCLUSIVE'
+            )
+            OR EXISTS (
+              SELECT 1 FROM user_product_permissions own_allocation
+              WHERE own_allocation.finished_good_id = finished_goods.id
+                AND own_allocation.user_id = ?
+                AND own_allocation.allocation_quantity IS NOT NULL
+                AND COALESCE(own_allocation.allocation_scope, 'EXCLUSIVE') = 'EXCLUSIVE'
+            )
+          )`
+        : ` AND (
+            NOT EXISTS (
+              SELECT 1 FROM user_product_permissions allocated
+              WHERE allocated.finished_good_id = finished_goods.id
+                AND allocated.allocation_quantity IS NOT NULL
+            )
+            OR EXISTS (
+              SELECT 1 FROM user_product_permissions own_allocation
+              WHERE own_allocation.finished_good_id = finished_goods.id
+                AND own_allocation.user_id = ?
+                AND own_allocation.allocation_quantity IS NOT NULL
+            )
+          )`;
     }
     params.push(availabilityUserId, availabilityUserId);
     if (supportsPercentageAllocations) params.push(availabilityUserId);
@@ -212,6 +235,8 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     reserved,
     campaignUsage,
     percentageAllocationRows,
+    controlledPoolRows,
+    privateAllocationRows,
     seriesOfferAdjustments,
   ] =
     await Promise.all([
@@ -239,6 +264,58 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
                   upp.allocation_percentage,
                   upp.allocation_quantity,
                   upp.allocation_started_at,
+                  ${supportsAllocationScope ? "COALESCE(upp.allocation_scope, 'EXCLUSIVE')" : "'EXCLUSIVE'"} AS allocation_scope,
+                  COALESCE(SUM(${
+                    supportsControlledRelease
+                      ? `CASE WHEN upp.allocation_scope = 'CONTROLLED'
+                           THEN oi.controlled_personal_quantity
+                           ELSE oi.qty_ordered END`
+                      : 'oi.qty_ordered'
+                  }), 0) AS used_quantity
+           FROM user_product_permissions upp
+           ${supportsControlledRelease ? 'LEFT JOIN product_controlled_release_pools controlled_pool ON controlled_pool.finished_good_id = upp.finished_good_id' : ''}
+           LEFT JOIN orders o
+             ON o.created_by = upp.user_id
+            AND o.status <> 'CANCELLED'
+            AND ${
+              supportsControlledRelease
+                ? `(
+                     (upp.allocation_scope = 'CONTROLLED' AND o.created_at >= controlled_pool.created_at)
+                     OR (COALESCE(upp.allocation_scope, 'EXCLUSIVE') <> 'CONTROLLED'
+                       AND o.created_at >= upp.allocation_started_at)
+                   )`
+                : 'o.created_at >= upp.allocation_started_at'
+            }
+           LEFT JOIN order_items oi
+             ON oi.order_id = o.id
+            AND oi.finished_good_id = upp.finished_good_id
+            ${supportsOfferOrderSnapshots ? supportsAllocationScope ? "AND (COALESCE(upp.allocation_scope, 'EXCLUSIVE') = 'CONTROLLED' OR COALESCE(oi.ordered_from_offer, 0) = 0)" : 'AND COALESCE(oi.ordered_from_offer, 0) = 0' : ''}
+           WHERE upp.user_id = ?
+             AND upp.allocation_quantity IS NOT NULL
+             AND upp.finished_good_id IN (${productIds.map(() => '?').join(',')})
+           GROUP BY upp.finished_good_id, upp.allocation_percentage,
+                    upp.allocation_quantity, upp.allocation_started_at${supportsAllocationScope ? ', upp.allocation_scope' : ''}`,
+          [availabilityUserId, ...productIds]
+        )
+      : Promise.resolve({ rows: [] }),
+    shouldLoadPercentageAllocation && supportsControlledRelease
+      ? query(
+          `SELECT pool.finished_good_id, pool.public_quantity,
+                  COALESCE(SUM(CASE WHEN o.status <> 'CANCELLED'
+                    THEN oi.controlled_public_quantity ELSE 0 END), 0) AS public_used_quantity
+           FROM product_controlled_release_pools pool
+           LEFT JOIN order_items oi ON oi.finished_good_id = pool.finished_good_id
+           LEFT JOIN orders o ON o.id = oi.order_id
+             AND o.created_at >= pool.created_at
+           WHERE pool.finished_good_id IN (${productIds.map(() => '?').join(',')})
+           GROUP BY pool.finished_good_id, pool.public_quantity`,
+          productIds
+        )
+      : Promise.resolve({ rows: [] }),
+    shouldLoadPercentageAllocation && supportsAllocationScope
+      ? query(
+          `SELECT upp.finished_good_id, upp.user_id,
+                  upp.allocation_quantity, upp.allocation_started_at,
                   COALESCE(SUM(oi.qty_ordered), 0) AS used_quantity
            FROM user_product_permissions upp
            LEFT JOIN orders o
@@ -249,12 +326,12 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
              ON oi.order_id = o.id
             AND oi.finished_good_id = upp.finished_good_id
             ${supportsOfferOrderSnapshots ? 'AND COALESCE(oi.ordered_from_offer, 0) = 0' : ''}
-           WHERE upp.user_id = ?
+           WHERE upp.allocation_scope = 'PRIVATE'
              AND upp.allocation_quantity IS NOT NULL
              AND upp.finished_good_id IN (${productIds.map(() => '?').join(',')})
-           GROUP BY upp.finished_good_id, upp.allocation_percentage,
+           GROUP BY upp.finished_good_id, upp.user_id,
                     upp.allocation_quantity, upp.allocation_started_at`,
-          [availabilityUserId, ...productIds]
+          productIds
         )
       : Promise.resolve({ rows: [] }),
     usesCustomerOfferAudience && supportsOfferPriceAdjustments
@@ -282,9 +359,38 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
           used_quantity: usedQuantity,
           remaining_quantity: Math.max(0, assignedQuantity - usedQuantity),
           started_at: row.allocation_started_at,
+          scope: String(row.allocation_scope || 'EXCLUSIVE').toUpperCase(),
         },
       ];
     })
+  );
+  const privateAllocationSummary = new Map();
+  privateAllocationRows.rows.forEach((row) => {
+    const productId = Number(row.finished_good_id);
+    const assignedQuantity = Number(row.allocation_quantity || 0);
+    const usedQuantity = Number(row.used_quantity || 0);
+    const remainingQuantity = Math.max(0, assignedQuantity - usedQuantity);
+    const current = privateAllocationSummary.get(productId) || {
+      remaining_quantity: 0,
+      remaining_by_user: new Map(),
+    };
+    current.remaining_quantity += remainingQuantity;
+    current.remaining_by_user.set(Number(row.user_id), remainingQuantity);
+    privateAllocationSummary.set(productId, current);
+  });
+  const controlledPools = new Map(
+    controlledPoolRows.rows.map((row) => [
+      Number(row.finished_good_id),
+      {
+        public_quantity: Number(row.public_quantity || 0),
+        public_used_quantity: Number(row.public_used_quantity || 0),
+        public_remaining_quantity: Math.max(
+          0,
+          Number(row.public_quantity || 0) -
+            Number(row.public_used_quantity || 0)
+        ),
+      },
+    ])
   );
 
   return products.rows
@@ -316,19 +422,75 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
       const percentageAllocation = percentageAllocations.get(
         Number(product.id)
       );
+      const controlledPool = controlledPools.get(Number(product.id));
+      const controlledRelease = controlledPool
+        ? {
+            personal_remaining_quantity:
+              percentageAllocation?.scope === 'CONTROLLED'
+                ? percentageAllocation.remaining_quantity
+                : 0,
+            public_remaining_quantity:
+              controlledPool.public_remaining_quantity,
+          }
+        : null;
       const offerRemainingQuantity =
         usesCustomerOfferAudience && offerIsActive
           ? Math.max(0, offerQuantityLimit - campaignUsedQuantity)
           : offerQuantityLimit;
       const normalRemainingQuantity = percentageAllocation
-        ? percentageAllocation.remaining_quantity
-        : display_quantity;
-      const display_stock = Math.min(
-        offerIsActive && usesCustomerOfferAudience
-          ? offerRemainingQuantity
-          : normalRemainingQuantity,
-        available_qty
+        ? percentageAllocation.scope === 'PRIVATE'
+          ? Math.min(
+              available_qty,
+              Math.min(
+                display_quantity,
+                Math.max(
+                  0,
+                  available_qty -
+                    Number(
+                      privateAllocationSummary.get(Number(product.id))
+                        ?.remaining_quantity || 0
+                    )
+                )
+              ) + percentageAllocation.remaining_quantity
+            )
+          : percentageAllocation.remaining_quantity
+        : Math.min(
+            display_quantity,
+            Math.max(
+              0,
+              available_qty -
+                Number(
+                  privateAllocationSummary.get(Number(product.id))
+                    ?.remaining_quantity || 0
+                )
+            )
+          );
+      const privateAccessibleAvailable = Math.min(
+        available_qty,
+        Math.max(
+          0,
+          available_qty -
+            Number(
+              privateAllocationSummary.get(Number(product.id))
+                ?.remaining_quantity || 0
+            )
+        ) +
+          (percentageAllocation?.scope === 'PRIVATE'
+            ? percentageAllocation.remaining_quantity
+            : 0)
       );
+      const display_stock = controlledRelease
+        ? Math.min(
+            available_qty,
+            controlledRelease.personal_remaining_quantity +
+              controlledRelease.public_remaining_quantity
+          )
+        : Math.min(
+            offerIsActive && usesCustomerOfferAudience
+              ? offerRemainingQuantity
+              : normalRemainingQuantity,
+            privateAccessibleAvailable
+          );
       const canSeeOffer =
         !usesCustomerOfferAudience ||
         !supportsOfferAudience ||
@@ -356,6 +518,13 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
           : null;
 
       if (isOfferView && usesCustomerOfferAudience && !canSeeOffer) {
+        return null;
+      }
+      if (
+        controlledRelease &&
+        ['USER', 'MEMBER', 'ELDER'].includes(req.user.role) &&
+        display_stock <= 0
+      ) {
         return null;
       }
 
@@ -391,6 +560,14 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
         allocation_remaining_quantity:
           percentageAllocation?.remaining_quantity ?? null,
         allocation_started_at: percentageAllocation?.started_at ?? null,
+        allocation_scope: percentageAllocation?.scope ?? null,
+        private_allocation_remaining_quantity: Number(
+          privateAllocationSummary.get(Number(product.id))?.remaining_quantity || 0
+        ),
+        controlled_personal_remaining_quantity:
+          controlledRelease?.personal_remaining_quantity ?? null,
+        controlled_public_remaining_quantity:
+          controlledRelease?.public_remaining_quantity ?? null,
       };
     })
     .filter(Boolean);
