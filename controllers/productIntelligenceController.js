@@ -131,7 +131,10 @@ const getProducts = async (req, res, next) => {
       ? String(req.query.sort || "VELOCITY_DESC").toUpperCase()
       : "VELOCITY_DESC";
     const search = String(req.query.search || "").trim().toLowerCase();
-    const series = String(req.query.series || "ALL").trim();
+    const series = String(req.query.series || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
     const pagination = getPagePagination(req.query, {
       defaultPageSize: 50,
       maxPageSize: 100,
@@ -362,7 +365,7 @@ const getProducts = async (req, res, next) => {
       })
       .filter((row) => {
         const matchesSeries =
-          series === "ALL" || String(row.sole_code || "") === series;
+          !series.length || series.includes(String(row.sole_code || ""));
         const matchesSearch =
           !search ||
           [row.name, row.article_code, row.sole_code, row.color, row.size]

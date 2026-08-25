@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Button from "../../components/Button";
 import EmptyState from "../../components/EmptyState";
+import MultiSeriesFilter from "../../components/MultiSeriesFilter";
 import { formatNumber } from "../../utils/format";
 import { OFFER_REPORT_PRODUCTS_PER_PAGE } from "./offerUtils";
 
@@ -36,7 +37,7 @@ const Quantity = ({ label, cartons, pairs, tone = "slate", note }) => {
 export default function OfferAllocationHistory({ rows = [], loading = false }) {
   const [search, setSearch] = useState("");
   const [userFilter, setUserFilter] = useState("ALL");
-  const [seriesFilter, setSeriesFilter] = useState("ALL");
+  const [seriesFilters, setSeriesFilters] = useState([]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
@@ -71,7 +72,7 @@ export default function OfferAllocationHistory({ rows = [], loading = false }) {
       const userKey = String(row.user_email || row.user_name || "").trim().toLowerCase();
       const started = dateKey(row.campaign_started_at);
       if (userFilter !== "ALL" && userKey !== userFilter) return false;
-      if (seriesFilter !== "ALL" && String(row.sole_code || "").trim() !== seriesFilter) return false;
+      if (seriesFilters.length && !seriesFilters.includes(String(row.sole_code || "").trim())) return false;
       if (dateFrom && started && started < dateFrom) return false;
       if (dateTo && started && started > dateTo) return false;
       const searchable = [
@@ -86,7 +87,7 @@ export default function OfferAllocationHistory({ rows = [], loading = false }) {
       ].map((value) => String(value || "").toLowerCase()).join(" ");
       return terms.every((term) => searchable.includes(term));
     });
-  }, [dateFrom, dateTo, rows, search, seriesFilter, userFilter]);
+  }, [dateFrom, dateTo, rows, search, seriesFilters, userFilter]);
 
   const cumulativeRows = useMemo(() => {
     const totals = new Map();
@@ -155,7 +156,7 @@ export default function OfferAllocationHistory({ rows = [], loading = false }) {
     page * OFFER_REPORT_PRODUCTS_PER_PAGE
   );
 
-  useEffect(() => setPage(1), [dateFrom, dateTo, search, seriesFilter, userFilter]);
+  useEffect(() => setPage(1), [dateFrom, dateTo, search, seriesFilters, userFilter]);
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
@@ -228,10 +229,7 @@ export default function OfferAllocationHistory({ rows = [], loading = false }) {
           <option value="ALL">All users</option>
           {userOptions.map((option) => <option key={option.key} value={option.key}>{option.name} · {option.email}</option>)}
         </select>
-        <select value={seriesFilter} onChange={(event) => setSeriesFilter(event.target.value)} className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm">
-          <option value="ALL">All series</option>
-          {seriesOptions.map((series) => <option key={series} value={series}>{series}</option>)}
-        </select>
+        <MultiSeriesFilter options={seriesOptions} values={seriesFilters} onChange={setSeriesFilters} label="" buttonClassName="h-10" />
         <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} aria-label="Offer history from date" className="h-10 rounded-xl border border-slate-200 px-3 text-sm" />
         <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} aria-label="Offer history to date" className="h-10 rounded-xl border border-slate-200 px-3 text-sm" />
         <div className="flex gap-2 xl:col-span-6">

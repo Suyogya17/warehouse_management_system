@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Button from "../components/Button";
 import DataTable from "../components/DataTable";
+import MultiSeriesFilter from "../components/MultiSeriesFilter";
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import StatusBadge from "../components/StatusBadge";
@@ -32,9 +33,10 @@ export default function ProductPercentagePage() {
   const [legacyHistoryCount, setLegacyHistoryCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState("");
   const [allocationFilter, setAllocationFilter] = useState("all");
-  const [seriesFilter, setSeriesFilter] = useState("");
+  const [seriesFilters, setSeriesFilters] = useState([]);
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState(null);
   const [selectedUserIds, setSelectedUserIds] = useState([]);
@@ -123,8 +125,8 @@ export default function ProductPercentagePage() {
       if (allocationFilter === "allocated" && !hasAllocation) return false;
       if (allocationFilter === "unallocated" && hasAllocation) return false;
       if (
-        seriesFilter &&
-        String(product.sole_code || "").trim() !== seriesFilter
+        seriesFilters.length &&
+        !seriesFilters.includes(String(product.sole_code || "").trim())
       ) {
         return false;
       }
@@ -147,7 +149,7 @@ export default function ProductPercentagePage() {
     allocationsByProduct,
     products,
     search,
-    seriesFilter,
+    seriesFilters,
   ]);
 
   const seriesOptions = useMemo(
@@ -187,7 +189,7 @@ export default function ProductPercentagePage() {
 
   useEffect(() => {
     setPage(1);
-  }, [allocationFilter, search, seriesFilter]);
+  }, [allocationFilter, search, seriesFilters]);
 
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
@@ -502,6 +504,182 @@ export default function ProductPercentagePage() {
     }
   };
 
+  const exportAllocations = async () => {
+    try {
+      setExporting(true);
+      const XLSX = await import("xlsx");
+      const visibleProductIds = new Set(
+        filteredProducts.map((product) => Number(product.id))
+      );
+      const productById = new Map(
+        filteredProducts.map((product) => [Number(product.id), product])
+      );
+      const cartonValue = (pairs, pairsPerCarton) => {
+        const size = Number(pairsPerCarton || 0);
+        return size > 0
+          ? Math.round((Number(pairs || 0) / size) * 1000) / 1000
+          : 0;
+      };
+
+      const userRows = allocations
+        .filter((allocation) =>
+          visibleProductIds.has(Number(allocation.finished_good_id))
+        )
+        .map((allocation) => {
+          const product = productById.get(Number(allocation.finished_good_id)) || {};
+          const pairsPerCarton = Number(
+            product.inner_boxes_per_outer_box || 0
+          );
+          const assignedPairs = Number(allocation.allocation_quantity || 0);
+          const usedPairs = Number(allocation.ordered_quantity || 0);
+          const remainingPairs = Number(allocation.remaining_quantity || 0);
+          return {
+            "FG.ID": Number(allocation.finished_good_id),
+            Product: product.name || "",
+            Article: product.article_code || "",
+            Series: product.sole_code || "",
+            Color: product.color || "",
+            Size: product.size || "",
+            "Allocation type": String(
+              allocation.allocation_scope || "EXCLUSIVE"
+            ).toUpperCase(),
+            "Assigned person": allocation.user_name || "",
+            Email: allocation.user_email || "",
+            "Allocation started": allocation.allocation_started_at || "",
+            "Allocation percentage": Number(
+              allocation.allocation_percentage || 0
+            ),
+            "Pairs per CTN": pairsPerCarton,
+            "Assigned CTN": cartonValue(assignedPairs, pairsPerCarton),
+            "Assigned pairs": assignedPairs,
+            "Ordered / used CTN": cartonValue(usedPairs, pairsPerCarton),
+            "Ordered / used pairs": usedPairs,
+            "Left for this person CTN": cartonValue(
+              remainingPairs,
+              pairsPerCarton
+            ),
+            "Left for this person pairs": remainingPairs,
+          };
+        })
+        .sort(
+          (left, right) =>
+            String(left.Article || left.Product).localeCompare(
+              String(right.Article || right.Product),
+              undefined,
+              { numeric: true, sensitivity: "base" }
+            ) ||
+            String(left.Color).localeCompare(String(right.Color), undefined, {
+              numeric: true,
+              sensitivity: "base",
+            }) ||
+            String(left["Assigned person"]).localeCompare(
+              String(right["Assigned person"])
+            )
+        );
+
+      const productRows = filteredProducts.map((product) => {
+        const targets = allocationsByProduct.get(Number(product.id)) || [];
+        const pairsPerCarton = Number(product.inner_boxes_per_outer_box || 0);
+        const availablePairs = Number(
+          product.available_qty ?? product.quantity ?? 0
+        );
+        const assignedPairs = targets.reduce(
+          (sum, target) => sum + Number(target.allocation_quantity || 0),
+          0
+        );
+        const usedPairs = targets.reduce(
+          (sum, target) => sum + Number(target.ordered_quantity || 0),
+          0
+        );
+        const personalRemainingPairs = targets.reduce(
+          (sum, target) => sum + Number(target.remaining_quantity || 0),
+          0
+        );
+        const publicPairs = Number(targets[0]?.public_quantity || 0);
+        const publicUsedPairs = Number(
+          targets[0]?.public_used_quantity || 0
+        );
+        const publicRemainingPairs = Number(
+          targets[0]?.public_remaining_quantity || 0
+        );
+        const unreleasedPairs = Math.max(
+          0,
+          availablePairs - personalRemainingPairs - publicRemainingPairs
+        );
+        return {
+          "FG.ID": Number(product.id),
+          Product: product.name || "",
+          Article: product.article_code || "",
+          Series: product.sole_code || "",
+          Color: product.color || "",
+          Size: product.size || "",
+          "Allocation type": targets.length
+            ? String(targets[0]?.allocation_scope || "EXCLUSIVE").toUpperCase()
+            : "NOT ALLOCATED",
+          "Assigned people": targets.length,
+          "Pairs per CTN": pairsPerCarton,
+          "Current physical stock pairs": Number(product.quantity || 0),
+          "Currently reserved pairs": Number(product.reserved_qty || 0),
+          "Currently available pairs": availablePairs,
+          "Total assigned CTN": cartonValue(assignedPairs, pairsPerCarton),
+          "Total assigned pairs": assignedPairs,
+          "Total ordered / used CTN": cartonValue(usedPairs, pairsPerCarton),
+          "Total ordered / used pairs": usedPairs,
+          "Personal balance left CTN": cartonValue(
+            personalRemainingPairs,
+            pairsPerCarton
+          ),
+          "Personal balance left pairs": personalRemainingPairs,
+          "Public released CTN": cartonValue(publicPairs, pairsPerCarton),
+          "Public released pairs": publicPairs,
+          "Public used CTN": cartonValue(publicUsedPairs, pairsPerCarton),
+          "Public used pairs": publicUsedPairs,
+          "Public balance left CTN": cartonValue(
+            publicRemainingPairs,
+            pairsPerCarton
+          ),
+          "Public balance left pairs": publicRemainingPairs,
+          "Unreleased / general balance CTN": cartonValue(
+            unreleasedPairs,
+            pairsPerCarton
+          ),
+          "Unreleased / general balance pairs": unreleasedPairs,
+        };
+      });
+
+      const workbook = XLSX.utils.book_new();
+      const userSheet = XLSX.utils.json_to_sheet(userRows);
+      userSheet["!cols"] = Array.from({ length: 18 }, (_, index) => ({
+        wch: [1, 2, 7, 8, 9].includes(index) ? 24 : 17,
+      }));
+      const productSheet = XLSX.utils.json_to_sheet(productRows);
+      productSheet["!cols"] = Array.from({ length: 26 }, (_, index) => ({
+        wch: [1, 2, 6].includes(index) ? 24 : 17,
+      }));
+      XLSX.utils.book_append_sheet(workbook, userSheet, "Person Allocations");
+      XLSX.utils.book_append_sheet(workbook, productSheet, "Product Summary");
+      const today = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(workbook, `product-allocations-${today}.xlsx`);
+      showToast({
+        tone: "success",
+        title: "Allocation Excel exported",
+        message: `${userRows.length} person allocation row${
+          userRows.length === 1 ? "" : "s"
+        } exported from ${productRows.length} matching product${
+          productRows.length === 1 ? "" : "s"
+        }.`,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Export failed",
+        message: error.message || "Could not export product allocations.",
+      });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -539,19 +717,24 @@ export default function ProductPercentagePage() {
                 Not divided ({formatNumber(allocationCounts.unallocated)})
               </option>
             </select>
-            <select
-              value={seriesFilter}
-              onChange={(event) => setSeriesFilter(event.target.value)}
-              className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            <MultiSeriesFilter
+              options={seriesOptions}
+              values={seriesFilters}
+              onChange={setSeriesFilters}
+              label=""
+              buttonClassName="h-10"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              icon="download"
+              onClick={exportAllocations}
+              disabled={loading || exporting || !filteredProducts.length}
             >
-              <option value="">All series</option>
-              {seriesOptions.map((series) => (
-                <option key={series} value={series}>
-                  {series}
-                </option>
-              ))}
-            </select>
-            {search || allocationFilter !== "all" || seriesFilter ? (
+              {exporting ? "Exporting…" : "🖨️"}
+            </Button>
+            {search || allocationFilter !== "all" || seriesFilters.length ? (
               <Button
                 type="button"
                 size="sm"
@@ -559,7 +742,7 @@ export default function ProductPercentagePage() {
                 onClick={() => {
                   setSearch("");
                   setAllocationFilter("all");
-                  setSeriesFilter("");
+                  setSeriesFilters([]);
                 }}
               >
                 Clear

@@ -11,6 +11,7 @@ import {
 
 import Button from "../../components/Button";
 import DataTable from "../../components/DataTable";
+import MultiSeriesFilter from "../../components/MultiSeriesFilter";
 import SectionCard from "../../components/SectionCard";
 import StatCard from "../../components/StatCard";
 import StatusBadge from "../../components/StatusBadge";
@@ -96,7 +97,7 @@ export default function ProductIntelligence({ token }) {
   const [stockFilter, setStockFilter] = useState("ALL");
   const [visibilityFilter, setVisibilityFilter] = useState("ALL");
   const [activity, setActivity] = useState("ALL");
-  const [series, setSeries] = useState("ALL");
+  const [series, setSeries] = useState([]);
   const [status, setStatus] = useState("ALL");
   const [sort, setSort] = useState("VELOCITY_DESC");
   const [search, setSearch] = useState("");
@@ -129,7 +130,7 @@ export default function ProductIntelligence({ token }) {
           stock: stockFilter,
           visibility: visibilityFilter,
           activity,
-          series: series === "ALL" ? undefined : series,
+          series: series.length ? series.join(",") : undefined,
           status: status === "ALL" ? undefined : status,
           sort,
           search: debouncedSearch || undefined,
@@ -220,7 +221,7 @@ export default function ProductIntelligence({ token }) {
         stock: stockFilter,
         visibility: visibilityFilter,
         activity,
-        series: series === "ALL" ? undefined : series,
+        series: series.length ? series.join(",") : undefined,
         status: status === "ALL" ? undefined : status,
         sort,
         search: debouncedSearch || undefined,
@@ -327,21 +328,15 @@ export default function ProductIntelligence({ token }) {
             <option value="REGULAR">Regular products</option>
             <option value="OFFER">Active offer products</option>
           </select>
-          <select
-            value={series}
-            onChange={(event) => {
-              setSeries(event.target.value);
+          <MultiSeriesFilter
+            options={data?.series_options || []}
+            values={series}
+            onChange={(values) => {
+              setSeries(values);
               setPage(1);
             }}
-            className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold"
-          >
-            <option value="ALL">All series</option>
-            {(data?.series_options || []).map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
+            label=""
+          />
           <select
             value={status}
             onChange={(event) => {

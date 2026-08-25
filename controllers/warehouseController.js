@@ -176,12 +176,13 @@ const getStock = async (req, res, next) => {
       where += ` AND (
         fg.name LIKE ?
         OR fg.article_code LIKE ?
+        OR fg.sole_code LIKE ?
         OR fg.color LIKE ?
         OR fg.size LIKE ?
         OR w.name LIKE ?
       )`;
       const term = `%${search}%`;
-      params.push(term, term, term, term, term);
+      params.push(term, term, term, term, term, term);
     }
 
     const result = await query(
@@ -192,6 +193,7 @@ const getStock = async (req, res, next) => {
               fgws.updated_at,
               fg.name AS product_name,
               fg.article_code,
+              fg.sole_code,
               fg.color,
               fg.size,
               fg.unit,

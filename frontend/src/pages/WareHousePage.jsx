@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Button from "../components/Button";
 import DataTable from "../components/DataTable";
+import MultiSeriesFilter from "../components/MultiSeriesFilter";
 import { Field, TextAreaInput, TextInput } from "../components/Field";
 import SectionCard from "../components/SectionCard";
 import { useAuth } from "../context/AuthContext";
@@ -78,6 +79,7 @@ export default function WareHousePage() {
   const canManage = ["ADMIN", "CO_ADMIN"].includes(user?.role);
 
   const [search, setSearch] = useState("");
+  const [seriesFilters, setSeriesFilters] = useState([]);
   const [movementSearch, setMovementSearch] = useState("");
   const [transferReportFilters, setTransferReportFilters] = useState(emptyTransferReportFilters);
   const [warehouses, setWarehouses] = useState([]);
@@ -347,8 +349,21 @@ export default function WareHousePage() {
     );
   }, [stockRows, transferForm.finished_good_id, transferForm.from_warehouse_id]);
 
+  const warehouseSeriesOptions = useMemo(
+    () => [...new Set(stockRows.map((row) => String(row.sole_code || "").trim()).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" })),
+    [stockRows]
+  );
+
+  const filteredStockRows = useMemo(
+    () => seriesFilters.length
+      ? stockRows.filter((row) => seriesFilters.includes(String(row.sole_code || "").trim()))
+      : stockRows,
+    [seriesFilters, stockRows]
+  );
+
   const exportWarehouseStock = () => {
-    if (!stockRows.length) {
+    if (!filteredStockRows.length) {
       showToast({
         tone: "error",
         title: "Nothing to export",
@@ -360,6 +375,7 @@ export default function WareHousePage() {
     const columns = [
       ["Product", "product_name"],
       ["Article", "article_code"],
+      ["Series", "sole_code"],
       ["Color", "color"],
       ["Size", "size"],
       ["Warehouse", "warehouse_name"],
@@ -374,7 +390,7 @@ export default function WareHousePage() {
     const headerHtml = columns
       .map(([label]) => `<th>${escapeExcelCell(label)}</th>`)
       .join("");
-    const rowsHtml = stockRows
+    const rowsHtml = filteredStockRows
       .map((row) => {
         const cells = columns
           .map(([, key]) => {
@@ -426,7 +442,7 @@ export default function WareHousePage() {
     showToast({
       tone: "success",
       title: "Excel exported",
-      message: `${stockRows.length} warehouse stock row${stockRows.length === 1 ? "" : "s"} exported.`,
+      message: `${filteredStockRows.length} warehouse stock row${filteredStockRows.length === 1 ? "" : "s"} exported.`,
     });
   };
 
@@ -505,8 +521,8 @@ export default function WareHousePage() {
     });
   };
 
-  const totalWarehouseStock = stockRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
-  const totalWarehouseCartons = stockRows.reduce((sum, row) => sum + getCartons(row.quantity, row), 0);
+  const totalWarehouseStock = filteredStockRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+  const totalWarehouseCartons = filteredStockRows.reduce((sum, row) => sum + getCartons(row.quantity, row), 0);
   const transferReportTotalQty = transferReportRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
 
   return (
@@ -518,13 +534,20 @@ export default function WareHousePage() {
       >
         <div className="space-y-4 p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <Field label="Search product or warehouse">
-              <TextInput
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search ABC, article code, color, size, or warehouse..."
+            <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-[minmax(0,1fr)_240px]">
+              <Field label="Search product or warehouse">
+                <TextInput
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search ABC, article code, color, size, or warehouse..."
+                />
+              </Field>
+              <MultiSeriesFilter
+                options={warehouseSeriesOptions}
+                values={seriesFilters}
+                onChange={setSeriesFilters}
               />
-            </Field>
+            </div>
             <div className="flex flex-wrap gap-3">
               <Button variant="secondary" icon="download" onClick={exportWarehouseStock}>
                 Export Excel
@@ -539,6 +562,7 @@ export default function WareHousePage() {
             columns={[
               { key: "product_name", label: "Product" },
               { key: "article_code", label: "Article" },
+              { key: "sole_code", label: "Series", render: (row) => row.sole_code || "-" },
               { key: "color", label: "Color" },
               { key: "size", label: "Size" },
               { key: "warehouse_name", label: "Warehouse" },
@@ -559,7 +583,7 @@ export default function WareHousePage() {
               },
               { key: "updated_by_name", label: "Updated By" },
             ]}
-            rows={stockRows}
+            rows={filteredStockRows}
             showToolbar={false}
             emptyTitle="No warehouse stock found"
             emptyDescription="Run the SQL migration first, then add stock through production or manual adjustment."

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ShoppingCart } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import Button from "../components/Button";
+import MultiSeriesFilter from "../components/MultiSeriesFilter";
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import { useAuth } from "../context/AuthContext";
@@ -16,6 +17,7 @@ import OfferEditor from "./offers/OfferEditor";
 import OfferProductGrid from "./offers/OfferProductGrid";
 import OfferPurchases from "./offers/OfferPurchases";
 import OfferStockByUserTable from "./offers/OfferStockByUserTable";
+import OfferVsRegularReport from "./offers/OfferVsRegularReport";
 import useOffers from "./offers/useOffers";
 import {
   OFFER_PERCENTAGES_BY_EMAIL,
@@ -58,7 +60,7 @@ export default function OffersPage() {
   } = useOffers({ token, canManage, navigate });
   const [availabilityProducts, setAvailabilityProducts] = useState([]);
   const [search, setSearch] = useState("");
-  const [seriesFilter, setSeriesFilter] = useState("");
+  const [seriesFilters, setSeriesFilters] = useState([]);
   const [stockFilter, setStockFilter] = useState("ALL");
   const [showOnlyOffers, setShowOnlyOffers] = useState(false);
   const [showExpiredOffers, setShowExpiredOffers] = useState(false);
@@ -67,6 +69,7 @@ export default function OffersPage() {
   const [showOfferStockTable, setShowOfferStockTable] = useState(false);
   const [showOfferAllocationReport, setShowOfferAllocationReport] = useState(false);
   const [showOfferHistory, setShowOfferHistory] = useState(false);
+  const [showOfferComparison, setShowOfferComparison] = useState(false);
   const [loadingOfferStockTable, setLoadingOfferStockTable] = useState(false);
   const [loadingOfferAllocationReport, setLoadingOfferAllocationReport] = useState(false);
   const [loadingOfferHistory, setLoadingOfferHistory] = useState(false);
@@ -222,7 +225,8 @@ export default function OffersPage() {
       : offers;
     const q = search.trim().toLowerCase();
     return source.filter((item) => {
-      const matchesSeries = !seriesFilter || getSeriesName(item.sole_code) === seriesFilter;
+      const matchesSeries =
+        !seriesFilters.length || seriesFilters.includes(getSeriesName(item.sole_code));
       const matchesSearch = !q || [item.name, item.article_code, item.sole_code, item.color]
         .some((value) => String(value || "").toLowerCase().includes(q));
       const matchesExpiredEndDate =
@@ -231,7 +235,7 @@ export default function OffersPage() {
         String(item.offer_ends_at || "").slice(0, 10) === expiredEndDate;
       return matchesSeries && matchesSearch && matchesExpiredEndDate;
     });
-  }, [canManage, expiredEndDate, expiredOffers, offerAvailabilityById, offers, products, search, seriesFilter, showExpiredOffers, showOnlyOffers]);
+  }, [canManage, expiredEndDate, expiredOffers, offerAvailabilityById, offers, products, search, seriesFilters, showExpiredOffers, showOnlyOffers]);
   const offerStockCounts = useMemo(() => stockFilterCandidates.reduce((counts, item) => {
     const available = canManage
       ? Number(item.available_qty ?? item.quantity ?? 0)
@@ -267,7 +271,7 @@ export default function OffersPage() {
       .filter((item) => {
         const available = Number(item.available_qty ?? item.quantity ?? 0);
         const matchesSeries =
-          !seriesFilter || getSeriesName(item.sole_code) === seriesFilter;
+          !seriesFilters.length || seriesFilters.includes(getSeriesName(item.sole_code));
         const matchesSearch =
           !q ||
           [item.id, item.name, item.article_code, item.sole_code, item.color]
@@ -283,7 +287,7 @@ export default function OffersPage() {
     offerAvailabilityById,
     offers,
     search,
-    seriesFilter,
+    seriesFilters,
     stockFilter,
   ]);
   const trackOfferInterest = useProductInterestTracking({
@@ -308,7 +312,7 @@ export default function OffersPage() {
     return productGroups.slice(start, start + OFFER_PRODUCTS_PER_PAGE);
   }, [currentPage, productGroups]);
 
-  useEffect(() => { setCurrentPage(1); }, [expiredEndDate, search, seriesFilter, showExpiredOffers, showOnlyOffers, stockFilter]);
+  useEffect(() => { setCurrentPage(1); }, [expiredEndDate, search, seriesFilters, showExpiredOffers, showOnlyOffers, stockFilter]);
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
@@ -377,6 +381,7 @@ export default function OffersPage() {
     setShowOfferStockTable(false);
     setShowOfferAllocationReport(false);
     setShowOfferHistory(false);
+    setShowOfferComparison(false);
     setShowOfferPurchases(true);
     setLoadingOfferPurchases(true);
     try {
@@ -397,6 +402,7 @@ export default function OffersPage() {
     setShowOfferPurchases(false);
     setShowOfferAllocationReport(false);
     setShowOfferHistory(false);
+    setShowOfferComparison(false);
     setShowOfferStockTable(true);
     setLoadingOfferStockTable(true);
     try {
@@ -421,6 +427,7 @@ export default function OffersPage() {
     setShowOfferPurchases(false);
     setShowOfferStockTable(false);
     setShowOfferHistory(false);
+    setShowOfferComparison(false);
     setShowOfferAllocationReport(true);
     setLoadingOfferAllocationReport(true);
     try {
@@ -450,6 +457,7 @@ export default function OffersPage() {
     setShowOfferStockTable(false);
     setShowOfferAllocationReport(false);
     setShowOfferHistory(true);
+    setShowOfferComparison(false);
     setLoadingOfferHistory(true);
     try {
       const result = await api.getOfferAllocationHistory(token);
@@ -746,13 +754,14 @@ export default function OffersPage() {
       <SectionCard title={canManage ? "Manage offers" : "Current offers"} subtitle={`${offers.length} active offer${offers.length === 1 ? "" : "s"}`} icon="finishedGoods">
         {canManage && (
           <div className="mb-4 flex flex-wrap gap-2">
-            <Button type="button" variant={!showOnlyOffers && !showExpiredOffers && !showOfferPurchases && !showOfferStockTable && !showOfferAllocationReport && !showOfferHistory ? "primary" : "secondary"} onClick={() => { setShowOnlyOffers(false); setShowExpiredOffers(false); setShowOfferPurchases(false); setShowOfferStockTable(false); setShowOfferAllocationReport(false); setShowOfferHistory(false); }}>Show all products</Button>
-            <Button type="button" variant={showOnlyOffers && !showExpiredOffers && !showOfferPurchases && !showOfferStockTable && !showOfferAllocationReport && !showOfferHistory ? "primary" : "secondary"} onClick={() => { setShowOnlyOffers(true); setShowExpiredOffers(false); setShowOfferPurchases(false); setShowOfferStockTable(false); setShowOfferAllocationReport(false); setShowOfferHistory(false); }}>Show products in offer ({offers.length})</Button>
-            <Button type="button" variant={showExpiredOffers && !showOfferPurchases && !showOfferStockTable && !showOfferAllocationReport && !showOfferHistory ? "primary" : "secondary"} onClick={() => { setShowOnlyOffers(false); setShowExpiredOffers(true); setShowOfferPurchases(false); setShowOfferStockTable(false); setShowOfferAllocationReport(false); setShowOfferHistory(false); }}>Expired offers ({expiredOffers.length})</Button>
+            <Button type="button" variant={!showOnlyOffers && !showExpiredOffers && !showOfferPurchases && !showOfferStockTable && !showOfferAllocationReport && !showOfferHistory && !showOfferComparison ? "primary" : "secondary"} onClick={() => { setShowOnlyOffers(false); setShowExpiredOffers(false); setShowOfferPurchases(false); setShowOfferStockTable(false); setShowOfferAllocationReport(false); setShowOfferHistory(false); setShowOfferComparison(false); }}>Show all products</Button>
+            <Button type="button" variant={showOnlyOffers && !showExpiredOffers && !showOfferPurchases && !showOfferStockTable && !showOfferAllocationReport && !showOfferHistory && !showOfferComparison ? "primary" : "secondary"} onClick={() => { setShowOnlyOffers(true); setShowExpiredOffers(false); setShowOfferPurchases(false); setShowOfferStockTable(false); setShowOfferAllocationReport(false); setShowOfferHistory(false); setShowOfferComparison(false); }}>Show products in offer ({offers.length})</Button>
+            <Button type="button" variant={showExpiredOffers && !showOfferPurchases && !showOfferStockTable && !showOfferAllocationReport && !showOfferHistory && !showOfferComparison ? "primary" : "secondary"} onClick={() => { setShowOnlyOffers(false); setShowExpiredOffers(true); setShowOfferPurchases(false); setShowOfferStockTable(false); setShowOfferAllocationReport(false); setShowOfferHistory(false); setShowOfferComparison(false); }}>Expired offers ({expiredOffers.length})</Button>
             <Button type="button" variant={showOfferPurchases ? "primary" : "secondary"} onClick={toggleOfferPurchases}>Offer purchases</Button>
             <Button type="button" variant={showOfferStockTable ? "primary" : "secondary"} onClick={toggleOfferStockTable}>Offer stock by user</Button>
             <Button type="button" variant={showOfferAllocationReport ? "primary" : "secondary"} onClick={toggleOfferAllocationReport}>Offer allocation report</Button>
             <Button type="button" variant={showOfferHistory ? "primary" : "secondary"} onClick={toggleOfferHistory}>Offer history: beginning to now</Button>
+            <Button type="button" variant={showOfferComparison ? "primary" : "secondary"} onClick={() => { setShowOfferComparison((current) => !current); setShowOfferPurchases(false); setShowOfferStockTable(false); setShowOfferAllocationReport(false); setShowOfferHistory(false); }}>Offer vs regular report</Button>
             <Button
               type="button"
               variant="secondary"
@@ -811,6 +820,15 @@ export default function OffersPage() {
             <OfferAllocationHistory rows={offerHistoryRows} loading={loadingOfferHistory} />
           </div>
         ) : null}
+        {canManage && showOfferComparison ? (
+          <div className="mb-6 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
+            <div>
+              <h3 className="font-bold text-slate-900">Offer vs regular product report</h3>
+              <p className="text-sm text-slate-500">Compare quantities divided during offer periods with offer and non-offer orders, deliveries, and outstanding quantities.</p>
+            </div>
+            <OfferVsRegularReport token={token} />
+          </div>
+        ) : null}
         {canManage && showOfferPurchases ? (
           <OfferPurchases
             purchases={offerPurchases}
@@ -821,29 +839,15 @@ export default function OffersPage() {
         {!showOfferPurchases &&
         !showOfferStockTable &&
         !showOfferAllocationReport &&
-        !showOfferHistory ? (
+        !showOfferHistory &&
+        !showOfferComparison ? (
           <>
-            <div className="mb-4 flex max-w-xs flex-col gap-1">
-              <label
-                htmlFor="offer-series"
-                className="text-xs font-medium text-slate-500"
-              >
-                Series
-              </label>
-              <select
-                id="offer-series"
-                value={seriesFilter}
-                onChange={(event) => setSeriesFilter(event.target.value)}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
-              >
-                <option value="">All Series</option>
-                {seriesOptions.map((series) => (
-                  <option key={series} value={series}>
-                    {series}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <MultiSeriesFilter
+              options={seriesOptions}
+              values={seriesFilters}
+              onChange={setSeriesFilters}
+              className="mb-4 max-w-xs"
+            />
             {canManage && showExpiredOffers ? (
               <div className="mb-4 flex max-w-xs flex-col gap-1">
                 <label

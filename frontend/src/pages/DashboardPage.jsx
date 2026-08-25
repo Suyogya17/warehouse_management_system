@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowRight, ChevronLeft, ChevronRight, Package as PackageIcon, Eye, EyeOff, Megaphone, ShoppingBag, Sparkles } from "lucide-react";
 
 import PageHeader from "../components/PageHeader";
+import MultiSeriesFilter from "../components/MultiSeriesFilter";
 import ProductImageGallery from "../components/ProductImageGallery";
 import StatCard from "../components/StatCard";
 import VisibilitySummary from "../components/VisibilitySummary";
@@ -954,9 +955,9 @@ export default function DashboardPage() {
 
   const [search, setSearch]             = useState("");
   const [stockFilter, setStockFilter]   = useState("all");
-  const [seriesFilter, setSeriesFilter] = useState("");
+  const [seriesFilters, setSeriesFilters] = useState([]);
   const [onHoldSearch, setOnHoldSearch] = useState("");
-  const [onHoldSeriesFilter, setOnHoldSeriesFilter] = useState("");
+  const [onHoldSeriesFilters, setOnHoldSeriesFilters] = useState([]);
   const [selectedHoldCountry, setSelectedHoldCountry] = useState("NP");
   const [currentPage, setCurrentPage]   = useState(1);
   const [onHoldPage, setOnHoldPage]     = useState(1);
@@ -1311,7 +1312,7 @@ export default function DashboardPage() {
           (product.size         || "").toLowerCase().includes(q)
         );
         const matchesSeries =
-          !onHoldSeriesFilter || getSeriesName(product.sole_code) === onHoldSeriesFilter;
+          !onHoldSeriesFilters.length || onHoldSeriesFilters.includes(getSeriesName(product.sole_code));
         return matchesSearch && matchesSeries;
       });
     const groups = {};
@@ -1325,7 +1326,7 @@ export default function DashboardPage() {
       groups[key].push(item);
     });
     return Object.values(groups);
-  }, [onHoldBaseItems, onHoldSearch, onHoldSeriesFilter]);
+  }, [onHoldBaseItems, onHoldSearch, onHoldSeriesFilters]);
 
   const usersByCountry = useMemo(() => {
     const grouped = new Map();
@@ -1371,7 +1372,7 @@ export default function DashboardPage() {
         (product.size || "").toLowerCase().includes(q)
       );
       const matchesSeries =
-        !onHoldSeriesFilter || getSeriesName(product.sole_code) === onHoldSeriesFilter;
+        !onHoldSeriesFilters.length || onHoldSeriesFilters.includes(getSeriesName(product.sole_code));
       return matchesSearch && matchesSeries;
     };
 
@@ -1413,7 +1414,7 @@ export default function DashboardPage() {
     canManageVisibility,
     countryOptions,
     onHoldSearch,
-    onHoldSeriesFilter,
+    onHoldSeriesFilters,
     state.finishedGoods,
     state.permissions,
     getDashboardAvailableQty,
@@ -1473,7 +1474,8 @@ export default function DashboardPage() {
             item.article_code?.toLowerCase().includes(normalizedSearch);
           const matchStock =
             stockFilter === "low" ? qty > 0 && qty < 10 : qty > 0;
-          const matchSeries = !seriesFilter || getSeriesName(item.sole_code) === seriesFilter;
+          const matchSeries =
+            !seriesFilters.length || seriesFilters.includes(getSeriesName(item.sole_code));
           return isDisplayed && matchSearch && matchStock && matchSeries;
         })
       )
@@ -1493,7 +1495,7 @@ export default function DashboardPage() {
     groupedProducts,
     onHoldProductIds,
     search,
-    seriesFilter,
+    seriesFilters,
     stockFilter,
   ]);
 
@@ -1508,10 +1510,10 @@ export default function DashboardPage() {
     onHoldPage * PRODUCTS_PER_PAGE
   );
 
-  useEffect(() => { setCurrentPage(1); }, [search, stockFilter, seriesFilter]);
-  useEffect(() => { setOnHoldPage(1); }, [onHoldSearch, onHoldSeriesFilter]);
+  useEffect(() => { setCurrentPage(1); }, [search, stockFilter, seriesFilters]);
+  useEffect(() => { setOnHoldPage(1); }, [onHoldSearch, onHoldSeriesFilters]);
   useEffect(() => {
-    setOnHoldSeriesFilter("");
+    setOnHoldSeriesFilters([]);
     setOnHoldPage(1);
   }, [selectedHoldCountry]);
   useEffect(() => {
@@ -1638,17 +1640,9 @@ export default function DashboardPage() {
                 <option value="all">All Displayed</option>
                 <option value="low">Low Stock</option>
               </select>
-              <select value={seriesFilter} onChange={(e) => setSeriesFilter(e.target.value)}
-                className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
-                <option value="">All Series</option>
-                {seriesList.map((series) => (
-                  <option key={series} value={series}>
-                    {series}
-                  </option>
-                ))}
-              </select>
-              {(search || stockFilter !== "all" || seriesFilter) && (
-                <button onClick={() => { setSearch(""); setStockFilter("all"); setSeriesFilter(""); }}
+              <MultiSeriesFilter options={seriesList} values={seriesFilters} onChange={setSeriesFilters} label="" />
+              {(search || stockFilter !== "all" || seriesFilters.length) && (
+                <button onClick={() => { setSearch(""); setStockFilter("all"); setSeriesFilters([]); }}
                   className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition-all">
                   Clear
                 </button>
@@ -1693,15 +1687,9 @@ export default function DashboardPage() {
                 onChange={(e) => setOnHoldSearch(e.target.value)}
                 className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-amber-400 focus:border-transparent"
               />
-              <select value={onHoldSeriesFilter} onChange={(e) => setOnHoldSeriesFilter(e.target.value)}
-                className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-amber-400 focus:border-transparent">
-                <option value="">All Series</option>
-                {onHoldSeriesList.map((series) => (
-                  <option key={series} value={series}>{series}</option>
-                ))}
-              </select>
-              {(onHoldSearch || onHoldSeriesFilter) && (
-                <button onClick={() => { setOnHoldSearch(""); setOnHoldSeriesFilter(""); }}
+              <MultiSeriesFilter options={onHoldSeriesList} values={onHoldSeriesFilters} onChange={setOnHoldSeriesFilters} label="" />
+              {(onHoldSearch || onHoldSeriesFilters.length) && (
+                <button onClick={() => { setOnHoldSearch(""); setOnHoldSeriesFilters([]); }}
                   className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition-all">
                   Clear
                 </button>

@@ -419,11 +419,17 @@ export const api = {
   updateAdvertisement: (id, payload, token) =>
     apiRequest(`/advertisements/${id}`, { method: "PUT", body: payload }, token),
 
-  reorderAdvertisements: (orderedIds, token) =>
-    apiRequest("/advertisements/reorder", {
+  reorderAdvertisements: (orderedIds, token) => {
+    const ids = (Array.isArray(orderedIds) ? orderedIds : [])
+      .map(Number)
+      .filter((id) => Number.isInteger(id) && id > 0);
+    const query = new URLSearchParams({ ordered_ids: ids.join(",") });
+
+    return apiRequest(`/advertisements/reorder?${query.toString()}`, {
       method: "PUT",
-      body: JSON.stringify({ ordered_ids: orderedIds }),
-    }, token),
+      body: JSON.stringify({ ordered_ids: ids, orderedIds: ids, ids }),
+    }, token);
+  },
 
   deleteAdvertisement: (id, token) =>
     apiRequest(`/advertisements/${id}`, { method: "DELETE" }, token),
@@ -666,6 +672,8 @@ export const api = {
 
   getOrderFilters: (token) => apiRequest("/orders/filters", {}, token),
 
+  getOrderOverview: (token) => apiRequest("/orders/overview", {}, token),
+
   getAvailability: (token, options = {}) => {
     const query = buildQueryString(options);
     return apiRequest(`/orders/availability${query ? `?${query}` : ""}`, {}, token);
@@ -677,6 +685,10 @@ export const api = {
   },
 
   getOfferPurchases: (token) => apiRequest("/orders/offer-purchases", {}, token),
+  getOfferVsRegularReport: (params, token) => {
+    const query = buildQueryString(params);
+    return apiRequest(`/orders/offer-vs-regular-report${query ? `?${query}` : ""}`, {}, token);
+  },
 
   createOrder: (payload, token) =>
     apiRequest(

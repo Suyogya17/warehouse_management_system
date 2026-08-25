@@ -13,6 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import DataTable from "../../components/DataTable";
+import MultiSeriesFilter from "../../components/MultiSeriesFilter";
 import SectionCard from "../../components/SectionCard";
 import { formatDate, formatNumber } from "../../utils/format";
 import {
@@ -27,7 +28,7 @@ import {
 
 export default function ProductionAnalytics({ data }) {
   const [productionSearch, setProductionSearch] = useState("");
-  const [productionSeries, setProductionSeries] = useState("");
+  const [productionSeries, setProductionSeries] = useState([]);
   const latestProductionRows = data?.latest_product_production || [];
   const productionSeriesOptions = useMemo(() => [...new Set(latestProductionRows
     .map((row) => String(row.sole_code || "").replace(/[-_\s]*sole$/i, "").trim())
@@ -37,7 +38,7 @@ export default function ProductionAnalytics({ data }) {
     const terms = productionSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return latestProductionRows.filter((row) => {
       const series = String(row.sole_code || "").replace(/[-_\s]*sole$/i, "").trim();
-      if (productionSeries && series !== productionSeries) return false;
+      if (productionSeries.length && !productionSeries.includes(series)) return false;
       const searchable = [row.name, row.article_code, row.sole_code, row.color, row.size]
         .map((value) => String(value || "").toLowerCase())
         .join(" ");
@@ -89,14 +90,13 @@ export default function ProductionAnalytics({ data }) {
           <label className="text-sm font-semibold text-slate-700">Product search
             <input value={productionSearch} onChange={(event) => setProductionSearch(event.target.value)} placeholder="Product, article, color or size..." className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" />
           </label>
-          <label className="text-sm font-semibold text-slate-700">Series
-            <select value={productionSeries} onChange={(event) => setProductionSeries(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100">
-              <option value="">All series</option>
-              {productionSeriesOptions.map((series) => <option key={series} value={series}>{series}</option>)}
-            </select>
-          </label>
+          <MultiSeriesFilter
+            options={productionSeriesOptions}
+            values={productionSeries}
+            onChange={setProductionSeries}
+          />
         </div>
-        {(productionSearch || productionSeries) && latestProductionMatch && (
+        {(productionSearch || productionSeries.length) && latestProductionMatch && (
           <div className="mx-4 mb-4 grid gap-3 rounded-xl border border-indigo-100 bg-indigo-50 p-4 sm:grid-cols-2 xl:grid-cols-4">
             <div><p className="text-xs font-semibold uppercase text-indigo-500">Latest product</p><p className="mt-1 font-bold text-indigo-950">{productName(latestProductionMatch)}</p></div>
             <div><p className="text-xs font-semibold uppercase text-indigo-500">Production date</p><p className="mt-1 font-bold text-indigo-950">{formatDate(latestProductionMatch.latest_production_at)}</p></div>

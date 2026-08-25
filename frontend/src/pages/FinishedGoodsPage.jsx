@@ -67,6 +67,27 @@ const getSeriesName = (soleCode = "") =>
     .replace(/[-_\s]*sole$/i, "")
     .trim();
 
+const normalizeMaterialValue = (value) =>
+  String(value || "").trim().toLowerCase();
+
+const findMatchingMaterial = (materials, articleCode, color = "") => {
+  const normalizedCode = normalizeMaterialValue(articleCode);
+  const normalizedColor = normalizeMaterialValue(color);
+  if (!normalizedCode) return null;
+
+  return (
+    materials.find(
+      (item) =>
+        normalizeMaterialValue(item.article_code) === normalizedCode &&
+        (!normalizedColor || normalizeMaterialValue(item.color) === normalizedColor)
+    ) ||
+    materials.find(
+      (item) => normalizeMaterialValue(item.article_code) === normalizedCode
+    ) ||
+    null
+  );
+};
+
 export default function FinishedGoodsPage() {
   const { token, user } = useAuth();
   const { showToast } = useToast();
@@ -165,8 +186,12 @@ export default function FinishedGoodsPage() {
 
   useDataRefresh(loadItems, "finished-goods");
 
-  const upperMaterials = materials.filter((item) => item.category === "Upper");
-  const soleMaterials = materials.filter((item) => item.category === "Sole");
+  const upperMaterials = materials.filter(
+    (item) => normalizeMaterialValue(item.category) === "upper"
+  );
+  const soleMaterials = materials.filter(
+    (item) => normalizeMaterialValue(item.category) === "sole"
+  );
   const selectedUpperMaterial = upperMaterials.find((item) => String(item.id) === selectedUpperId);
   const selectedSoleMaterial = soleMaterials.find((item) => String(item.id) === selectedSoleId);
 
@@ -191,6 +216,17 @@ export default function FinishedGoodsPage() {
 
   const submit = async (event) => {
     event.preventDefault();
+
+    if (!selectedUpperMaterial || !selectedSoleMaterial) {
+      showToast({
+        tone: "error",
+        title: "Select the raw materials",
+        message:
+          "Choose both the individual upper and sole from their dropdowns. This keeps the finished good valid for formulas.",
+      });
+      return;
+    }
+
     try {
       if (editingId) {
         await api.updateFinishedGood(editingId, buildFormData(form, true), token);
@@ -227,6 +263,15 @@ export default function FinishedGoodsPage() {
   };
 
   const startEdit = (item) => {
+    const matchingUpper = findMatchingMaterial(
+      upperMaterials,
+      item.article_code,
+      item.color
+    );
+    const matchingSole = findMatchingMaterial(
+      soleMaterials,
+      item.sole_code
+    );
     setEditingId(item.id);
     setForm({
       name: item.name,
@@ -243,8 +288,8 @@ export default function FinishedGoodsPage() {
       inner_boxes_per_outer_box: item.inner_boxes_per_outer_box ?? "",
       image: null,
     });
-    setSelectedUpperId("");
-    setSelectedSoleId("");
+    setSelectedUpperId(matchingUpper ? String(matchingUpper.id) : "");
+    setSelectedSoleId(matchingSole ? String(matchingSole.id) : "");
   };
 
   const remove = async (id) => {
@@ -441,19 +486,18 @@ export default function FinishedGoodsPage() {
           icon={editingId ? "edit" : "plus"}
         >
           <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" onSubmit={submit}>
-            {!editingId ? (
-              <>
+            <>
                 <Field label="Upper raw material" hint="Only raw materials from the Upper category are shown here.">
                   <Select
                     options={upperMaterials.map((item) => ({
                       value: String(item.id),
-                      label: `${item.name} (${item.article_code}) ${item.color ? `- ${item.color}` : ""}`,
+                      label: `RM.ID ${item.id} · ${item.name} (${item.article_code}) ${item.color ? `- ${item.color}` : ""} · ${formatNumber(item.quantity)} ${item.unit || ""}`,
                     }))}
                     value={
                       upperMaterials
                         .map((item) => ({
                           value: String(item.id),
-                          label: `${item.name} (${item.article_code}) ${item.color ? `- ${item.color}` : ""}`,
+                          label: `RM.ID ${item.id} · ${item.name} (${item.article_code}) ${item.color ? `- ${item.color}` : ""} · ${formatNumber(item.quantity)} ${item.unit || ""}`,
                         }))
                         .find((option) => option.value === selectedUpperId) || null
                     }
@@ -464,7 +508,10 @@ export default function FinishedGoodsPage() {
                     }}
                     placeholder="Search upper material..."
                     isClearable
+                    isSearchable
                     className="text-sm"
+                    menuPortalTarget={document.body}
+                    menuPosition="fixed"
                     styles={{
                       control: (base) => ({
                         ...base,
@@ -473,6 +520,7 @@ export default function FinishedGoodsPage() {
                         borderColor: "#d1d5db",
                         boxShadow: "none",
                       }),
+                      menuPortal: (base) => ({ ...base, zIndex: 9999 }),
                     }}
                   />
                 </Field>
@@ -481,13 +529,13 @@ export default function FinishedGoodsPage() {
                   <Select
                     options={soleMaterials.map((item) => ({
                       value: String(item.id),
-                      label: `${item.name} (${item.article_code})`,
+                      label: `RM.ID ${item.id} · ${item.name} (${item.article_code}) ${item.color ? `- ${item.color}` : ""} · ${formatNumber(item.quantity)} ${item.unit || ""}`,
                     }))}
                     value={
                       soleMaterials
                         .map((item) => ({
                           value: String(item.id),
-                          label: `${item.name} (${item.article_code})`,
+                          label: `RM.ID ${item.id} · ${item.name} (${item.article_code}) ${item.color ? `- ${item.color}` : ""} · ${formatNumber(item.quantity)} ${item.unit || ""}`,
                         }))
                         .find((option) => option.value === selectedSoleId) || null
                     }
@@ -498,13 +546,25 @@ export default function FinishedGoodsPage() {
                     }}
                     placeholder="Search sole material..."
                     isClearable
+                    isSearchable
                     className="text-sm"
+                    menuPortalTarget={document.body}
+                    menuPosition="fixed"
+                    styles={{
+                      control: (base) => ({
+                        ...base,
+                        minHeight: "44px",
+                        borderRadius: "12px",
+                        borderColor: "#d1d5db",
+                        boxShadow: "none",
+                      }),
+                      menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                    }}
                   />
                 </Field>
               </>
-            ) : null}
 
-            {!editingId && selectedUpperMaterial ? (
+            {selectedUpperMaterial ? (
               <div className="md:col-span-2 xl:col-span-3">
                 <EntitySummaryCard
                   title={selectedUpperMaterial.name}
@@ -521,7 +581,7 @@ export default function FinishedGoodsPage() {
               </div>
             ) : null}
 
-            {!editingId && selectedSoleMaterial ? (
+            {selectedSoleMaterial ? (
               <div className="md:col-span-2 xl:col-span-3">
                 <EntitySummaryCard
                   title={selectedSoleMaterial.name}
@@ -549,7 +609,7 @@ export default function FinishedGoodsPage() {
             <Field label="Article Code">
               <TextInput
                 value={form.article_code}
-                onChange={(event) => setForm((current) => ({ ...current, article_code: event.target.value }))}
+                readOnly
                 required
               />
             </Field>
@@ -557,7 +617,7 @@ export default function FinishedGoodsPage() {
             <Field label="Sole Code">
               <TextInput
                 value={form.sole_code}
-                onChange={(event) => setForm((current) => ({ ...current, sole_code: event.target.value }))}
+                readOnly
               />
             </Field>
 
@@ -684,11 +744,9 @@ export default function FinishedGoodsPage() {
               />
             </Field>
 
-            {!editingId ? (
-              <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4 text-sm text-slate-600">
-                Article code is inherited from the selected upper, and sole code is inherited from the selected sole.
-              </div>
-            ) : null}
+            <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4 text-sm text-slate-600">
+              Article code is inherited from the selected upper, and sole code is inherited from the selected sole. To change either code, select another raw material above.
+            </div>
 
             {editingId && items.find((item) => item.id === editingId)?.image_url ? (
               <div>

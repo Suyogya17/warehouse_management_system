@@ -2063,6 +2063,189 @@ const getFilters = async (req, res, next) => {
   }
 };
 
+const getOverview = async (req, res, next) => {
+  try {
+    const supportsWarehouseDelivery = await hasColumn(
+      'order_item_warehouse_allocations',
+      'allocation_status'
+    );
+    const deliveredQuantityExpr = supportsWarehouseDelivery
+      ? 'COALESCE(delivered_allocation.delivered_quantity, 0)'
+      : '0';
+    const remainingQuantityExpr = `GREATEST(0, oi.qty_ordered - ${deliveredQuantityExpr})`;
+    const statusRows = await query(
+      `SELECT UPPER(o.status) AS status,
+              COUNT(DISTINCT o.id) AS order_count,
+              COALESCE(SUM(
+                CASE
+                  WHEN UPPER(o.status) IN ('PENDING', 'CONFIRMED', 'PACKED')
+                    THEN ${remainingQuantityExpr}
+                  ELSE oi.qty_ordered
+                END
+              ), 0) AS pairs,
+              COALESCE(SUM(
+                CASE
+                  WHEN COALESCE(fg.inner_boxes_per_outer_box, 0) > 0
+                    THEN (
+                      CASE
+                        WHEN UPPER(o.status) IN ('PENDING', 'CONFIRMED', 'PACKED')
+                          THEN ${remainingQuantityExpr}
+                        ELSE oi.qty_ordered
+                      END
+                    ) / fg.inner_boxes_per_outer_box
+                  ELSE 0
+                END
+              ), 0) AS cartons,
+              COALESCE(SUM(oi.qty_ordered), 0) AS ordered_pairs,
+              COALESCE(SUM(
+                CASE
+                  WHEN COALESCE(fg.inner_boxes_per_outer_box, 0) > 0
+                    THEN oi.qty_ordered / fg.inner_boxes_per_outer_box
+                  ELSE 0
+                END
+              ), 0) AS ordered_cartons,
+              COALESCE(SUM(${deliveredQuantityExpr}), 0) AS already_delivered_pairs,
+              COALESCE(SUM(
+                CASE
+                  WHEN COALESCE(fg.inner_boxes_per_outer_box, 0) > 0
+                    THEN ${deliveredQuantityExpr} / fg.inner_boxes_per_outer_box
+                  ELSE 0
+                END
+              ), 0) AS already_delivered_cartons
+       FROM orders o
+       LEFT JOIN order_items oi ON oi.order_id = o.id
+       LEFT JOIN finished_goods fg ON fg.id = oi.finished_good_id
+       ${
+         supportsWarehouseDelivery
+           ? `LEFT JOIN (
+                SELECT order_item_id, SUM(quantity) AS delivered_quantity
+                FROM order_item_warehouse_allocations
+                WHERE allocation_status = 'DEDUCTED'
+                GROUP BY order_item_id
+              ) delivered_allocation ON delivered_allocation.order_item_id = oi.id`
+           : ''
+       }
+       GROUP BY UPPER(o.status)`
+    );
+
+    const [
+      supportsActionType,
+      supportsModule,
+      supportsEntityId,
+      supportsDescription,
+      supportsMetadata,
+      supportsUserName,
+      supportsUserRole,
+    ] = await Promise.all([
+      hasColumn('audit_logs', 'action_type'),
+      hasColumn('audit_logs', 'module'),
+      hasColumn('audit_logs', 'entity_id'),
+      hasColumn('audit_logs', 'description'),
+      hasColumn('audit_logs', 'metadata'),
+      hasColumn('audit_logs', 'user_name'),
+      hasColumn('audit_logs', 'user_role'),
+    ]);
+    const actionExpr = supportsActionType ? 'al.action_type' : 'al.action';
+    const moduleExpr = supportsModule ? 'al.module' : 'al.table_name';
+    const entityIdExpr = supportsEntityId ? 'al.entity_id' : 'al.record_id';
+    const descriptionExpr = supportsDescription
+      ? 'al.description'
+      : 'al.detail';
+    const metadataExpr = supportsMetadata ? 'al.metadata' : 'NULL';
+    const userNameExpr = supportsUserName ? 'al.user_name' : 'NULL';
+    const userRoleExpr = supportsUserRole ? 'al.user_role' : 'NULL';
+
+    const recentRows = await query(
+      `SELECT al.id,
+              ${actionExpr} AS action_type,
+              ${entityIdExpr} AS order_id,
+              ${descriptionExpr} AS description,
+              ${metadataExpr} AS metadata,
+              COALESCE(actor.name, ${userNameExpr}, 'Unknown user') AS user_name,
+              COALESCE(actor.role, ${userRoleExpr}, '-') AS user_role,
+              order_row.customer_name,
+              al.created_at
+       FROM audit_logs al
+       LEFT JOIN users actor ON actor.id = al.user_id
+       LEFT JOIN orders order_row ON order_row.id = ${entityIdExpr}
+       WHERE LOWER(COALESCE(${moduleExpr}, '')) IN ('order', 'orders')
+         AND UPPER(COALESCE(${actionExpr}, '')) IN (
+           'CONFIRMED', 'PACKED', 'DELIVERED', 'CANCELLED', 'UPDATE'
+         )
+       ORDER BY al.created_at DESC, al.id DESC
+       LIMIT 100`
+    );
+
+    const fallbackTransitions = {
+      CONFIRMED: ['PENDING', 'CONFIRMED'],
+      PACKED: ['CONFIRMED', 'PACKED'],
+      DELIVERED: ['PACKED', 'DELIVERED'],
+      CANCELLED: [null, 'CANCELLED'],
+    };
+    const recentTransitions = recentRows.rows
+      .map((row) => {
+        let metadata = {};
+        if (row.metadata && typeof row.metadata === 'object') {
+          metadata = row.metadata;
+        } else if (row.metadata) {
+          try {
+            metadata = JSON.parse(row.metadata);
+          } catch {
+            metadata = {};
+          }
+        }
+        const action = String(row.action_type || '').toUpperCase();
+        const fallback = fallbackTransitions[action] || [];
+        const fromStatus = String(
+          metadata.previous_status || fallback[0] || ''
+        ).toUpperCase();
+        const toStatus = String(
+          metadata.status || fallback[1] || ''
+        ).toUpperCase();
+        if (!toStatus || fromStatus === toStatus) return null;
+        return {
+          id: Number(row.id),
+          order_id: Number(row.order_id || metadata.order_number || 0) || null,
+          customer_name:
+            row.customer_name || metadata.customer_name || 'Customer',
+          from_status: fromStatus || '—',
+          to_status: toStatus,
+          user_name: row.user_name,
+          user_role: row.user_role,
+          description: row.description,
+          created_at: row.created_at,
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 12);
+
+    const statusSummary = statusRows.rows.reduce((summary, row) => {
+      summary[String(row.status || '').toUpperCase()] = {
+        orders: Number(row.order_count || 0),
+        cartons: Number(row.cartons || 0),
+        pairs: Number(row.pairs || 0),
+        ordered_cartons: Number(row.ordered_cartons || 0),
+        ordered_pairs: Number(row.ordered_pairs || 0),
+        already_delivered_cartons: Number(
+          row.already_delivered_cartons || 0
+        ),
+        already_delivered_pairs: Number(row.already_delivered_pairs || 0),
+      };
+      return summary;
+    }, {});
+
+    return res.json({
+      success: true,
+      data: {
+        statuses: statusSummary,
+        recent_transitions: recentTransitions,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── GET AVAILABILITY ─────────────────────────────
 const getAvailability = async (req, res, next) => {
   try {
@@ -2109,6 +2292,463 @@ const getOfferPurchases = async (req, res, next) => {
         offer_pairs_per_carton_snapshot: row.offer_pairs_per_carton_snapshot === null ? null : Number(row.offer_pairs_per_carton_snapshot),
         offer_campaign_id: row.offer_campaign_id === null || row.offer_campaign_id === undefined ? null : Number(row.offer_campaign_id),
       })),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getOfferVsRegularReport = async (req, res, next) => {
+  try {
+    if (!(await hasColumn('order_items', 'ordered_from_offer'))) {
+      return res.status(409).json({
+        success: false,
+        message: 'Offer comparison requires sql/add-offer-order-snapshots.sql.',
+      });
+    }
+
+    const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+    const today = new Date();
+    const defaultTo = today.toISOString().slice(0, 10);
+    const defaultFromDate = new Date(today);
+    defaultFromDate.setDate(defaultFromDate.getDate() - 29);
+    const defaultFrom = defaultFromDate.toISOString().slice(0, 10);
+    const dateFrom = datePattern.test(String(req.query.date_from || ''))
+      ? String(req.query.date_from)
+      : defaultFrom;
+    const dateTo = datePattern.test(String(req.query.date_to || ''))
+      ? String(req.query.date_to)
+      : defaultTo;
+    if (dateFrom > dateTo) {
+      return res.status(400).json({
+        success: false,
+        message: 'The report start date must be before the end date.',
+      });
+    }
+
+    const supportsDeliveryAllocations =
+      (await hasTable('order_item_warehouse_allocations')) &&
+      (await hasColumn('order_item_warehouse_allocations', 'allocation_status'));
+    const supportsAllocationDeliveredAt = supportsDeliveryAllocations
+      ? await hasColumn('order_item_warehouse_allocations', 'delivered_at')
+      : false;
+    const supportsWarehouseDeliveryNotes = await hasTable(
+      'order_warehouse_delivery_notes'
+    );
+    const supportsOfferCampaigns = await hasOfferCampaignSchema();
+
+    const orderRowsPromise = query(
+      `SELECT product.id AS finished_good_id,
+              product.name AS product_name,
+              product.article_code,
+              product.sole_code,
+              product.color,
+              product.size,
+              product.unit,
+              product.inner_boxes_per_outer_box AS pairs_per_carton,
+              orders.created_by AS dealer_user_id,
+              dealer.name AS dealer_name,
+              dealer.email AS dealer_email,
+              COALESCE(item.ordered_from_offer, 0) AS is_offer,
+              COALESCE(SUM(CASE WHEN orders.status <> 'CANCELLED' THEN item.qty_ordered ELSE 0 END), 0) AS ordered_pairs,
+              COALESCE(SUM(CASE WHEN orders.status = 'CANCELLED' THEN item.qty_ordered ELSE 0 END), 0) AS cancelled_pairs,
+              COUNT(DISTINCT CASE WHEN orders.status <> 'CANCELLED' THEN orders.id END) AS order_count,
+              COUNT(DISTINCT CASE WHEN orders.status <> 'CANCELLED' THEN orders.created_by END) AS dealer_count
+       FROM order_items item
+       JOIN orders ON orders.id = item.order_id
+       JOIN finished_goods product ON product.id = item.finished_good_id
+       LEFT JOIN users dealer ON dealer.id = orders.created_by
+       WHERE orders.created_at >= ?
+         AND orders.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+       GROUP BY product.id, product.name, product.article_code,
+                product.sole_code, product.color, product.size, product.unit,
+                product.inner_boxes_per_outer_box,
+                orders.created_by, dealer.name, dealer.email,
+                COALESCE(item.ordered_from_offer, 0)`,
+      [dateFrom, dateTo]
+    );
+
+    const deliveryRowsPromise = supportsDeliveryAllocations
+      ? query(
+          `SELECT item.finished_good_id,
+                  orders.created_by AS dealer_user_id,
+                  dealer.name AS dealer_name,
+                  dealer.email AS dealer_email,
+                  COALESCE(item.ordered_from_offer, 0) AS is_offer,
+                  COALESCE(SUM(CASE WHEN allocation.allocation_status = 'DEDUCTED' THEN allocation.quantity ELSE 0 END), 0) AS delivered_pairs,
+                  COALESCE(SUM(CASE WHEN allocation.allocation_status = 'OUT_OF_STOCK' THEN allocation.quantity ELSE 0 END), 0) AS out_of_stock_pairs
+           FROM order_items item
+           JOIN orders ON orders.id = item.order_id
+           LEFT JOIN users dealer ON dealer.id = orders.created_by
+           JOIN order_item_warehouse_allocations allocation
+             ON allocation.order_item_id = item.id
+           WHERE orders.created_at >= ?
+             AND orders.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+             AND orders.status <> 'CANCELLED'
+           GROUP BY item.finished_good_id, orders.created_by,
+                    dealer.name, dealer.email,
+                    COALESCE(item.ordered_from_offer, 0)`,
+          [dateFrom, dateTo]
+        )
+      : Promise.resolve([]);
+
+    const campaignRowsPromise = supportsOfferCampaigns
+      ? query(
+          `SELECT campaign.finished_good_id,
+                  product.name AS product_name,
+                  product.article_code,
+                  product.sole_code,
+                  product.color,
+                  product.size,
+                  product.unit,
+                  product.inner_boxes_per_outer_box AS pairs_per_carton,
+                  COUNT(DISTINCT campaign.id) AS offer_period_count,
+                  COALESCE(SUM(campaign.stock_quantity_snapshot), 0) AS offer_starting_pairs
+           FROM finished_good_offer_campaigns campaign
+           JOIN finished_goods product ON product.id = campaign.finished_good_id
+           WHERE campaign.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+             AND COALESCE(campaign.ended_at, campaign.offer_ends_at, '9999-12-31') >= ?
+           GROUP BY campaign.finished_good_id, product.name, product.article_code,
+                    product.sole_code, product.color, product.size, product.unit,
+                    product.inner_boxes_per_outer_box`,
+          [dateTo, dateFrom]
+        )
+      : Promise.resolve([]);
+
+    const assignedRowsPromise = supportsOfferCampaigns
+      ? query(
+          `SELECT campaign.finished_good_id,
+                  audience.user_id AS dealer_user_id,
+                  dealer.name AS dealer_name,
+                  dealer.email AS dealer_email,
+                  COALESCE(SUM(audience.display_quantity), 0) AS offer_assigned_pairs
+           FROM finished_good_offer_campaigns campaign
+           JOIN finished_good_offer_campaign_users audience
+             ON audience.campaign_id = campaign.id
+           JOIN users dealer ON dealer.id = audience.user_id
+           WHERE campaign.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+             AND COALESCE(campaign.ended_at, campaign.offer_ends_at, '9999-12-31') >= ?
+           GROUP BY campaign.finished_good_id, audience.user_id,
+                    dealer.name, dealer.email`,
+          [dateTo, dateFrom]
+        )
+      : Promise.resolve([]);
+
+    const orderDetailRowsPromise = query(
+      `SELECT item.id AS order_item_id,
+              orders.id AS order_id,
+              orders.created_at AS order_placed_at,
+              orders.status AS order_status,
+              orders.customer_name,
+              orders.delivery_note_number AS master_delivery_note_number,
+              orders.created_by AS dealer_user_id,
+              dealer.name AS dealer_name,
+              dealer.email AS dealer_email,
+              product.id AS finished_good_id,
+              product.name AS product_name,
+              product.article_code,
+              product.sole_code,
+              product.color,
+              product.size,
+              product.inner_boxes_per_outer_box AS pairs_per_carton,
+              COALESCE(item.ordered_from_offer, 0) AS is_offer,
+              ${supportsOfferCampaigns ? 'item.offer_campaign_id' : 'NULL'} AS offer_campaign_id,
+              item.qty_ordered AS ordered_pairs,
+              ${supportsOfferCampaigns ? 'campaign.offer_label' : 'item.offer_label_snapshot'} AS offer_label,
+              ${supportsOfferCampaigns ? 'campaign.created_at' : 'NULL'} AS offer_started_at,
+              ${supportsOfferCampaigns ? 'COALESCE(campaign.ended_at, campaign.offer_ends_at)' : 'NULL'} AS offer_ended_at,
+              ${supportsOfferCampaigns ? 'campaign.offer_all_users' : 'NULL'} AS offer_all_users,
+              ${supportsOfferCampaigns ? 'audience.display_quantity' : 'NULL'} AS assigned_pairs,
+              COALESCE(delivery.delivered_pairs, 0) AS delivered_pairs,
+              delivery.first_delivered_at,
+              delivery.last_delivered_at,
+              ${supportsWarehouseDeliveryNotes ? 'warehouse_notes.delivery_note_numbers' : 'NULL'} AS warehouse_delivery_note_numbers
+       FROM order_items item
+       JOIN orders ON orders.id = item.order_id
+       JOIN finished_goods product ON product.id = item.finished_good_id
+       LEFT JOIN users dealer ON dealer.id = orders.created_by
+       ${
+         supportsOfferCampaigns
+           ? `LEFT JOIN finished_good_offer_campaigns campaign
+                ON campaign.id = item.offer_campaign_id
+              LEFT JOIN finished_good_offer_campaign_users audience
+                ON audience.campaign_id = item.offer_campaign_id
+               AND audience.user_id = orders.created_by`
+           : ''
+       }
+       ${
+         supportsDeliveryAllocations
+           ? `LEFT JOIN (
+                SELECT allocation.order_item_id,
+                       COALESCE(SUM(CASE WHEN allocation.allocation_status = 'DEDUCTED' THEN allocation.quantity ELSE 0 END), 0) AS delivered_pairs,
+                       ${supportsAllocationDeliveredAt ? "MIN(CASE WHEN allocation.allocation_status = 'DEDUCTED' THEN allocation.delivered_at END)" : 'NULL'} AS first_delivered_at,
+                       ${supportsAllocationDeliveredAt ? "MAX(CASE WHEN allocation.allocation_status = 'DEDUCTED' THEN allocation.delivered_at END)" : 'NULL'} AS last_delivered_at
+                FROM order_item_warehouse_allocations allocation
+                GROUP BY allocation.order_item_id
+              ) delivery ON delivery.order_item_id = item.id`
+           : `LEFT JOIN (
+                SELECT NULL AS order_item_id, 0 AS delivered_pairs,
+                       NULL AS first_delivered_at, NULL AS last_delivered_at
+              ) delivery ON 1 = 0`
+       }
+       ${
+         supportsWarehouseDeliveryNotes
+           ? `LEFT JOIN (
+                SELECT note.order_id,
+                       GROUP_CONCAT(
+                         DISTINCT CONCAT(note.delivery_note_number, ' [', note.status, ']')
+                         ORDER BY note.delivery_note_number SEPARATOR ', '
+                       ) AS delivery_note_numbers
+                FROM order_warehouse_delivery_notes note
+                GROUP BY note.order_id
+              ) warehouse_notes ON warehouse_notes.order_id = orders.id`
+           : ''
+       }
+       WHERE orders.created_at >= ?
+         AND orders.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+       ORDER BY orders.created_at, orders.id, product.article_code,
+                product.color, item.id`,
+      [dateFrom, dateTo]
+    );
+
+    const [orderRows, deliveryRows, campaignRows, assignedRows, orderDetailRows] =
+      await Promise.all([
+        orderRowsPromise,
+        deliveryRowsPromise,
+        campaignRowsPromise,
+        assignedRowsPromise,
+        orderDetailRowsPromise,
+      ]);
+
+    const products = new Map();
+    const ensureProduct = (row) => {
+      const id = Number(row.finished_good_id);
+      if (!products.has(id)) {
+        products.set(id, {
+          finished_good_id: id,
+          product_name: row.product_name || '',
+          article_code: row.article_code || '',
+          sole_code: row.sole_code || '',
+          color: row.color || '',
+          size: row.size || '',
+          unit: row.unit || 'pairs',
+          pairs_per_carton: Number(row.pairs_per_carton || 0),
+          offer_period_count: 0,
+          offer_starting_pairs: 0,
+          offer_assigned_pairs: 0,
+          assigned_dealer_count: 0,
+          offer_ordered_pairs: 0,
+          offer_delivered_pairs: 0,
+          offer_out_of_stock_pairs: 0,
+          offer_cancelled_pairs: 0,
+          offer_order_count: 0,
+          offer_dealer_count: 0,
+          regular_ordered_pairs: 0,
+          regular_delivered_pairs: 0,
+          regular_out_of_stock_pairs: 0,
+          regular_cancelled_pairs: 0,
+          regular_order_count: 0,
+          regular_dealer_count: 0,
+          _dealers: new Map(),
+        });
+      }
+      const product = products.get(id);
+      ['product_name', 'article_code', 'sole_code', 'color', 'size', 'unit'].forEach((key) => {
+        if (!product[key] && row[key]) product[key] = row[key];
+      });
+      if (!product.pairs_per_carton && row.pairs_per_carton) {
+        product.pairs_per_carton = Number(row.pairs_per_carton);
+      }
+      return product;
+    };
+
+    const ensureDealer = (product, row) => {
+      const userId = Number(row.dealer_user_id || 0);
+      const email = String(row.dealer_email || '').trim().toLowerCase();
+      const name = String(row.dealer_name || '').trim();
+      const key = userId > 0 ? `id:${userId}` : `account:${email || name || 'unknown'}`;
+      if (!product._dealers.has(key)) {
+        product._dealers.set(key, {
+          user_id: userId || null,
+          dealer_name: name || row.dealer_email || 'Unknown dealer',
+          dealer_email: row.dealer_email || '',
+          offer_assigned_pairs: 0,
+          offer_ordered_pairs: 0,
+          offer_delivered_pairs: 0,
+          offer_cancelled_pairs: 0,
+          offer_order_count: 0,
+          regular_ordered_pairs: 0,
+          regular_delivered_pairs: 0,
+          regular_cancelled_pairs: 0,
+          regular_order_count: 0,
+        });
+      }
+      return product._dealers.get(key);
+    };
+
+    orderRows.forEach((row) => {
+      const product = ensureProduct(row);
+      const prefix = Number(row.is_offer) === 1 ? 'offer' : 'regular';
+      product[`${prefix}_ordered_pairs`] += Number(row.ordered_pairs || 0);
+      product[`${prefix}_cancelled_pairs`] += Number(row.cancelled_pairs || 0);
+      product[`${prefix}_order_count`] += Number(row.order_count || 0);
+      const dealer = ensureDealer(product, row);
+      dealer[`${prefix}_ordered_pairs`] += Number(row.ordered_pairs || 0);
+      dealer[`${prefix}_cancelled_pairs`] += Number(row.cancelled_pairs || 0);
+      dealer[`${prefix}_order_count`] += Number(row.order_count || 0);
+    });
+    deliveryRows.forEach((row) => {
+      const product = ensureProduct(row);
+      const prefix = Number(row.is_offer) === 1 ? 'offer' : 'regular';
+      product[`${prefix}_delivered_pairs`] += Number(row.delivered_pairs || 0);
+      product[`${prefix}_out_of_stock_pairs`] += Number(row.out_of_stock_pairs || 0);
+      const dealer = ensureDealer(product, row);
+      dealer[`${prefix}_delivered_pairs`] += Number(row.delivered_pairs || 0);
+    });
+    campaignRows.forEach((row) => {
+      const product = ensureProduct(row);
+      product.offer_period_count = Number(row.offer_period_count || 0);
+      product.offer_starting_pairs = Number(row.offer_starting_pairs || 0);
+    });
+    assignedRows.forEach((row) => {
+      const product = ensureProduct(row);
+      product.offer_assigned_pairs += Number(row.offer_assigned_pairs || 0);
+      const dealer = ensureDealer(product, row);
+      dealer.offer_assigned_pairs += Number(row.offer_assigned_pairs || 0);
+    });
+
+    const rows = [...products.values()]
+      .map((row) => {
+        const dealerDetails = [...row._dealers.values()]
+          .map((dealer) => ({
+            ...dealer,
+            offer_not_delivered_pairs: Math.max(
+              0,
+              dealer.offer_ordered_pairs - dealer.offer_delivered_pairs
+            ),
+            offer_unused_assigned_pairs: Math.max(
+              0,
+              dealer.offer_assigned_pairs - dealer.offer_ordered_pairs
+            ),
+            regular_not_delivered_pairs: Math.max(
+              0,
+              dealer.regular_ordered_pairs - dealer.regular_delivered_pairs
+            ),
+          }))
+          .sort((left, right) =>
+            String(left.dealer_name).localeCompare(String(right.dealer_name), undefined, {
+              numeric: true,
+              sensitivity: 'base',
+            })
+          );
+        const { _dealers, ...publicRow } = row;
+        return {
+          ...publicRow,
+          assigned_dealer_count: dealerDetails.filter(
+            (dealer) => Number(dealer.offer_assigned_pairs || 0) > 0
+          ).length,
+          offer_dealer_count: dealerDetails.filter(
+            (dealer) => Number(dealer.offer_ordered_pairs || 0) > 0
+          ).length,
+          regular_dealer_count: dealerDetails.filter(
+            (dealer) => Number(dealer.regular_ordered_pairs || 0) > 0
+          ).length,
+          dealer_details: dealerDetails,
+          offer_not_delivered_pairs: Math.max(
+            0,
+            row.offer_ordered_pairs - row.offer_delivered_pairs
+          ),
+          regular_not_delivered_pairs: Math.max(
+            0,
+            row.regular_ordered_pairs - row.regular_delivered_pairs
+          ),
+          offer_unused_assigned_pairs: Math.max(
+            0,
+            row.offer_assigned_pairs - row.offer_ordered_pairs
+          ),
+        };
+      })
+      .sort((left, right) =>
+        String(left.article_code || left.product_name).localeCompare(
+          String(right.article_code || right.product_name),
+          undefined,
+          { numeric: true, sensitivity: 'base' }
+        ) || String(left.color).localeCompare(String(right.color))
+      );
+
+    const summary = rows.reduce(
+      (total, row) => {
+        [
+          'offer_assigned_pairs',
+          'offer_ordered_pairs',
+          'offer_delivered_pairs',
+          'offer_not_delivered_pairs',
+          'regular_ordered_pairs',
+          'regular_delivered_pairs',
+          'regular_not_delivered_pairs',
+        ].forEach((key) => {
+          total[key] += Number(row[key] || 0);
+        });
+        return total;
+      },
+      {
+        offer_assigned_pairs: 0,
+        offer_ordered_pairs: 0,
+        offer_delivered_pairs: 0,
+        offer_not_delivered_pairs: 0,
+        regular_ordered_pairs: 0,
+        regular_delivered_pairs: 0,
+        regular_not_delivered_pairs: 0,
+      }
+    );
+
+    const orderDetails = orderDetailRows.map((row) => {
+      const orderedPairs = Number(row.ordered_pairs || 0);
+      const deliveredPairs = Number(row.delivered_pairs || 0);
+      const cancelled = String(row.order_status || '').toUpperCase() === 'CANCELLED';
+      const isOffer = Number(row.is_offer || 0) === 1;
+      let assignmentType = 'REGULAR';
+      if (isOffer) {
+        if (!Number(row.offer_campaign_id || 0)) assignmentType = 'LEGACY_OFFER';
+        else if (Number(row.offer_all_users || 0) === 1) assignmentType = 'PUBLIC_OFFER';
+        else if (row.assigned_pairs !== null && row.assigned_pairs !== undefined) {
+          assignmentType = 'PERSONAL_ASSIGNMENT';
+        } else assignmentType = 'OUTSIDE_RECORDED_ASSIGNMENT';
+      }
+      return {
+        ...row,
+        order_item_id: Number(row.order_item_id),
+        order_id: Number(row.order_id),
+        dealer_user_id: Number(row.dealer_user_id || 0) || null,
+        finished_good_id: Number(row.finished_good_id),
+        pairs_per_carton: Number(row.pairs_per_carton || 0),
+        is_offer: isOffer,
+        offer_campaign_id: Number(row.offer_campaign_id || 0) || null,
+        assigned_pairs:
+          row.assigned_pairs === null || row.assigned_pairs === undefined
+            ? null
+            : Number(row.assigned_pairs),
+        placed_pairs: orderedPairs,
+        ordered_pairs: cancelled ? 0 : orderedPairs,
+        delivered_pairs: cancelled ? 0 : deliveredPairs,
+        not_delivered_pairs: cancelled
+          ? 0
+          : Math.max(0, orderedPairs - deliveredPairs),
+        cancelled_pairs: cancelled ? orderedPairs : 0,
+        assignment_type: assignmentType,
+      };
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        date_from: dateFrom,
+        date_to: dateTo,
+        delivery_tracking: supportsDeliveryAllocations ? 'WAREHOUSE_ALLOCATIONS' : 'UNAVAILABLE',
+        rows,
+        order_details: orderDetails,
+        summary,
+      },
     });
   } catch (err) {
     next(err);
@@ -5736,4 +6376,4 @@ const logPrint = async (req, res, next) => {
   }
 };
 
-module.exports = { getAll, getFilters, getAvailability, getOfferPurchases, create, correctItems, updateStatus, assignDeliveryNote, correctWarehouseDeliveryNoteNumbers, reopenPacking, undoConfirmation, verifyWarehouseFulfillment, deliverWarehouseFulfillment, undoWarehouseFulfillmentDelivery, prepareDeliveryNote, logPrint };
+module.exports = { getAll, getFilters, getOverview, getAvailability, getOfferPurchases, getOfferVsRegularReport, create, correctItems, updateStatus, assignDeliveryNote, correctWarehouseDeliveryNoteNumbers, reopenPacking, undoConfirmation, verifyWarehouseFulfillment, deliverWarehouseFulfillment, undoWarehouseFulfillmentDelivery, prepareDeliveryNote, logPrint };

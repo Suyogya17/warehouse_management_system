@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Package as PackageIcon } from "lucide-react";
 
 import Button from "../components/Button";
+import MultiSeriesFilter from "../components/MultiSeriesFilter";
 import PageHeader from "../components/PageHeader";
 import ProductImageGallery from "../components/ProductImageGallery";
 import SectionCard from "../components/SectionCard";
@@ -178,7 +179,7 @@ export default function OutOfStockPage() {
   const { showToast } = useToast();
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState("");
-  const [seriesFilter, setSeriesFilter] = useState("");
+  const [seriesFilters, setSeriesFilters] = useState([]);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
 
@@ -247,8 +248,8 @@ export default function OutOfStockPage() {
 
     outOfStockProducts.forEach((product) => {
       const matchesSeries =
-        !seriesFilter ||
-        getSeriesName(product.sole_code) === seriesFilter;
+        !seriesFilters.length ||
+        seriesFilters.includes(getSeriesName(product.sole_code));
       const matchesSearch =
         !normalizedSearch ||
         [
@@ -282,7 +283,7 @@ export default function OutOfStockPage() {
         )
       )
     );
-  }, [outOfStockProducts, search, seriesFilter]);
+  }, [outOfStockProducts, search, seriesFilters]);
 
   const articleCount = useMemo(
     () =>
@@ -296,7 +297,7 @@ export default function OutOfStockPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [search, seriesFilter]);
+  }, [search, seriesFilters]);
 
   const totalPages = Math.max(
     1,
@@ -365,25 +366,19 @@ export default function OutOfStockPage() {
               placeholder="Search article, product, colour or size..."
               className="h-11 min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-red-400 focus:ring-4 focus:ring-red-100 sm:min-w-72"
             />
-            <select
-              value={seriesFilter}
-              onChange={(event) => setSeriesFilter(event.target.value)}
-              className="h-11 min-w-52 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-red-400 focus:ring-4 focus:ring-red-100"
-            >
-              <option value="">All Series</option>
-              {seriesOptions.map((series) => (
-                <option key={series} value={series}>
-                  {series}
-                </option>
-              ))}
-            </select>
+            <MultiSeriesFilter
+              options={seriesOptions}
+              values={seriesFilters}
+              onChange={setSeriesFilters}
+              label=""
+            />
 
-            {(search || seriesFilter) && (
+            {(search || seriesFilters.length) && (
               <Button
                 variant="ghost"
                 onClick={() => {
                   setSearch("");
-                  setSeriesFilter("");
+                  setSeriesFilters([]);
                 }}
               >
                 Clear filters
@@ -438,7 +433,7 @@ export default function OutOfStockPage() {
               <p className="mt-1 text-sm text-slate-500">
                 {loading
                   ? "Please wait while stock information is loaded."
-                  : search || seriesFilter
+                  : search || seriesFilters.length
                   ? "No unavailable products match these filters."
                   : "Every finished good currently has available stock."}
               </p>

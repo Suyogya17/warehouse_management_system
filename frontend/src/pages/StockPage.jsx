@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import DataTable from "../components/DataTable";
+import MultiSeriesFilter from "../components/MultiSeriesFilter";
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import StatusBadge from "../components/StatusBadge";
@@ -40,7 +41,7 @@ export default function StockPage() {
   const [warehouseStock, setWarehouseStock] = useState([]);
   const [search, setSearch] = useState("");
   const [searchId, setSearchId] = useState("");
-  const [seriesFilter, setSeriesFilter] = useState("");
+  const [seriesFilters, setSeriesFilters] = useState([]);
   const [stockFilter, setStockFilter] = useState("all");
 
   const load = useCallback(async () => {
@@ -97,7 +98,10 @@ export default function StockPage() {
         if (stockFilter === "available" && available <= 0) return false;
         if (stockFilter === "out" && available > 0) return false;
 
-        if (seriesFilter && getSeriesName(item.sole_code) !== seriesFilter) return false;
+        if (
+          seriesFilters.length > 0 &&
+          !seriesFilters.includes(getSeriesName(item.sole_code))
+        ) return false;
 
         if (qId && !String(item.id || "").toLowerCase().includes(qId)) return false;
 
@@ -118,7 +122,7 @@ export default function StockPage() {
         );
       })
       .sort((a, b) => Number(b.available_qty || 0) - Number(a.available_qty || 0));
-  }, [availability, search, searchId, seriesFilter, stockFilter, warehousesByProductId]);
+  }, [availability, search, searchId, seriesFilters, stockFilter, warehousesByProductId]);
 
   const exportToExcel = () => {
     if (!filteredAvailability.length) {
@@ -213,19 +217,12 @@ const totalAvailableCartons = filteredAvailability.reduce((sum, item) => sum + g
               placeholder="Search product, article, sole, color, or size..."
               className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100"
             />
-            <select
-              value={seriesFilter}
-              onChange={(event) => setSeriesFilter(event.target.value)}
-              aria-label="Filter stock by series"
-              className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100"
-            >
-              <option value="">All series</option>
-              {seriesOptions.map((series) => (
-                <option key={series} value={series}>
-                  {series}
-                </option>
-              ))}
-            </select>
+            <MultiSeriesFilter
+              options={seriesOptions}
+              values={seriesFilters}
+              onChange={setSeriesFilters}
+              label=""
+            />
             <select
               value={stockFilter}
               onChange={(event) => setStockFilter(event.target.value)}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Button from "../../components/Button";
 import EmptyState from "../../components/EmptyState";
+import MultiSeriesFilter from "../../components/MultiSeriesFilter";
 import { formatNumber } from "../../utils/format";
 import { OFFER_REPORT_PRODUCTS_PER_PAGE } from "./offerUtils";
 
@@ -20,7 +21,7 @@ export default function OfferAllocationReport({
 }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [userFilter, setUserFilter] = useState("ALL");
-  const [seriesFilter, setSeriesFilter] = useState("ALL");
+  const [seriesFilters, setSeriesFilters] = useState([]);
   const [page, setPage] = useState(1);
   const [transferRow, setTransferRow] = useState(null);
   const [destinationUserId, setDestinationUserId] = useState("");
@@ -123,8 +124,8 @@ export default function OfferAllocationReport({
       const userKey = String(row.user_email || row.user_name || "").trim().toLowerCase();
       if (userFilter !== "ALL" && userKey !== userFilter) return false;
       if (
-        seriesFilter !== "ALL" &&
-        String(row.sole_code || "").trim() !== seriesFilter
+        seriesFilters.length &&
+        !seriesFilters.includes(String(row.sole_code || "").trim())
       ) {
         return false;
       }
@@ -140,7 +141,7 @@ export default function OfferAllocationReport({
         .join(" ");
       return terms.every((term) => searchable.includes(term));
     });
-  }, [reportRows, searchTerm, seriesFilter, userFilter]);
+  }, [reportRows, searchTerm, seriesFilters, userFilter]);
 
   const productGroups = useMemo(() => {
     const groups = new Map();
@@ -161,7 +162,7 @@ export default function OfferAllocationReport({
     page * OFFER_REPORT_PRODUCTS_PER_PAGE
   );
 
-  useEffect(() => setPage(1), [searchTerm, seriesFilter, userFilter]);
+  useEffect(() => setPage(1), [searchTerm, seriesFilters, userFilter]);
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
@@ -316,19 +317,7 @@ export default function OfferAllocationReport({
               </option>
             ))}
           </select>
-          <select
-            value={seriesFilter}
-            onChange={(event) => setSeriesFilter(event.target.value)}
-            className="h-10 min-w-0 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-400"
-            aria-label="Filter allocation report by series"
-          >
-            <option value="ALL">All series</option>
-            {seriesOptions.map((series) => (
-              <option key={series} value={series}>
-                {series}
-              </option>
-            ))}
-          </select>
+          <MultiSeriesFilter options={seriesOptions} values={seriesFilters} onChange={setSeriesFilters} label="" buttonClassName="h-10" />
         </div>
         <Button
           type="button"

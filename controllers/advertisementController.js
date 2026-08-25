@@ -166,11 +166,24 @@ const update = async (req, res, next) => {
 
 const reorder = async (req, res, next) => {
   try {
-    const orderedIds = Array.isArray(req.body.ordered_ids)
-      ? req.body.ordered_ids.map(Number).filter((id) => id > 0)
-      : [];
+    const body = req.body || {};
+    const queryIds = String(req.query.ordered_ids || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const suppliedIds =
+      [body.ordered_ids, body.orderedIds, body.ids].find(Array.isArray) ||
+      queryIds;
+    const orderedIds = [...new Set(
+      suppliedIds
+        .map(Number)
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )];
     if (!orderedIds.length) {
-      return res.status(400).json({ success: false, message: 'ordered_ids is required.' });
+      return res.status(400).json({
+        success: false,
+        message: 'No valid advertisement IDs were received. Refresh the page and try again.',
+      });
     }
     if (!(await hasColumn('advertisements', 'display_order'))) {
       return res.json({ success: true });

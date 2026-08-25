@@ -6,9 +6,11 @@ const { cacheResponse } = require('../middleware/cacheMiddleware');
 router.use(authenticate);
 
 router.get('/filters', cacheResponse(30000), ctrl.getFilters);
+router.get('/overview', authorize('ADMIN', 'CO_ADMIN'), cacheResponse(10000), ctrl.getOverview);
 router.get('/', cacheResponse(10000), ctrl.getAll);
 router.get('/availability', cacheResponse(15000), ctrl.getAvailability);
 router.get('/offer-purchases', authorize('ADMIN', 'CO_ADMIN'), cacheResponse(5000), ctrl.getOfferPurchases);
+router.get('/offer-vs-regular-report', authorize('ADMIN', 'CO_ADMIN'), cacheResponse(10000), ctrl.getOfferVsRegularReport);
 router.post('/', authorize('ADMIN','CO_ADMIN', 'USER'), ctrl.create);
 router.put('/:id/items', authorize('ADMIN', 'CO_ADMIN'), ctrl.correctItems);
 router.put('/:id/status', authorize('ADMIN', 'CO_ADMIN'), ctrl.updateStatus);

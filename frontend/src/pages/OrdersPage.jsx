@@ -161,6 +161,10 @@ export default function OrdersPage() {
     dealers: [],
     parties: [],
   });
+  const [orderOverview, setOrderOverview] = useState({
+    statuses: {},
+    recent_transitions: [],
+  });
   const [orderDateFilters, setOrderDateFilters] = useState(emptyOrderDateFilters);
   const [appliedOrderDateFilters, setAppliedOrderDateFilters] = useState(
     emptyOrderDateFilters
@@ -293,16 +297,22 @@ export default function OrdersPage() {
   };
 
   const loadReferenceData = useCallback(async () => {
-    const [availabilityResult, warehouseResult, orderFiltersResult] = await Promise.all([
+    const [availabilityResult, warehouseResult, orderFiltersResult, overviewResult] = await Promise.all([
       api.getAvailability(token, {
         include_hidden: canManageOrders ? 1 : undefined,
       }),
       api.getWarehouses(token),
       api.getOrderFilters(token),
+      canManageOrders
+        ? api.getOrderOverview(token)
+        : Promise.resolve({ data: { statuses: {}, recent_transitions: [] } }),
     ]);
     setAvailability(availabilityResult.data || []);
     setWarehouses(warehouseResult.data || []);
     setOrderFilterOptions(orderFiltersResult.data || { dealers: [], parties: [] });
+    setOrderOverview(
+      overviewResult.data || { statuses: {}, recent_transitions: [] }
+    );
   }, [canManageOrders, token]);
 
   const load = useCallback(
@@ -384,6 +394,54 @@ export default function OrdersPage() {
         { physical: 0, reserved: 0, available: 0 }
       ),
     [availability]
+  );
+
+  const adminOrderStatusCards = useMemo(
+    () =>
+      [
+        {
+          status: "PENDING",
+          label: "Pending approval",
+          description: "Orders still waiting to be confirmed",
+          tone: "border-amber-200 bg-amber-50 text-amber-950",
+        },
+        {
+          status: "CONFIRMED",
+          label: "Awaiting packing",
+          description: "Confirmed orders left to pack",
+          tone: "border-blue-200 bg-blue-50 text-blue-950",
+        },
+        {
+          status: "PACKED",
+          label: "Awaiting delivery",
+          description: "Packed or partially delivered orders",
+          tone: "border-violet-200 bg-violet-50 text-violet-950",
+        },
+        {
+          status: "DELIVERED",
+          label: "Delivered",
+          description: "Orders completed and delivered",
+          tone: "border-emerald-200 bg-emerald-50 text-emerald-950",
+        },
+        {
+          status: "CANCELLED",
+          label: "Cancelled",
+          description: "Orders closed without completion",
+          tone: "border-red-200 bg-red-50 text-red-950",
+        },
+      ].map((card) => ({
+        ...card,
+        ...(orderOverview.statuses?.[card.status] || {
+          orders: 0,
+          cartons: 0,
+          pairs: 0,
+          ordered_cartons: 0,
+          ordered_pairs: 0,
+          already_delivered_cartons: 0,
+          already_delivered_pairs: 0,
+        }),
+      })),
+    [orderOverview.statuses]
   );
 
   const updateOrderItemProduct = (index, productId) => {
@@ -1854,6 +1912,116 @@ export default function OrdersPage() {
         <StatCard label="Reserved Stock" value={formatNumber(totals.reserved)} tone="alert" icon="orders" />
         <StatCard label="Available Stock" value={formatNumber(totals.available)} tone="calm" icon="check" />
       </div>
+
+      {canManageOrders ? (
+        <SectionCard
+          title="Order workflow overview"
+          subtitle="Live totals for every order stage, followed by the latest status movements."
+          icon="analytics"
+        >
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            {adminOrderStatusCards.map((card) => (
+              <button
+                type="button"
+                key={card.status}
+                onClick={() => {
+                  setStatusFilter(card.status);
+                  setOrderPage(1);
+                }}
+                className={`rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${card.tone}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-wide opacity-70">
+                      {card.label}
+                    </p>
+                    <p className="mt-2 text-3xl font-black">
+                      {formatNumber(card.orders)}
+                    </p>
+                    <p className="text-xs font-semibold opacity-70">
+                      orders
+                    </p>
+                  </div>
+                  <StatusBadge tone={statusTone[card.status] || "neutral"}>
+                    {card.status}
+                  </StatusBadge>
+                </div>
+                <p className="mt-3 text-xs font-black uppercase tracking-wide opacity-60">
+                  {["PENDING", "CONFIRMED", "PACKED"].includes(card.status)
+                    ? "Remaining reserved"
+                    : card.status === "DELIVERED"
+                      ? "Delivered total"
+                      : "Cancelled total"}
+                </p>
+                <p className="text-sm font-bold">
+                  {formatNumber(card.cartons)} CTN / {formatNumber(card.pairs)} pairs
+                </p>
+                {card.status === "PACKED" &&
+                Number(card.already_delivered_pairs || 0) > 0 ? (
+                  <p className="mt-1 text-xs font-semibold opacity-75">
+                    Already delivered from these orders: {formatNumber(
+                      card.already_delivered_cartons
+                    )} CTN / {formatNumber(card.already_delivered_pairs)} pairs
+                  </p>
+                ) : null}
+                <p className="mt-1 text-xs opacity-70">{card.description}</p>
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+              <h3 className="text-sm font-black text-slate-900">
+                Recent workflow movements
+              </h3>
+              <p className="text-xs text-slate-500">
+                Who moved each order and when it changed stage.
+              </p>
+            </div>
+            {(orderOverview.recent_transitions || []).length ? (
+              <div className="divide-y divide-slate-100">
+                {(orderOverview.recent_transitions || []).map((movement) => (
+                  <div
+                    key={movement.id}
+                    className="grid gap-2 px-4 py-3 md:grid-cols-[110px_minmax(180px,1fr)_220px_170px] md:items-center"
+                  >
+                    <strong className="text-sm text-slate-950">
+                      {movement.order_id ? `#${movement.order_id}` : "Order"}
+                    </strong>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-slate-800">
+                        {movement.customer_name || "Customer"}
+                      </p>
+                      <p className="truncate text-xs text-slate-500">
+                        By {movement.user_name || "Unknown user"}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">
+                        {movement.from_status || "—"}
+                      </span>
+                      <span className="text-slate-400">→</span>
+                      <StatusBadge tone={statusTone[movement.to_status] || "neutral"}>
+                        {movement.to_status}
+                      </StatusBadge>
+                    </div>
+                    <div className="text-xs text-slate-500 md:text-right">
+                      <strong className="block text-slate-700">
+                        {formatEnglishDate(movement.created_at, { includeTime: false })}
+                      </strong>
+                      {formatTime(movement.created_at)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="px-4 py-8 text-center text-sm text-slate-500">
+                No recent order status movements were found.
+              </p>
+            )}
+          </div>
+        </SectionCard>
+      ) : null}
 
       <SectionCard
         title="Create order"
