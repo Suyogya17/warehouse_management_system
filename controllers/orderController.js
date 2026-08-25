@@ -618,8 +618,16 @@ const buildWarehouseFulfillments = (
         allocation.allocation_status || 'DEDUCTED'
       ).toUpperCase();
 
-      group.pairs += quantity;
-      group.cartons += pairsPerCarton > 0 ? quantity / pairsPerCarton : 0;
+      // The printable/deliverable quantity is made up only of planned and
+      // delivered allocations. OUT_OF_STOCK rows are retained below for the
+      // audit trail and shortage status, but must not inflate a warehouse DN.
+      const countsTowardDeliveryNote = ['PLANNED', 'DEDUCTED'].includes(
+        allocationStatus
+      );
+      if (countsTowardDeliveryNote) {
+        group.pairs += quantity;
+        group.cartons += pairsPerCarton > 0 ? quantity / pairsPerCarton : 0;
+      }
       if (allocationStatus === 'DEDUCTED') {
         group.delivered_pairs += quantity;
       } else if (allocationStatus === 'PLANNED') {
@@ -649,10 +657,12 @@ const buildWarehouseFulfillments = (
         verified_at: allocation.verified_at || null,
       });
       group.allocation_statuses.push(allocationStatus);
-      group.fully_packed =
-        group.fully_packed &&
-        (allocationStatus === 'DEDUCTED' ||
-          Number(allocation.packed_quantity || 0) + 0.001 >= quantity);
+      if (countsTowardDeliveryNote) {
+        group.fully_packed =
+          group.fully_packed &&
+          (allocationStatus === 'DEDUCTED' ||
+            Number(allocation.packed_quantity || 0) + 0.001 >= quantity);
+      }
       if (allocation.delivered_by_name) {
         group.delivered_by_name = allocation.delivered_by_name;
       }

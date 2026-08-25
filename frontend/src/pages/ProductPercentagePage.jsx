@@ -48,6 +48,10 @@ export default function ProductPercentagePage() {
   const [publicPairQuantity, setPublicPairQuantity] = useState(0);
   const [publicUsedQuantity, setPublicUsedQuantity] = useState(0);
   const [controlledUsedByUser, setControlledUsedByUser] = useState({});
+  const [transferEditor, setTransferEditor] = useState(null);
+  const [transferCartons, setTransferCartons] = useState({});
+  const [transferReason, setTransferReason] = useState("");
+  const [transferring, setTransferring] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -504,6 +508,130 @@ export default function ProductPercentagePage() {
     }
   };
 
+  const openTransferEditor = (product, source, productTargets) => {
+    const pairsPerCarton = Number(product.inner_boxes_per_outer_box || 0);
+    if (pairsPerCarton <= 0) {
+      showToast({
+        tone: "error",
+        title: "CTN size missing",
+        message: "Set this product's pairs per CTN before transferring its balance.",
+      });
+      return;
+    }
+    setTransferEditor({ product, source, targets: productTargets });
+    setTransferCartons({});
+    setTransferReason("");
+  };
+
+  const closeTransferEditor = () => {
+    if (transferring) return;
+    setTransferEditor(null);
+    setTransferCartons({});
+    setTransferReason("");
+  };
+
+  const submitTransfer = async (event) => {
+    event.preventDefault();
+    if (!transferEditor) return;
+    const pairsPerCarton = Number(
+      transferEditor.product.inner_boxes_per_outer_box || 0
+    );
+    const transfers = Object.entries(transferCartons)
+      .map(([userId, cartons]) => ({
+        user_id: Number(userId),
+        quantity: Math.floor(Number(cartons || 0)) * pairsPerCarton,
+      }))
+      .filter((transfer) => transfer.quantity > 0);
+    const totalPairs = transfers.reduce(
+      (sum, transfer) => sum + transfer.quantity,
+      0
+    );
+    const availablePairs = Number(
+      transferEditor.source.remaining_quantity || 0
+    );
+
+    if (!transfers.length) {
+      showToast({
+        tone: "error",
+        title: "No quantity selected",
+        message: "Enter the CTN to transfer to at least one destination dealer.",
+      });
+      return;
+    }
+    if (totalPairs > availablePairs) {
+      showToast({
+        tone: "error",
+        title: "Transfer exceeds balance",
+        message: `Only ${formatNumber(Math.floor(availablePairs / pairsPerCarton))} full CTN are unused and transferable.`,
+      });
+      return;
+    }
+    if (!transferReason.trim()) {
+      showToast({
+        tone: "error",
+        title: "Reason required",
+        message: "Enter why this allocation is being transferred.",
+      });
+      return;
+    }
+
+    try {
+      setTransferring(true);
+      const result = await api.transferProductPercentageBalance(
+        transferEditor.product.id,
+        {
+          source_user_id: Number(transferEditor.source.user_id),
+          transfers,
+          reason: transferReason.trim(),
+        },
+        token
+      );
+      showToast({
+        tone: "success",
+        title: "Balance transferred",
+        message: result.message || "The unused dealer balance was transferred.",
+      });
+      setTransferEditor(null);
+      setTransferCartons({});
+      setTransferReason("");
+      await load();
+      announceDataRefresh("finished-goods");
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Could not transfer balance",
+        message: error.data?.message || error.message,
+      });
+    } finally {
+      setTransferring(false);
+    }
+  };
+
+  const transferPairsPerCarton = Number(
+    transferEditor?.product?.inner_boxes_per_outer_box || 0
+  );
+  const transferAvailablePairs = Number(
+    transferEditor?.source?.remaining_quantity || 0
+  );
+  const transferAvailableCartons =
+    transferPairsPerCarton > 0
+      ? Math.floor(transferAvailablePairs / transferPairsPerCarton)
+      : 0;
+  const transferLoosePairs =
+    transferPairsPerCarton > 0
+      ? transferAvailablePairs % transferPairsPerCarton
+      : transferAvailablePairs;
+  const transferTotalCartons = Object.values(transferCartons).reduce(
+    (sum, cartons) => sum + Math.max(0, Math.floor(Number(cartons || 0))),
+    0
+  );
+  const transferTargetByUser = new Map(
+    (transferEditor?.targets || []).map((target) => [
+      Number(target.user_id),
+      target,
+    ])
+  );
+
   const exportAllocations = async () => {
     try {
       setExporting(true);
@@ -903,6 +1031,27 @@ export default function ProductPercentagePage() {
                                 </span>
                               </div>
                             </div>
+                            <div className="mt-2 flex justify-end">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                disabled={
+                                  userRemainingPairs < pairsPerCarton ||
+                                  pairsPerCarton <= 0
+                                }
+                                title={
+                                  userRemainingPairs < pairsPerCarton
+                                    ? "No full unused CTN is available to transfer"
+                                    : "Transfer this dealer's unused allocation"
+                                }
+                                onClick={() =>
+                                  openTransferEditor(product, target, targets)
+                                }
+                              >
+                                Transfer balance
+                              </Button>
+                            </div>
                           </div>
                         );
                       })}
@@ -1186,6 +1335,198 @@ export default function ProductPercentagePage() {
           </div>
         )}
       </SectionCard>
+
+      {transferEditor ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4"
+          onMouseDown={closeTransferEditor}
+        >
+          <form
+            onSubmit={submitTransfer}
+            onMouseDown={(event) => event.stopPropagation()}
+            className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl sm:p-6"
+          >
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-indigo-600">
+                Product allocation transfer
+              </p>
+              <h2 className="mt-1 text-xl font-black text-slate-950">
+                Transfer {transferEditor.product.article_code || transferEditor.product.name}
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Move only the source dealer&apos;s unused full cartons. Existing
+                orders and deliveries remain with the original dealer.
+              </p>
+            </div>
+
+            <div className="mt-4 grid gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:grid-cols-4">
+              <div className="sm:col-span-2">
+                <p className="text-[10px] font-bold uppercase text-amber-700">
+                  From dealer
+                </p>
+                <p className="font-bold text-slate-950">
+                  {transferEditor.source.user_name ||
+                    transferEditor.source.user_email}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {transferEditor.source.user_email}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase text-slate-500">
+                  Assigned / ordered
+                </p>
+                <p className="text-sm font-black text-slate-900">
+                  {formatNumber(
+                    Math.floor(
+                      Number(transferEditor.source.allocation_quantity || 0) /
+                        transferPairsPerCarton
+                    )
+                  )}{" "}
+                  / {formatNumber(
+                    Math.floor(
+                      Number(transferEditor.source.ordered_quantity || 0) /
+                        transferPairsPerCarton
+                    )
+                  )}{" "}
+                  CTN
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase text-emerald-700">
+                  Transferable
+                </p>
+                <p className="text-lg font-black text-emerald-800">
+                  {formatNumber(transferAvailableCartons)} CTN
+                </p>
+                <p className="text-xs text-emerald-700">
+                  {formatNumber(transferAvailableCartons * transferPairsPerCarton)} pairs
+                </p>
+              </div>
+            </div>
+
+            {transferLoosePairs > 0 ? (
+              <p className="mt-2 text-xs font-medium text-amber-700">
+                {formatNumber(transferLoosePairs)} loose pairs stay with the
+                source dealer because this transfer uses complete CTN.
+              </p>
+            ) : null}
+
+            <div className="mt-5">
+              <div className="flex items-end justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-slate-950">
+                    Destination dealers
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Enter CTN for one or several dealers.
+                  </p>
+                </div>
+                <p
+                  className={`text-sm font-black ${
+                    transferTotalCartons > transferAvailableCartons
+                      ? "text-red-600"
+                      : "text-indigo-700"
+                  }`}
+                >
+                  {formatNumber(transferTotalCartons)} /{" "}
+                  {formatNumber(transferAvailableCartons)} CTN
+                </p>
+              </div>
+
+              <div className="mt-3 max-h-[42vh] space-y-2 overflow-y-auto rounded-2xl bg-slate-50 p-2">
+                {users
+                  .filter(
+                    (user) =>
+                      Number(user.id) !==
+                      Number(transferEditor.source.user_id)
+                  )
+                  .map((user) => {
+                    const current = transferTargetByUser.get(Number(user.id));
+                    const currentPairs = Number(
+                      current?.allocation_quantity || 0
+                    );
+                    const currentCartons =
+                      transferPairsPerCarton > 0
+                        ? currentPairs / transferPairsPerCarton
+                        : 0;
+                    return (
+                      <label
+                        key={user.id}
+                        className="grid grid-cols-[minmax(0,1fr)_120px] items-center gap-3 rounded-xl border border-slate-200 bg-white p-3"
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-bold text-slate-900">
+                            {user.name || user.email}
+                          </span>
+                          <span className="block truncate text-xs text-slate-400">
+                            {user.email}
+                          </span>
+                          <span className="mt-1 block text-xs font-semibold text-indigo-700">
+                            Currently assigned: {formatNumber(currentCartons)} CTN
+                          </span>
+                        </span>
+                        <span className="text-[11px] font-bold uppercase text-slate-500">
+                          Add CTN
+                          <input
+                            type="number"
+                            min="0"
+                            max={transferAvailableCartons}
+                            step="1"
+                            value={transferCartons[user.id] ?? ""}
+                            onChange={(event) =>
+                              setTransferCartons((currentValues) => ({
+                                ...currentValues,
+                                [user.id]: event.target.value,
+                              }))
+                            }
+                            className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-3 text-sm font-bold text-slate-900"
+                          />
+                        </span>
+                      </label>
+                    );
+                  })}
+              </div>
+            </div>
+
+            <label className="mt-4 block text-xs font-bold uppercase text-slate-600">
+              Transfer reason
+              <textarea
+                required
+                maxLength={500}
+                rows={3}
+                value={transferReason}
+                onChange={(event) => setTransferReason(event.target.value)}
+                placeholder="Example: Dealer did not take the remaining allocation"
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-normal normal-case text-slate-900"
+              />
+            </label>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={closeTransferEditor}
+                disabled={transferring}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                icon="check"
+                disabled={
+                  transferring ||
+                  transferTotalCartons <= 0 ||
+                  transferTotalCartons > transferAvailableCartons ||
+                  !transferReason.trim()
+                }
+              >
+                {transferring ? "Transferring" : "Transfer balance"}
+              </Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       {editing ? (
         <div

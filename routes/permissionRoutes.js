@@ -21,6 +21,11 @@ router.put(
   authorize('ADMIN', 'CO_ADMIN'),
   ctrl.savePercentageAllocations
 );
+router.post(
+  '/percentage-allocations/:finished_good_id/transfer-balance',
+  authorize('ADMIN', 'CO_ADMIN'),
+  ctrl.transferPercentageAllocationBalance
+);
 
 // POST /api/permissions/grant    - Grant product access to a user (ADMIN only)
 router.post('/grant', authorizeAdminOrPagePermission(PRODUCT_VISIBILITY_PAGE_KEY, 'can_edit'), ctrl.grantAccess);

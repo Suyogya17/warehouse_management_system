@@ -663,6 +663,12 @@ export const api = {
       },
       token
     ),
+  transferProductPercentageBalance: (id, payload, token) =>
+    apiRequest(
+      `/permissions/percentage-allocations/${id}/transfer-balance`,
+      { method: "POST", body: JSON.stringify(payload) },
+      token
+    ),
 
   getOrders: (token, options = {}) => {
     const query = buildQueryString(options);

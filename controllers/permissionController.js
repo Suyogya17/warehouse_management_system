@@ -1,5 +1,5 @@
 // src/controllers/permissionController.js
-const { query } = require('../config/db');
+const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
@@ -914,6 +914,370 @@ const savePercentageAllocations = async (req, res, next) => {
   }
 };
 
+const transferPercentageAllocationBalance = async (req, res, next) => {
+  const client = await getClient();
+  let committed = false;
+
+  const fail = (statusCode, message) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
+
+  try {
+    const finishedGoodId = Number(req.params.finished_good_id);
+    const sourceUserId = Number(req.body?.source_user_id);
+    const reason = String(req.body?.reason || '').trim().slice(0, 500);
+    const transfers = Array.isArray(req.body?.transfers)
+      ? req.body.transfers.map((transfer) => ({
+          user_id: Number(transfer.user_id),
+          quantity: Number(transfer.quantity),
+        }))
+      : [];
+
+    if (!Number.isInteger(finishedGoodId) || finishedGoodId <= 0) {
+      fail(400, 'Select a valid product.');
+    }
+    if (!Number.isInteger(sourceUserId) || sourceUserId <= 0) {
+      fail(400, 'Select a valid source dealer.');
+    }
+    if (!transfers.length) {
+      fail(400, 'Allocate the transferred quantity to at least one dealer.');
+    }
+    const destinationIds = transfers.map((transfer) => transfer.user_id);
+    if (
+      new Set(destinationIds).size !== destinationIds.length ||
+      transfers.some(
+        (transfer) =>
+          !Number.isInteger(transfer.user_id) ||
+          transfer.user_id <= 0 ||
+          transfer.user_id === sourceUserId ||
+          !Number.isInteger(transfer.quantity) ||
+          transfer.quantity <= 0
+      )
+    ) {
+      fail(400, 'Each destination dealer needs one valid whole-pair quantity.');
+    }
+
+    const supportsAllocations = await hasColumn(
+      'user_product_permissions',
+      'allocation_quantity'
+    );
+    const supportsAllocationScope = supportsAllocations
+      ? await hasColumn('user_product_permissions', 'allocation_scope')
+      : false;
+    if (!supportsAllocations || !supportsAllocationScope) {
+      fail(
+        409,
+        'Allocation transfers require sql/add-private-product-allocations.sql.'
+      );
+    }
+    const supportsControlledPool = await hasTable(
+      'product_controlled_release_pools'
+    );
+    const supportsControlledUsage =
+      (await hasColumn('order_items', 'controlled_personal_quantity')) &&
+      (await hasColumn('order_items', 'controlled_public_quantity'));
+    const supportsOfferSnapshots = await hasColumn(
+      'order_items',
+      'ordered_from_offer'
+    );
+
+    await client.query('START TRANSACTION');
+    const productResult = await client.query(
+      `SELECT id, name, article_code, sole_code, color, quantity,
+              inner_boxes_per_outer_box
+       FROM finished_goods
+       WHERE id = ? AND is_deleted = 0
+       FOR UPDATE`,
+      [finishedGoodId]
+    );
+    const product = productResult.rows[0];
+    if (!product) fail(404, 'Product not found.');
+
+    const allocationResult = await client.query(
+      `SELECT upp.id, upp.user_id, upp.can_view,
+              upp.allocation_percentage, upp.allocation_quantity,
+              upp.allocation_started_at,
+              COALESCE(upp.allocation_scope, 'EXCLUSIVE') AS allocation_scope,
+              u.name AS user_name, u.email AS user_email, u.role AS user_role
+       FROM user_product_permissions upp
+       JOIN users u ON u.id = upp.user_id
+       WHERE upp.finished_good_id = ?
+       FOR UPDATE`,
+      [finishedGoodId]
+    );
+    const allocationByUser = new Map(
+      allocationResult.rows.map((row) => [Number(row.user_id), row])
+    );
+    const source = allocationByUser.get(sourceUserId);
+    if (!source || source.allocation_quantity === null) {
+      fail(409, 'The source dealer is not assigned to this product.');
+    }
+
+    const allocationScope = String(source.allocation_scope || 'EXCLUSIVE')
+      .trim()
+      .toUpperCase();
+    const mixedScope = allocationResult.rows.some(
+      (row) =>
+        row.allocation_quantity !== null &&
+        String(row.allocation_scope || 'EXCLUSIVE').toUpperCase() !==
+          allocationScope
+    );
+    if (mixedScope) {
+      fail(409, 'This product has mixed allocation modes. Save one mode before transferring.');
+    }
+
+    let sourceUsedQuantity = 0;
+    if (allocationScope === 'CONTROLLED') {
+      if (!supportsControlledPool || !supportsControlledUsage) {
+        fail(
+          409,
+          'Controlled allocation usage requires sql/add-private-product-allocations.sql.'
+        );
+      }
+      const usageResult = await client.query(
+        `SELECT COALESCE(SUM(oi.controlled_personal_quantity), 0) AS used_quantity
+         FROM order_items oi
+         JOIN orders o ON o.id = oi.order_id
+         JOIN product_controlled_release_pools pool
+           ON pool.finished_good_id = oi.finished_good_id
+          AND o.created_at >= pool.created_at
+         WHERE oi.finished_good_id = ?
+           AND o.created_by = ?
+           AND o.status <> 'CANCELLED'`,
+        [finishedGoodId, sourceUserId]
+      );
+      sourceUsedQuantity = Number(usageResult.rows[0]?.used_quantity || 0);
+    } else {
+      const usageResult = await client.query(
+        `SELECT COALESCE(SUM(oi.qty_ordered), 0) AS used_quantity
+         FROM order_items oi
+         JOIN orders o ON o.id = oi.order_id
+         WHERE oi.finished_good_id = ?
+           AND o.created_by = ?
+           AND o.status <> 'CANCELLED'
+           AND o.created_at >= ?
+           ${supportsOfferSnapshots ? 'AND COALESCE(oi.ordered_from_offer, 0) = 0' : ''}`,
+        [
+          finishedGoodId,
+          sourceUserId,
+          source.allocation_started_at || new Date(0),
+        ]
+      );
+      sourceUsedQuantity = Number(usageResult.rows[0]?.used_quantity || 0);
+    }
+
+    const sourceBeforeQuantity = Number(source.allocation_quantity || 0);
+    const sourceAvailableQuantity = Math.max(
+      0,
+      sourceBeforeQuantity - sourceUsedQuantity
+    );
+    const transferQuantity = transfers.reduce(
+      (sum, transfer) => sum + transfer.quantity,
+      0
+    );
+    if (transferQuantity > sourceAvailableQuantity) {
+      fail(
+        409,
+        `Only ${sourceAvailableQuantity} unused pairs can be transferred from ${source.user_name || source.user_email}.`
+      );
+    }
+
+    const destinationResult = await client.query(
+      `SELECT id, name, email, role
+       FROM users
+       WHERE id IN (${destinationIds.map(() => '?').join(',')})`,
+      destinationIds
+    );
+    if (
+      destinationResult.rows.length !== destinationIds.length ||
+      destinationResult.rows.some(
+        (user) => String(user.role || '').toUpperCase() !== 'USER'
+      )
+    ) {
+      fail(400, 'Allocation balance can only be transferred to valid dealer accounts.');
+    }
+    const destinationUserById = new Map(
+      destinationResult.rows.map((user) => [Number(user.id), user])
+    );
+
+    const activeRows = allocationResult.rows.filter(
+      (row) => row.allocation_quantity !== null
+    );
+    const totalAssignedBefore = activeRows.reduce(
+      (sum, row) => sum + Number(row.allocation_quantity || 0),
+      0
+    );
+    const percentageTotalBefore = activeRows.reduce(
+      (sum, row) => sum + Number(row.allocation_percentage || 0),
+      0
+    );
+    const nextQuantities = new Map(
+      activeRows.map((row) => [
+        Number(row.user_id),
+        Number(row.allocation_quantity || 0),
+      ])
+    );
+    nextQuantities.set(
+      sourceUserId,
+      sourceBeforeQuantity - transferQuantity
+    );
+    transfers.forEach((transfer) => {
+      nextQuantities.set(
+        transfer.user_id,
+        Number(nextQuantities.get(transfer.user_id) || 0) + transfer.quantity
+      );
+    });
+
+    const percentageBase = percentageTotalBefore > 0
+      ? percentageTotalBefore
+      : 100;
+    const percentageFor = (quantity) =>
+      totalAssignedBefore > 0
+        ? (Number(quantity || 0) / totalAssignedBefore) * percentageBase
+        : 0;
+
+    for (const [userId, quantity] of nextQuantities.entries()) {
+      const existing = allocationByUser.get(Number(userId));
+      if (quantity <= 0) {
+        if (existing) {
+          await client.query(
+            `UPDATE user_product_permissions
+             SET allocation_percentage = NULL,
+                 allocation_quantity = NULL,
+                 allocation_started_at = NULL,
+                 allocation_scope = NULL
+             WHERE id = ?`,
+            [existing.id]
+          );
+        }
+        continue;
+      }
+
+      const nextPercentage = percentageFor(quantity);
+      if (existing) {
+        await client.query(
+          `UPDATE user_product_permissions
+           SET can_view = 1,
+               allocation_percentage = ?,
+               allocation_quantity = ?,
+               allocation_started_at = COALESCE(allocation_started_at, NOW()),
+               allocation_scope = ?
+           WHERE id = ?`,
+          [nextPercentage, quantity, allocationScope, existing.id]
+        );
+      } else {
+        const permissionInsert = await appendFiscalInsertFields(
+          'user_product_permissions',
+          [
+            'user_id',
+            'finished_good_id',
+            'can_view',
+            'allocation_percentage',
+            'allocation_quantity',
+            'allocation_started_at',
+            'allocation_scope',
+          ],
+          [
+            userId,
+            finishedGoodId,
+            1,
+            nextPercentage,
+            quantity,
+            new Date(),
+            allocationScope,
+          ]
+        );
+        await client.query(
+          `INSERT INTO user_product_permissions (${permissionInsert.columns.join(', ')})
+           VALUES (${permissionInsert.columns.map(() => '?').join(', ')})`,
+          permissionInsert.values
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    committed = true;
+    clearCache();
+
+    const pairsPerCarton = Number(product.inner_boxes_per_outer_box || 0);
+    const transferDetails = transfers.map((transfer) => {
+      const user = destinationUserById.get(transfer.user_id);
+      const beforeQuantity = Number(
+        allocationByUser.get(transfer.user_id)?.allocation_quantity || 0
+      );
+      return {
+        user_id: transfer.user_id,
+        user_name: user?.name || null,
+        user_email: user?.email || null,
+        transferred_quantity: transfer.quantity,
+        transferred_cartons:
+          pairsPerCarton > 0 ? transfer.quantity / pairsPerCarton : 0,
+        before_quantity: beforeQuantity,
+        after_quantity: beforeQuantity + transfer.quantity,
+      };
+    });
+    try {
+      await auditLog({
+        userId: req.user.id,
+        action: 'TRANSFER_PRODUCT_ALLOCATION_BALANCE',
+        tableName: 'user_product_permissions',
+        recordId: finishedGoodId,
+        detail: `Transferred ${transferQuantity} unused pairs of ${product.article_code || product.name} from ${source.user_name || source.user_email} to ${transfers.length} dealer(s)`,
+        metadata: {
+          snapshot_version: 1,
+          product_name: product.name,
+          article_code: product.article_code,
+          sole_code: product.sole_code,
+          color: product.color,
+          allocation_scope: allocationScope,
+          pairs_per_carton: pairsPerCarton,
+          source_user_id: sourceUserId,
+          source_user_name: source.user_name,
+          source_user_email: source.user_email,
+          source_before_quantity: sourceBeforeQuantity,
+          source_used_quantity: sourceUsedQuantity,
+          source_available_quantity: sourceAvailableQuantity,
+          source_after_quantity: sourceBeforeQuantity - transferQuantity,
+          transferred_quantity: transferQuantity,
+          transferred_cartons:
+            pairsPerCarton > 0 ? transferQuantity / pairsPerCarton : 0,
+          destinations: transferDetails,
+          reason: reason || null,
+        },
+      });
+    } catch (auditError) {
+      console.error('Product allocation transfer audit failed:', auditError);
+    }
+
+    return res.json({
+      success: true,
+      message: `${transferQuantity} unused pairs were transferred successfully.`,
+      data: {
+        finished_good_id: finishedGoodId,
+        source_user_id: sourceUserId,
+        source_before_quantity: sourceBeforeQuantity,
+        source_used_quantity: sourceUsedQuantity,
+        source_after_quantity: sourceBeforeQuantity - transferQuantity,
+        transferred_quantity: transferQuantity,
+        destinations: transferDetails,
+      },
+    });
+  } catch (err) {
+    if (!committed) await client.query('ROLLBACK').catch(() => {});
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({
+        success: false,
+        message: err.message,
+      });
+    }
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   grantAccess,
   revokeAccess,
@@ -922,4 +1286,5 @@ module.exports = {
   getPercentageAllocations,
   getPercentageAllocationHistory,
   savePercentageAllocations,
+  transferPercentageAllocationBalance,
 };

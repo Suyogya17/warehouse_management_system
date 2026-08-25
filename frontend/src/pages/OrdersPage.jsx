@@ -1596,16 +1596,22 @@ export default function OrdersPage() {
       ])
     );
 
-    const groupedRows = new Map();
+    const printableAllocationsByItem = new Map();
+    let invalidAllocationItem = null;
     (preparedOrder.items || []).forEach((item) => {
-      const pairsPerCarton = Number(
-        item.inner_boxes_per_outer_box || 0
-      );
-      const allocations = (item.warehouse_allocations || []).filter(
+      const sourceAllocations = (item.warehouse_allocations || []).filter(
         (allocation) => Number(allocation.quantity || 0) > 0
       );
-      const printableAllocations = allocations.length
-        ? allocations
+      const activeAllocations = sourceAllocations.filter((allocation) => {
+        const status = String(allocation.allocation_status || "")
+          .trim()
+          .toUpperCase();
+        // Legacy allocations have no status. Modern OUT_OF_STOCK and RELEASED
+        // records are history/shortage records and do not belong on the DN.
+        return !status || status === "PLANNED" || status === "DEDUCTED";
+      });
+      const printableAllocations = sourceAllocations.length
+        ? activeAllocations
         : [
             {
               warehouse_id: null,
@@ -1616,6 +1622,58 @@ export default function OrdersPage() {
               print_group_display_order: 999,
             },
           ];
+
+      const activePairs = printableAllocations.reduce(
+        (sum, allocation) => sum + Number(allocation.quantity || 0),
+        0
+      );
+      const orderedPairs = Number(item.qty_ordered || 0);
+      if (activePairs > orderedPairs + 0.001 && !invalidAllocationItem) {
+        invalidAllocationItem = {
+          name: item.product_name || `FG.ID ${item.finished_good_id}`,
+          activePairs,
+          orderedPairs,
+        };
+      }
+
+      // Partial delivery can produce several history rows for one item in the
+      // same warehouse (for example 2 delivered + 28 pending). Print one
+      // consolidated product row while keeping the raw records in the audit UI.
+      const allocationsByWarehouse = new Map();
+      printableAllocations.forEach((allocation) => {
+        const key = String(allocation.warehouse_id || "UNASSIGNED");
+        const existing = allocationsByWarehouse.get(key);
+        if (existing) {
+          existing.quantity += Number(allocation.quantity || 0);
+        } else {
+          allocationsByWarehouse.set(key, {
+            ...allocation,
+            quantity: Number(allocation.quantity || 0),
+          });
+        }
+      });
+      printableAllocationsByItem.set(Number(item.id), [
+        ...allocationsByWarehouse.values(),
+      ]);
+    });
+
+    if (invalidAllocationItem) {
+      printWindow.close();
+      showToast({
+        tone: "error",
+        title: "Could not print incorrect DN",
+        message: `${invalidAllocationItem.name} has ${formatNumber(invalidAllocationItem.activePairs)} allocated pairs but the order contains only ${formatNumber(invalidAllocationItem.orderedPairs)} pairs. Correct the warehouse allocation before printing.`,
+      });
+      return;
+    }
+
+    const groupedRows = new Map();
+    (preparedOrder.items || []).forEach((item) => {
+      const pairsPerCarton = Number(
+        item.inner_boxes_per_outer_box || 0
+      );
+      const printableAllocations =
+        printableAllocationsByItem.get(Number(item.id)) || [];
 
       printableAllocations.forEach((allocation) => {
         const groupCode =
