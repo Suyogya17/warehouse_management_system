@@ -212,6 +212,11 @@ const getPercentageAllocations = async (req, res, next) => {
     const supportsControlledUsage =
       (await hasColumn('order_items', 'controlled_personal_quantity')) &&
       (await hasColumn('order_items', 'controlled_public_quantity'));
+    const supportsParentDealer = await hasColumn('users', 'parent_dealer_id');
+    const supportsParentShare = await hasColumn(
+      'users',
+      'parent_allocation_share_percent'
+    );
 
     const rows = await query(
       `SELECT upp.finished_good_id, upp.user_id,
@@ -219,6 +224,17 @@ const getPercentageAllocations = async (req, res, next) => {
               upp.allocation_started_at,
               ${supportsAllocationScope ? "COALESCE(upp.allocation_scope, 'EXCLUSIVE')" : "'EXCLUSIVE'"} AS allocation_scope,
               u.name AS user_name, u.email AS user_email,
+              ${
+                supportsParentDealer
+                  ? `u.parent_dealer_id,
+                     ${supportsParentShare ? 'u.parent_allocation_share_percent,' : 'NULL AS parent_allocation_share_percent,'}
+                     parent_user.name AS parent_dealer_name,
+                     parent_user.email AS parent_dealer_email,`
+                  : `NULL AS parent_dealer_id,
+                     NULL AS parent_allocation_share_percent,
+                     NULL AS parent_dealer_name,
+                     NULL AS parent_dealer_email,`
+              }
               COALESCE(SUM(${
                 supportsAllocationScope && supportsControlledUsage
                   ? `CASE
@@ -230,6 +246,7 @@ const getPercentageAllocations = async (req, res, next) => {
               }), 0) AS ordered_quantity
        FROM user_product_permissions upp
        JOIN users u ON u.id = upp.user_id
+       ${supportsParentDealer ? 'LEFT JOIN users parent_user ON parent_user.id = u.parent_dealer_id' : ''}
        ${supportsControlledPool ? 'LEFT JOIN product_controlled_release_pools controlled_pool ON controlled_pool.finished_good_id = upp.finished_good_id' : ''}
        LEFT JOIN orders o
          ON o.created_by = upp.user_id
@@ -257,6 +274,7 @@ const getPercentageAllocations = async (req, res, next) => {
        GROUP BY upp.finished_good_id, upp.user_id,
                 upp.allocation_percentage, upp.allocation_quantity,
                 upp.allocation_started_at${supportsAllocationScope ? ', upp.allocation_scope' : ''}, u.name, u.email
+                ${supportsParentDealer ? `, u.parent_dealer_id${supportsParentShare ? ', u.parent_allocation_share_percent' : ''}, parent_user.name, parent_user.email` : ''}
        ORDER BY upp.finished_good_id, upp.allocation_percentage DESC, u.name`
     );
 
@@ -734,8 +752,10 @@ const savePercentageAllocations = async (req, res, next) => {
 
     let targetUsers = [];
     if (normalizedTargets.length) {
+      const supportsParentDealer = await hasColumn('users', 'parent_dealer_id');
       const users = await query(
-        `SELECT id, name, email
+        `SELECT id, name, email,
+                ${supportsParentDealer ? 'parent_dealer_id' : 'NULL AS parent_dealer_id'}
          FROM users
          WHERE role = 'USER'
            AND id IN (${normalizedTargets.map(() => '?').join(',')})`,
@@ -747,6 +767,47 @@ const savePercentageAllocations = async (req, res, next) => {
           success: false,
           message: 'Allocations can only be assigned to valid USER accounts.',
         });
+      }
+
+      const linkedShareholders = users.rows.filter(
+        (user) => Number(user.parent_dealer_id || 0) > 0
+      );
+      if (linkedShareholders.length) {
+        const existingRows = await query(
+          `SELECT user_id, allocation_percentage, allocation_quantity
+           FROM user_product_permissions
+           WHERE finished_good_id = ?
+             AND user_id IN (${linkedShareholders.map(() => '?').join(',')})`,
+          [finishedGoodId, ...linkedShareholders.map((user) => user.id)]
+        );
+        const existingByUser = new Map(
+          existingRows.rows.map((row) => [Number(row.user_id), row])
+        );
+        const changedShareholder = normalizedTargets.find((target) => {
+          const user = linkedShareholders.find(
+            (candidate) => Number(candidate.id) === Number(target.user_id)
+          );
+          if (!user) return false;
+          const existing = existingByUser.get(Number(target.user_id));
+          return (
+            !existing ||
+            Math.abs(
+              Number(existing.allocation_percentage || 0) -
+                Number(target.allocation_percentage || 0)
+            ) > 0.0001 ||
+            Number(existing.allocation_quantity || 0) !==
+              Number(target.allocation_quantity || 0)
+          );
+        });
+        if (changedShareholder) {
+          const shareholder = linkedShareholders.find(
+            (user) => Number(user.id) === Number(changedShareholder.user_id)
+          );
+          return res.status(409).json({
+            success: false,
+            message: `${shareholder?.name || shareholder?.email || 'A shareholder shop'} is linked to a parent dealer. Do not enter a global percentage for this account. Allocate its quantity from the parent dealer using Shareholder Shop creation or Transfer balance.`,
+          });
+        }
       }
     }
 

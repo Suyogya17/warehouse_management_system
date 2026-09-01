@@ -689,6 +689,13 @@ export const api = {
     const query = buildQueryString(options);
     return downloadApiFile(`/catalogues/download${query ? `?${query}` : ""}`, token);
   },
+  downloadWhatsAppCatalogue: (options, token) => {
+    const query = buildQueryString(options);
+    return downloadApiFile(
+      `/catalogues/whatsapp-download${query ? `?${query}` : ""}`,
+      token
+    );
+  },
 
   getOfferPurchases: (token) => apiRequest("/orders/offer-purchases", {}, token),
   getOfferVsRegularReport: (params, token) => {

@@ -2616,6 +2616,18 @@ export default function OrdersPage() {
               label: "Created By",
               minWidth: 165,
               align: "center",
+              render: (row) => (
+                <div className="space-y-1">
+                  <div className="font-semibold text-slate-900">
+                    {row.created_by_name || "-"}
+                  </div>
+                  {row.parent_dealer_id ? (
+                    <div className="rounded-lg bg-indigo-50 px-2 py-1 text-xs text-indigo-700">
+                      Parent: {row.parent_dealer_name || row.parent_dealer_email || `User #${row.parent_dealer_id}`}
+                    </div>
+                  ) : null}
+                </div>
+              ),
             },
             {
               key: "created_at",

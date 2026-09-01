@@ -673,6 +673,11 @@ export default function ProductPercentagePage() {
             ).toUpperCase(),
             "Assigned person": allocation.user_name || "",
             Email: allocation.user_email || "",
+            "Parent dealer": allocation.parent_dealer_name || "",
+            "Parent dealer email": allocation.parent_dealer_email || "",
+            "Share of parent %": Number(
+              allocation.parent_allocation_share_percent || 0
+            ),
             "Allocation started": allocation.allocation_started_at || "",
             "Allocation percentage": Number(
               allocation.allocation_percentage || 0
@@ -1011,6 +1016,11 @@ export default function ProductPercentagePage() {
                                 {formatNumber(target.allocation_percentage)}%
                               </span>
                             </div>
+                            {target.parent_dealer_id ? (
+                              <p className="mt-1 text-[11px] font-semibold text-violet-700">
+                                Shareholder · {formatNumber(target.parent_allocation_share_percent)}% of {target.parent_dealer_name || target.parent_dealer_email || "parent dealer"}
+                              </p>
+                            ) : null}
                             <div className="mt-1 grid grid-cols-2 gap-2 text-[11px]">
                               <div>
                                 <span className="text-slate-400">Divided </span>
@@ -1734,10 +1744,18 @@ export default function ProductPercentagePage() {
               </div>
             </div>
 
+            {users.some((user) => Number(user.parent_dealer_id || 0) > 0) ? (
+              <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50 p-3 text-sm text-violet-800">
+                <strong>Shareholder quantities come from their parent dealer.</strong>{" "}
+                A value such as 25% means 25% of the parent pool, not 25% of the complete product. Use the shareholder account setup or Transfer balance; direct global-percentage entry is disabled here.
+              </div>
+            ) : null}
+
             <div className="mt-4 max-h-[52vh] space-y-2 overflow-y-auto rounded-xl bg-slate-50 p-2">
               {users.map((user) => {
                 const userId = Number(user.id);
                 const checked = selectedUserIds.includes(userId);
+                const isShareholderShop = Number(user.parent_dealer_id || 0) > 0;
                 const defaultPercentage =
                   OFFER_PERCENTAGES_BY_EMAIL[
                     String(user.email || "").trim().toLowerCase()
@@ -1753,6 +1771,7 @@ export default function ProductPercentagePage() {
                     <input
                       type="checkbox"
                       checked={checked}
+                      disabled={isShareholderShop && !checked}
                       onChange={() => {
                         setSelectedUserIds((current) =>
                           checked
@@ -1784,6 +1803,11 @@ export default function ProductPercentagePage() {
                       <p className="truncate text-xs text-slate-400">
                         {user.email}
                       </p>
+                      {isShareholderShop ? (
+                        <p className="mt-1 text-xs font-semibold text-violet-700">
+                          Shareholder shop · Parent: {user.parent_dealer_name || user.parent_dealer_email || `User #${user.parent_dealer_id}`}
+                        </p>
+                      ) : null}
                       {checked && allocation ? (
                         <p className="mt-1 text-xs font-bold text-indigo-700">
                           {formatPercentage(allocation.percentage)}% ·{" "}
@@ -1810,7 +1834,7 @@ export default function ProductPercentagePage() {
                         }
                         step={divisionMode === "PERCENTAGE" ? "0.01" : "1"}
                         required={checked}
-                        disabled={!checked}
+                        disabled={!checked || isShareholderShop}
                         value={
                           checked
                             ? divisionMode === "CTN"
@@ -1840,6 +1864,11 @@ export default function ProductPercentagePage() {
                         }}
                         className="mt-1 h-9 w-full rounded-lg border border-slate-200 px-2 text-sm disabled:bg-slate-100"
                       />
+                      {isShareholderShop ? (
+                        <span className="mt-1 block text-[10px] normal-case leading-4 text-violet-600">
+                          Allocate from parent
+                        </span>
+                      ) : null}
                     </label>
                   </div>
                 );

@@ -8,5 +8,10 @@ router.get(
   authorize('ADMIN', 'CO_ADMIN', 'MEMBER', 'USER', 'ELDER'),
   controller.download
 );
+router.get(
+  '/whatsapp-download',
+  authorize('ADMIN', 'CO_ADMIN'),
+  controller.downloadWhatsApp
+);
 
 module.exports = router;

@@ -9,7 +9,7 @@
   const UPLOAD_ROOT = path.join(__dirname, '..', 'uploads');
   // Version 9 guarantees catalogue downloads contain no CTN/pair quantities.
   // The live Gallery remains the source for exact current stock.
-  const CACHE_VERSION = 9;
+  const CACHE_VERSION = 12;
   const STANDARD_IMAGE_OPTIONS = { width: 520, quality: 58 };
   const HIGH_IMAGE_OPTIONS = { width: 1200, quality: 88 };
   const ACTIVE_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -20,6 +20,26 @@
   const TILE_GAP = 11;
   const CONTENT_WIDTH = 523;
   const activeGenerations = new Map();
+
+  const createZipArchive = async () => {
+    const archiverModule = await import('archiver');
+
+    // Archiver 8 exposes ZipArchive as a named ESM export. Older cPanel
+    // installations expose the traditional CommonJS archiver('zip') function.
+    if (typeof archiverModule.ZipArchive === 'function') {
+      return new archiverModule.ZipArchive({ zlib: { level: 6 } });
+    }
+
+    const legacyArchiver =
+      archiverModule.default || archiverModule.archiver || archiverModule;
+    if (typeof legacyArchiver === 'function') {
+      return legacyArchiver('zip', { zlib: { level: 6 } });
+    }
+
+    throw new Error(
+      'The installed archiver package is incompatible. Run npm install in the backend folder.'
+    );
+  };
 
   const getSeriesName = (soleCode = '') =>
     String(soleCode)
@@ -42,6 +62,18 @@
           0
       )
     );
+
+  const getPairsPerCarton = (product = {}) => {
+    const value = Number(product.inner_boxes_per_outer_box || 0);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  };
+
+  const getVisibleCartons = (product = {}) => {
+    const pairsPerCarton = getPairsPerCarton(product);
+    return pairsPerCarton > 0
+      ? Math.floor(getVisiblePairs(product) / pairsPerCarton)
+      : 0;
+  };
 
   const safeName = (value, fallback = 'catalogue') => {
     const clean = String(value || '')
@@ -429,7 +461,6 @@
   };
 
   const createZip = async (zipPath, groups, options) => {
-    const { ZipArchive } = await import('archiver');
     const tempRoot = await fsp.mkdtemp(path.join(CACHE_ROOT, 'zip-'));
     const imageCache = new Map();
 
@@ -454,9 +485,9 @@
         pdfFiles.push({ filename, pdfPath });
       }
 
+      const archive = await createZipArchive();
       await new Promise((resolve, reject) => {
         const output = fs.createWriteStream(zipPath);
-        const archive = new ZipArchive({ zlib: { level: 6 } });
         output.on('close', resolve);
         output.on('error', reject);
         archive.on('error', reject);
@@ -467,6 +498,79 @@
     } finally {
       await fsp.rm(tempRoot, { recursive: true, force: true });
     }
+  };
+
+  const createWhatsAppSheetBuffer = async (variants) => {
+    const width = 1080;
+    const rowHeight = 720;
+    const rows = Math.max(1, variants.length);
+    const composites = [];
+
+    for (let index = 0; index < variants.length; index += 1) {
+      const product = variants[index];
+      const imagePath = await resolveUploadPath(product.image_url);
+      const top = index * rowHeight;
+      if (imagePath) {
+        try {
+          const image = await sharp(imagePath)
+            .rotate()
+            .resize({
+              width,
+              height: rowHeight,
+              fit: 'contain',
+              background: '#f5f1e8',
+              withoutEnlargement: false,
+            })
+            .jpeg({ quality: 88, mozjpeg: true })
+            .toBuffer();
+          composites.push({ input: image, left: 0, top });
+        } catch {
+          // Keep the neutral row background when a source image cannot be decoded.
+        }
+      }
+
+      if (index < variants.length - 1) {
+        const divider = Buffer.from(
+          `<svg width="${width}" height="8"><rect width="${width}" height="8" fill="#111827"/></svg>`
+        );
+        composites.push({ input: divider, left: 0, top: top + rowHeight - 4 });
+      }
+    }
+
+    return sharp({
+      create: {
+        width,
+        height: rowHeight * rows,
+        channels: 3,
+        background: '#f5f1e8',
+      },
+    })
+      .composite(composites)
+      .jpeg({ quality: 88, mozjpeg: true })
+      .toBuffer();
+  };
+
+  const createWhatsAppZip = async (zipPath, groups) => {
+    const archive = await createZipArchive();
+    const output = fs.createWriteStream(zipPath);
+    const completed = new Promise((resolve, reject) => {
+      output.on('close', resolve);
+      output.on('error', reject);
+      archive.on('error', reject);
+    });
+    archive.pipe(output);
+
+    for (const group of groups) {
+      const filename = `${safeName(group.series, 'other')}-${safeName(
+        group.article,
+        'article'
+      )}.jpg`;
+      const image = await createWhatsAppSheetBuffer(group.variants);
+      archive.append(image, { name: filename });
+    }
+
+    await archive.finalize();
+    await completed;
   };
 
   const cleanupOldCache = async () => {
@@ -578,7 +682,135 @@
     };
   };
 
+  const getWhatsAppCatalogueGroups = (products, options) => {
+    const minimumCartons = Math.max(1, Number(options.minimumCartons || 1));
+    return groupProducts(
+      products.filter((product) => {
+        const modeMatches =
+          options.mode === 'offers'
+            ? isActiveOffer(product)
+            : !isActiveOffer(product);
+        const matchesSeries =
+          !String(options.series || '').trim() ||
+          getSeriesName(product.sole_code).toLowerCase() ===
+            String(options.series).trim().toLowerCase();
+        const search = String(options.search || '').trim().toLowerCase();
+        const matchesSearch =
+          !search ||
+          [product.article_code, product.name, product.sole_code, product.color].some(
+            (value) => String(value || '').toLowerCase().includes(search)
+          );
+        return (
+          modeMatches &&
+          matchesSeries &&
+          matchesSearch &&
+          getVisibleCartons(product) >= minimumCartons &&
+          Boolean(product.image_url)
+        );
+      })
+    );
+  };
+
+  const assertWhatsAppCatalogueGroups = (groups) => {
+    if (groups.length) return;
+
+    const error = new Error(
+      'This dealer has no photographed products with at least 1 complete CTN available'
+    );
+    error.statusCode = 404;
+    throw error;
+  };
+
+  const getWhatsAppFilename = (options) =>
+    `whatsapp-catalogue-${safeName(options.dealerName, 'dealer')}.zip`;
+
+  const getWhatsAppCatalogueDownload = async (products, options) => {
+    await fsp.mkdir(CACHE_ROOT, { recursive: true });
+    cleanupOldCache();
+
+    const minimumCartons = Math.max(1, Number(options.minimumCartons || 1));
+    const groups = getWhatsAppCatalogueGroups(products, options);
+    assertWhatsAppCatalogueGroups(groups);
+
+    const signature = groups.flatMap((group) =>
+      group.variants.map((product) => ({
+        id: Number(product.id),
+        image: product.image_url || '',
+        visiblePairs: getVisiblePairs(product),
+        pairsPerCarton: getPairsPerCarton(product),
+      }))
+    );
+    const cacheKey = crypto
+      .createHash('sha256')
+      .update(
+        JSON.stringify({
+          cacheVersion: CACHE_VERSION,
+          type: 'whatsapp-images',
+          mode: options.mode,
+          userId: Number(options.userId),
+          minimumCartons,
+          series: options.series || '',
+          search: options.search || '',
+          signature,
+        })
+      )
+      .digest('hex');
+    const cachePath = path.join(CACHE_ROOT, `${cacheKey}.zip`);
+
+    try {
+      await fsp.access(cachePath, fs.constants.R_OK);
+    } catch {
+      const tempPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
+      await createWhatsAppZip(tempPath, groups);
+      await fsp.rename(tempPath, cachePath);
+    }
+
+    return {
+      path: cachePath,
+      filename: getWhatsAppFilename(options),
+      contentType: 'application/zip',
+    };
+  };
+
+  const streamWhatsAppCatalogueDownload = async (products, options, res) => {
+    const groups = getWhatsAppCatalogueGroups(products, options);
+    assertWhatsAppCatalogueGroups(groups);
+
+    const archive = await createZipArchive();
+    const completed = new Promise((resolve, reject) => {
+      res.on('finish', resolve);
+      res.on('error', reject);
+      archive.on('error', reject);
+    });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${getWhatsAppFilename(options)}"`
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    archive.pipe(res);
+
+    for (const group of groups) {
+      if (res.destroyed) {
+        archive.abort();
+        return;
+      }
+      const filename = `${safeName(group.series, 'other')}-${safeName(
+        group.article,
+        'article'
+      )}.jpg`;
+      const image = await createWhatsAppSheetBuffer(group.variants);
+      archive.append(image, { name: filename });
+    }
+
+    await archive.finalize();
+    await completed;
+  };
+
   module.exports = {
     filterCatalogueProducts,
     getCatalogueDownload,
+    getWhatsAppCatalogueDownload,
+    streamWhatsAppCatalogueDownload,
   };

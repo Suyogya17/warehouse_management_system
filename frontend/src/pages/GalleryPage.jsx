@@ -53,6 +53,9 @@ export default function GalleryPage() {
   const [downloadOption, setDownloadOption] = useState("FILTERED");
   const [downloadLoading, setDownloadLoading] = useState(false);
   const [downloadError, setDownloadError] = useState("");
+  const [dealers, setDealers] = useState([]);
+  const [selectedDealerId, setSelectedDealerId] = useState("");
+  const [whatsAppLoading, setWhatsAppLoading] = useState(false);
 
   const load = useCallback(async () => {
     setRegularLoading(true);
@@ -97,6 +100,31 @@ export default function GalleryPage() {
   useEffect(() => {
     load().catch(console.error);
   }, [load]);
+
+  useEffect(() => {
+    if (!canViewAllProducts) return;
+    api
+      .getUsers(token)
+      .then((result) => {
+        const dealerRows = (result.data || [])
+          .filter((account) =>
+            ["USER", "ELDER", "MEMBER"].includes(
+              String(account.role || "").toUpperCase()
+            )
+          )
+          .sort((left, right) =>
+            String(left.name || left.email).localeCompare(
+              String(right.name || right.email),
+              undefined,
+              { numeric: true, sensitivity: "base" }
+            )
+          );
+        setDealers(dealerRows);
+      })
+      .catch((error) =>
+        console.error("Dealer catalogue accounts load failed:", error)
+      );
+  }, [canViewAllProducts, token]);
 
   useEffect(() => {
     try {
@@ -282,6 +310,36 @@ export default function GalleryPage() {
     }
   };
 
+  const downloadWhatsAppCatalogue = async () => {
+    if (!selectedDealerId || whatsAppLoading) return;
+
+    setWhatsAppLoading(true);
+    setDownloadError("");
+    try {
+      const file = await api.downloadWhatsAppCatalogue(
+        {
+          dealer_user_id: selectedDealerId,
+          mode: mode === "OFFERS" ? "offers" : "products",
+          series,
+          search,
+        },
+        token
+      );
+      const url = window.URL.createObjectURL(file.blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = file.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      setDownloadError(error.message || "Could not prepare the WhatsApp catalogue");
+    } finally {
+      setWhatsAppLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-4 pb-8 sm:space-y-6">
       <PageHeader
@@ -357,6 +415,39 @@ export default function GalleryPage() {
           <p className="-mt-2 mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
             {downloadError}
           </p>
+        ) : null}
+
+        {canViewAllProducts ? (
+          <div className="mb-5 grid gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+            <label className="block min-w-0">
+              <span className="mb-2 block text-sm font-bold text-slate-800">
+                Personalized WhatsApp catalogue
+              </span>
+              <select
+                value={selectedDealerId}
+                onChange={(event) => setSelectedDealerId(event.target.value)}
+                className="h-11 w-full rounded-xl border border-emerald-200 bg-white px-3 text-sm font-medium text-slate-800 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+              >
+                <option value="">Select dealer</option>
+                {dealers.map((dealer) => (
+                  <option key={dealer.id} value={dealer.id}>
+                    {dealer.name || dealer.email} · {dealer.email}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-2 block text-xs font-semibold text-emerald-800">
+                Includes only products this dealer can order with at least 1 complete CTN remaining. A 0 CTN balance is excluded.
+              </span>
+            </label>
+            <Button
+              type="button"
+              disabled={!selectedDealerId || whatsAppLoading}
+              onClick={downloadWhatsAppCatalogue}
+            >
+              <Download size={16} />
+              {whatsAppLoading ? "Preparing images..." : "Download WhatsApp ZIP"}
+            </Button>
+          </div>
         ) : null}
 
         <div className="mb-6 grid gap-3 rounded-2xl bg-slate-50 p-3 sm:p-4 md:grid-cols-3">

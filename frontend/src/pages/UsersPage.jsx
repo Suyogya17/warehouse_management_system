@@ -9,7 +9,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
-import { formatPrice } from "../utils/format";
+import { formatNumber, formatPrice } from "../utils/format";
 import { PRODUCT_VISIBILITY_PAGE_KEY } from "../utils/pagePermissions";
 
 const initialForm = {
@@ -21,6 +21,9 @@ const initialForm = {
   currency_code: "NPR",
   exchange_rate: 1,
   regular_price_markup: 0,
+  account_relationship: "INDEPENDENT",
+  parent_dealer_id: "",
+  parent_allocation_percentage: 25,
   product_access_template: "NONE",
   copy_product_access_from_user_id: "",
 };
@@ -72,9 +75,19 @@ export default function UsersPage() {
     event.preventDefault();
 
     try {
+      const isShareholderShop =
+        !editingId && form.role === "USER" && form.account_relationship === "SHAREHOLDER";
       const payload = {
         ...form,
         password: form.password || undefined,
+        parent_dealer_id: isShareholderShop ? Number(form.parent_dealer_id) : null,
+        parent_allocation_percentage: isShareholderShop
+          ? Number(form.parent_allocation_percentage)
+          : null,
+        product_access_template: isShareholderShop ? "DEALER" : form.product_access_template,
+        copy_product_access_from_user_id: isShareholderShop
+          ? Number(form.parent_dealer_id)
+          : form.copy_product_access_from_user_id,
       };
 
       if (editingId) {
@@ -85,12 +98,15 @@ export default function UsersPage() {
           message: "The users list was refreshed.",
         });
       } else {
-        const result = await api.registerUser(form, token);
+        const result = await api.registerUser(payload, token);
         const copiedCount = Number(result.copied_product_count || 0);
+        const splitSummary = result.allocation_split_summary;
         showToast({
           tone: "success",
-          title: "User created",
-          message: copiedCount
+          title: splitSummary ? "Shareholder shop created" : "User created",
+          message: splitSummary
+            ? `${splitSummary.transferred_product_count} product allocations were transferred from the parent dealer${splitSummary.skipped_product_count ? `; ${splitSummary.skipped_product_count} were safely skipped because their balance could not be moved.` : "."}`
+            : copiedCount
             ? `${copiedCount} visible products were copied into the new catalogue.`
             : "The account was created with a custom empty catalogue.",
         });
@@ -121,6 +137,9 @@ export default function UsersPage() {
       currency_code: row.currency_code || "NPR",
       exchange_rate: Number(row.exchange_rate || defaultExchangeRates[row.currency_code] || 1),
       regular_price_markup: Number(row.regular_price_markup || 0),
+      account_relationship: row.parent_dealer_id ? "SHAREHOLDER" : "INDEPENDENT",
+      parent_dealer_id: row.parent_dealer_id || "",
+      parent_allocation_percentage: 25,
       product_access_template: "NONE",
       copy_product_access_from_user_id: "",
     });
@@ -260,6 +279,12 @@ export default function UsersPage() {
                   )
                     ? current.copy_product_access_from_user_id
                     : "",
+                  account_relationship:
+                    event.target.value === "USER"
+                      ? current.account_relationship
+                      : "INDEPENDENT",
+                  parent_dealer_id:
+                    event.target.value === "USER" ? current.parent_dealer_id : "",
                 }))
               }
             >
@@ -353,7 +378,89 @@ export default function UsersPage() {
             </Field>
           ) : null}
 
-          {!editingId && ["USER", "ELDER", "MEMBER"].includes(form.role) ? (
+          {!editingId && form.role === "USER" ? (
+            <Field
+              label="Account relationship"
+              hint="A shareholder shop receives its own protected quantity from one parent dealer."
+            >
+              <SelectInput
+                value={form.account_relationship}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    account_relationship: event.target.value,
+                    parent_dealer_id:
+                      event.target.value === "SHAREHOLDER" ? current.parent_dealer_id : "",
+                  }))
+                }
+              >
+                <option value="INDEPENDENT">Independent dealer</option>
+                <option value="SHAREHOLDER">Shareholder shop under a dealer</option>
+              </SelectInput>
+            </Field>
+          ) : null}
+
+          {!editingId &&
+          form.role === "USER" &&
+          form.account_relationship === "SHAREHOLDER" ? (
+            <>
+              <Field
+                label="Parent dealer"
+                hint="The shop receives its catalogue and allocation from this dealer."
+              >
+                <SelectInput
+                  value={form.parent_dealer_id}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      parent_dealer_id: event.target.value,
+                    }))
+                  }
+                  required
+                >
+                  <option value="">Select parent dealer</option>
+                  {users
+                    .filter(
+                      (account) => account.role === "USER" && !account.parent_dealer_id
+                    )
+                    .sort((left, right) =>
+                      String(left.name || left.email).localeCompare(
+                        String(right.name || right.email)
+                      )
+                    )
+                    .map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name} · {account.email}
+                      </option>
+                    ))}
+                </SelectInput>
+              </Field>
+
+              <Field
+                label="Share of parent's allocation (%)"
+                hint="The parent's allocation is treated as 100%. Example: 25% of a parent's 40% gives the shop 10% globally, while the parent keeps 30%. Only unused full cartons move."
+              >
+                <TextInput
+                  type="number"
+                  min="0.01"
+                  max="99.99"
+                  step="0.01"
+                  value={form.parent_allocation_percentage}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      parent_allocation_percentage: event.target.value,
+                    }))
+                  }
+                  required
+                />
+              </Field>
+            </>
+          ) : null}
+
+          {!editingId &&
+          ["USER", "ELDER", "MEMBER"].includes(form.role) &&
+          form.account_relationship !== "SHAREHOLDER" ? (
             <Field
               label="Initial product catalogue"
               hint="Copy visible products now. You can make individual show/hide changes later."
@@ -380,6 +487,7 @@ export default function UsersPage() {
 
           {!editingId &&
           ["USER", "ELDER", "MEMBER"].includes(form.role) &&
+          form.account_relationship !== "SHAREHOLDER" &&
           form.product_access_template === "DEALER" ? (
             <Field
               label="Copy catalogue from dealer"
@@ -431,6 +539,28 @@ export default function UsersPage() {
             { key: "name", label: "Name" },
             { key: "email", label: "Email" },
             { key: "role", label: "Role" },
+            {
+              key: "parent_dealer_name",
+              label: "Parent dealer",
+              render: (row) =>
+                row.parent_dealer_id ? (
+                  <div>
+                    <div className="font-semibold text-slate-900">
+                      {row.parent_dealer_name || "Linked dealer"}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {row.parent_dealer_email || `User #${row.parent_dealer_id}`}
+                    </div>
+                    {Number(row.parent_allocation_share_percent || 0) > 0 ? (
+                      <div className="mt-1 text-xs font-semibold text-indigo-700">
+                        {formatNumber(row.parent_allocation_share_percent)}% of parent allocation
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  "Independent"
+                ),
+            },
             {
               key: "country_code",
               label: "Region",

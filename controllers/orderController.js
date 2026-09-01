@@ -1577,6 +1577,7 @@ const getAll = async (req, res, next) => {
       supportsPerWarehouseDeliveryNotes,
       supportsOrderBsDate,
       supportsOrderFiscalYear,
+      supportsParentDealer,
     ] =
       await Promise.all([
         hasColumn('orders', 'cancellation_code'),
@@ -1589,6 +1590,7 @@ const getAll = async (req, res, next) => {
         hasTable('order_warehouse_delivery_notes'),
         hasColumn('orders', 'bs_date'),
         hasColumn('orders', 'bs_fiscal_year'),
+        hasColumn('users', 'parent_dealer_id'),
       ]);
     const params = [];
     const conditions = [];
@@ -1778,11 +1780,25 @@ const getAll = async (req, res, next) => {
               o.delivered_by,
               o.delivered_at,
               u_created.name AS created_by_name,
+              ${
+                supportsParentDealer
+                  ? `u_created.parent_dealer_id,
+                     u_parent.name AS parent_dealer_name,
+                     u_parent.email AS parent_dealer_email,`
+                  : `NULL AS parent_dealer_id,
+                     NULL AS parent_dealer_name,
+                     NULL AS parent_dealer_email,`
+              }
               u_confirmed.name AS confirmed_by_name,
               u_packed.name AS packed_by_name,
               u_delivered.name AS delivered_by_name
        FROM orders o
        LEFT JOIN users u_created ON u_created.id = o.created_by
+       ${
+         supportsParentDealer
+           ? 'LEFT JOIN users u_parent ON u_parent.id = u_created.parent_dealer_id'
+           : ''
+       }
        LEFT JOIN users u_confirmed ON u_confirmed.id = o.confirmed_by
        LEFT JOIN users u_packed ON u_packed.id = o.packed_by
        LEFT JOIN users u_delivered ON u_delivered.id = o.delivered_by

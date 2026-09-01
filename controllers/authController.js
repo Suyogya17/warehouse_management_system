@@ -7,6 +7,9 @@ const { hasColumn } = require('../utils/schemaSupport');
 const { PRODUCT_VISIBILITY_PAGE_KEY, getUserPagePermissions } = require('../utils/userPagePermissions');
 const { resolveOfferAudienceUserId } = require('../utils/offerAccountLinks');
 const { clearCache } = require('../middleware/cacheMiddleware');
+const {
+  splitParentDealerAllocations,
+} = require('../services/subDealerAllocationService');
 
 const DEFAULT_EXCHANGE_RATES = {
   NPR: 1,
@@ -42,14 +45,26 @@ const normalizeProductAccessTemplate = (value) => {
 };
 
 const getUserSelectColumns = async () => {
-  const [supportsExchangeRate, supportsRegularPriceMarkup] = await Promise.all([
+  const [supportsExchangeRate, supportsRegularPriceMarkup, supportsParentDealer, supportsParentShare] = await Promise.all([
     hasColumn('users', 'exchange_rate'),
     hasColumn('users', 'regular_price_markup'),
+    hasColumn('users', 'parent_dealer_id'),
+    hasColumn('users', 'parent_allocation_share_percent'),
   ]);
   return `id, name, email, role, country_code, currency_code${
     supportsExchangeRate ? ', exchange_rate' : ''
   }${
     supportsRegularPriceMarkup ? ', regular_price_markup' : ''
+  }${
+    supportsParentShare ? ', parent_allocation_share_percent' : ''
+  }${
+    supportsParentDealer
+      ? `, parent_dealer_id,
+           (SELECT parent_user.name FROM users parent_user
+            WHERE parent_user.id = users.parent_dealer_id) AS parent_dealer_name,
+           (SELECT parent_user.email FROM users parent_user
+            WHERE parent_user.id = users.parent_dealer_id) AS parent_dealer_email`
+      : ''
   }, created_at`;
 };
 
@@ -95,6 +110,12 @@ const buildUserPayload = async (user) => {
     ),
     pricing_account_id: Number(pricingAccount.id || user.id),
     pricing_account_email: pricingAccount.email || user.email,
+    parent_dealer_id: user.parent_dealer_id || null,
+    parent_dealer_name: user.parent_dealer_name || null,
+    parent_dealer_email: user.parent_dealer_email || null,
+    parent_allocation_share_percent: Number(
+      user.parent_allocation_share_percent || 0
+    ) || null,
     page_permissions: mapPagePermissions(pagePermissions),
   };
 };
@@ -113,13 +134,56 @@ const register = async (req, res, next) => {
       regular_price_markup,
       product_access_template,
       copy_product_access_from_user_id,
+      parent_dealer_id,
+      parent_allocation_percentage,
     } = req.body;
     const locale = normalizeLocale(country_code, currency_code);
     const normalizedRole = String(role || 'USER').trim().toUpperCase();
-    const accessTemplate = normalizeProductAccessTemplate(
+    let accessTemplate = normalizeProductAccessTemplate(
       product_access_template
     );
+    const parentDealerId = Number(parent_dealer_id || 0);
+    const parentSharePercentage = Number(parent_allocation_percentage || 0);
+    const creatingShareholderShop = parentDealerId > 0;
     let copiedProductIds = [];
+
+    if (creatingShareholderShop) {
+      if (normalizedRole !== 'USER') {
+        return res.status(400).json({
+          success: false,
+          message: 'A shareholder shop must use the USER role.',
+        });
+      }
+      if (!(await hasColumn('users', 'parent_dealer_id'))) {
+        return res.status(409).json({
+          success: false,
+          message:
+            'Shareholder shops require sql/add-parent-dealer-users.sql.',
+        });
+      }
+      if (
+        !Number.isFinite(parentSharePercentage) ||
+        parentSharePercentage <= 0 ||
+        parentSharePercentage >= 100
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Enter the shareholder percentage of the parent dealer allocation.',
+        });
+      }
+      const parentUsers = await query(
+        `SELECT id FROM users WHERE id = ? AND role = 'USER' LIMIT 1`,
+        [parentDealerId]
+      );
+      if (!parentUsers.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'The selected parent dealer account was not found.',
+        });
+      }
+      accessTemplate = 'DEALER';
+    }
 
     if (
       ['USER', 'ELDER', 'MEMBER'].includes(normalizedRole) &&
@@ -143,7 +207,9 @@ const register = async (req, res, next) => {
       ['USER', 'ELDER', 'MEMBER'].includes(normalizedRole) &&
       accessTemplate === 'DEALER'
     ) {
-      const sourceUserId = Number(copy_product_access_from_user_id);
+      const sourceUserId = creatingShareholderShop
+        ? parentDealerId
+        : Number(copy_product_access_from_user_id);
       if (!Number.isInteger(sourceUserId) || sourceUserId <= 0) {
         return res.status(400).json({
           success: false,
@@ -208,6 +274,14 @@ const register = async (req, res, next) => {
           : 0
       );
     }
+    if (creatingShareholderShop) {
+      userColumns.push('parent_dealer_id');
+      userValues.push(parentDealerId);
+      if (await hasColumn('users', 'parent_allocation_share_percent')) {
+        userColumns.push('parent_allocation_share_percent');
+        userValues.push(parentSharePercentage);
+      }
+    }
 
     const userInsert = await appendFiscalInsertFields(
       'users',
@@ -237,6 +311,24 @@ const register = async (req, res, next) => {
 
     if (copiedProductIds.length) clearCache();
 
+    let allocationSplitSummary = null;
+    if (creatingShareholderShop) {
+      try {
+        allocationSplitSummary = await splitParentDealerAllocations({
+          parentUserId: parentDealerId,
+          childUserId: userId,
+          parentSharePercentage,
+          adminUserId: req.user.id,
+        });
+      } catch (splitError) {
+        await query('DELETE FROM user_product_permissions WHERE user_id = ?', [
+          userId,
+        ]).catch(() => {});
+        await query('DELETE FROM users WHERE id = ?', [userId]).catch(() => {});
+        throw splitError;
+      }
+    }
+
     const user = await buildUserPayload({
       id: userId,
       name,
@@ -251,6 +343,10 @@ const register = async (req, res, next) => {
         locale.currencyCode === 'NPR'
           ? normalizeRegularPriceMarkup(regular_price_markup)
           : 0,
+      parent_dealer_id: creatingShareholderShop ? parentDealerId : null,
+      parent_allocation_share_percent: creatingShareholderShop
+        ? parentSharePercentage
+        : null,
     });
 
     await auditLog({
@@ -265,6 +361,7 @@ const register = async (req, res, next) => {
       success: true,
       data: user,
       copied_product_count: [...new Set(copiedProductIds)].length,
+      allocation_split_summary: allocationSplitSummary,
     });
   } catch (err) {
     next(err);
