@@ -92,6 +92,8 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     supportsAllocationScope,
     supportsOfferOrderSnapshots,
     supportsOfferPriceAdjustments,
+    supportsAllocationPublicationStatus,
+    supportsAllocationPublishAt,
   ] = await Promise.all([
     hasColumn('finished_goods', 'display_order'),
     hasColumn('finished_goods', 'display_quantity'),
@@ -105,7 +107,11 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     hasColumn('user_product_permissions', 'allocation_scope'),
     hasColumn('order_items', 'ordered_from_offer'),
     hasTable('user_series_offer_price_adjustments'),
+    hasColumn('finished_goods', 'allocation_publication_status'),
+    hasColumn('finished_goods', 'allocation_publish_at'),
   ]);
+  const supportsAllocationPublication =
+    supportsAllocationPublicationStatus && supportsAllocationPublishAt;
   const supportsOfferUserQuantity = supportsOfferUsers
     ? await hasColumn('finished_good_offer_users', 'display_quantity')
     : false;
@@ -125,10 +131,15 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
   const usesCustomerOfferAudience =
     req.user.role === 'USER' || isLinkedElderAccount;
 
+  const userProductRequest = ['USER', 'MEMBER', 'ELDER'].includes(req.user.role);
   let sql = `SELECT * FROM finished_goods WHERE ${
     supportsIsDeleted ? 'is_deleted = 0' : '1 = 1'
   }${
-    includeHidden || !supportsIsVisible ? '' : ' AND is_visible = 1'
+    includeHidden ||
+    !supportsIsVisible ||
+    (userProductRequest && supportsAllocationPublication)
+      ? ''
+      : ' AND is_visible = 1'
   }`;
   const params = [];
 
@@ -191,6 +202,42 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     }
     params.push(availabilityUserId, availabilityUserId);
     if (supportsPercentageAllocations) params.push(availabilityUserId);
+    if (supportsAllocationPublication && supportsPercentageAllocations) {
+      sql += ` AND (
+        (
+          NOT EXISTS (
+            SELECT 1 FROM user_product_permissions any_allocation
+            WHERE any_allocation.finished_good_id = finished_goods.id
+              AND any_allocation.allocation_quantity IS NOT NULL
+          )
+          AND finished_goods.is_visible = 1
+        )
+        OR (
+          EXISTS (
+            SELECT 1 FROM user_product_permissions any_allocation
+            WHERE any_allocation.finished_good_id = finished_goods.id
+              AND any_allocation.allocation_quantity IS NOT NULL
+          )
+          AND (
+            COALESCE(finished_goods.allocation_publication_status, 'ACTIVE') = 'ACTIVE'
+            OR (
+              finished_goods.allocation_publication_status = 'SCHEDULED'
+              AND finished_goods.allocation_publish_at <= NOW()
+            )
+          )
+          AND (
+            finished_goods.is_visible = 1
+            OR EXISTS (
+              SELECT 1 FROM user_product_permissions own_published_allocation
+              WHERE own_published_allocation.finished_good_id = finished_goods.id
+                AND own_published_allocation.user_id = ?
+                AND own_published_allocation.allocation_quantity IS NOT NULL
+            )
+          )
+        )
+      )`;
+      params.push(availabilityUserId);
+    }
   }
 
   const requestedProductId = Math.max(0, Number(options.productId) || 0);

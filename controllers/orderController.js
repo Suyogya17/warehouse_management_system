@@ -2848,6 +2848,18 @@ const create = async (req, res, next) => {
       'users',
       'regular_price_markup'
     );
+    const supportsPercentageProductMarkup = await hasColumn(
+      'users',
+      'percentage_product_markup'
+    );
+    const supportsNonCommissionProductMarkup = await hasColumn(
+      'users',
+      'non_commission_product_markup'
+    );
+    const supportsCommissionFlag = await hasColumn(
+      'finished_goods',
+      'is_commission'
+    );
     const supportsExchangeRate = await hasColumn(
       'users',
       'exchange_rate'
@@ -2874,6 +2886,10 @@ const create = async (req, res, next) => {
     const supportsAllocationScope = supportsPercentageAllocations
       ? await hasColumn('user_product_permissions', 'allocation_scope')
       : false;
+    const supportsAllocationPublication =
+      supportsPercentageAllocations &&
+      (await hasColumn('finished_goods', 'allocation_publication_status')) &&
+      (await hasColumn('finished_goods', 'allocation_publish_at'));
     const supportsControlledRelease =
       supportsAllocationScope &&
       (await hasTable('product_controlled_release_pools')) &&
@@ -2884,10 +2900,16 @@ const create = async (req, res, next) => {
       String(req.user.role || '').toUpperCase()
     );
     let productSql = `
-      SELECT id, name, article_code, sole_code, color, quantity, price, inner_boxes_per_outer_box${supportsIndiaPrice ? ', india_price' : ''}${supportsDisplayQuantity ? ', display_quantity' : ''}${supportsOfferAudience ? ', offer_enabled, offer_label, offer_ends_at, offer_all_users' : ''}${supportsOfferCampaigns ? ', offer_campaign_id' : ''}
+      SELECT id, name, article_code, sole_code, color, quantity, price, inner_boxes_per_outer_box${supportsCommissionFlag ? ', is_commission' : ', 0 AS is_commission'}${supportsIndiaPrice ? ', india_price' : ''}${supportsDisplayQuantity ? ', display_quantity' : ''}${supportsOfferAudience ? ', offer_enabled, offer_label, offer_ends_at, offer_all_users' : ''}${supportsOfferCampaigns ? ', offer_campaign_id' : ''}
       FROM finished_goods
       WHERE is_deleted = 0
-        ${canOrderHiddenProducts ? '' : 'AND is_visible = 1'}
+        ${
+          canOrderHiddenProducts ||
+          (supportsAllocationPublication &&
+            ['USER', 'MEMBER', 'ELDER'].includes(req.user.role))
+            ? ''
+            : 'AND is_visible = 1'
+        }
         AND id IN ${clause}
     `;
     const productParams = [...params];
@@ -2929,6 +2951,38 @@ const create = async (req, res, next) => {
             AND own_allocation.user_id = ?
             AND own_allocation.allocation_quantity IS NOT NULL
         )
+      )` : ''}${supportsAllocationPublication ? ` AND (
+        (
+          NOT EXISTS (
+            SELECT 1 FROM user_product_permissions any_allocation
+            WHERE any_allocation.finished_good_id = finished_goods.id
+              AND any_allocation.allocation_quantity IS NOT NULL
+          )
+          AND finished_goods.is_visible = 1
+        )
+        OR (
+          EXISTS (
+            SELECT 1 FROM user_product_permissions any_allocation
+            WHERE any_allocation.finished_good_id = finished_goods.id
+              AND any_allocation.allocation_quantity IS NOT NULL
+          )
+          AND (
+            COALESCE(finished_goods.allocation_publication_status, 'ACTIVE') = 'ACTIVE'
+            OR (
+              finished_goods.allocation_publication_status = 'SCHEDULED'
+              AND finished_goods.allocation_publish_at <= NOW()
+            )
+          )
+          AND (
+            finished_goods.is_visible = 1
+            OR EXISTS (
+              SELECT 1 FROM user_product_permissions own_published_allocation
+              WHERE own_published_allocation.finished_good_id = finished_goods.id
+                AND own_published_allocation.user_id = ?
+                AND own_published_allocation.allocation_quantity IS NOT NULL
+            )
+          )
+        )
       )` : ''}`;
       if (supportsOfferAudience && supportsOfferUsers) {
         productSql += ` AND ((${normalPermissionSql}) OR (
@@ -2943,6 +2997,7 @@ const create = async (req, res, next) => {
           req.user.id,
           req.user.id,
           ...(supportsPercentageAllocations ? [req.user.id] : []),
+          ...(supportsAllocationPublication ? [req.user.id] : []),
           req.user.id
         );
       } else {
@@ -2950,7 +3005,8 @@ const create = async (req, res, next) => {
         productParams.push(
           req.user.id,
           req.user.id,
-          ...(supportsPercentageAllocations ? [req.user.id] : [])
+          ...(supportsPercentageAllocations ? [req.user.id] : []),
+          ...(supportsAllocationPublication ? [req.user.id] : [])
         );
       }
     } else if (['MEMBER', 'ELDER'].includes(req.user.role)) {
@@ -2962,8 +3018,39 @@ const create = async (req, res, next) => {
         SELECT 1 FROM user_product_permissions upp
         WHERE upp.finished_good_id = finished_goods.id
           AND upp.user_id = ? AND upp.can_view = 0
-      )`;
-      productParams.push(req.user.id, req.user.id);
+      )${supportsAllocationPublication ? ` AND (
+        (
+          NOT EXISTS (
+            SELECT 1 FROM user_product_permissions any_allocation
+            WHERE any_allocation.finished_good_id = finished_goods.id
+              AND any_allocation.allocation_quantity IS NOT NULL
+          )
+          AND finished_goods.is_visible = 1
+        )
+        OR (
+          (
+            COALESCE(finished_goods.allocation_publication_status, 'ACTIVE') = 'ACTIVE'
+            OR (
+              finished_goods.allocation_publication_status = 'SCHEDULED'
+              AND finished_goods.allocation_publish_at <= NOW()
+            )
+          )
+          AND (
+            finished_goods.is_visible = 1
+            OR EXISTS (
+              SELECT 1 FROM user_product_permissions own_published_allocation
+              WHERE own_published_allocation.finished_good_id = finished_goods.id
+                AND own_published_allocation.user_id = ?
+                AND own_published_allocation.allocation_quantity IS NOT NULL
+            )
+          )
+        )
+      )` : ''}`;
+      productParams.push(
+        req.user.id,
+        req.user.id,
+        ...(supportsAllocationPublication ? [req.user.id] : [])
+      );
     }
 
     productSql += ' FOR UPDATE';
@@ -2981,6 +3068,8 @@ const create = async (req, res, next) => {
     let orderCurrency = 'NPR';
     let orderExchangeRate = 1;
     let regularPriceMarkup = 0;
+    let percentageProductMarkup = 0;
+    let nonCommissionProductMarkup = 0;
 
     if (req.user.role === 'USER') {
       const pricingResult = await client.query(
@@ -2988,6 +3077,10 @@ const create = async (req, res, next) => {
           supportsExchangeRate ? ', exchange_rate' : ''
         }${
           supportsRegularPriceMarkup ? ', regular_price_markup' : ''
+        }${
+          supportsPercentageProductMarkup ? ', percentage_product_markup' : ''
+        }${
+          supportsNonCommissionProductMarkup ? ', non_commission_product_markup' : ''
         }
          FROM users
          WHERE id = ?`,
@@ -2999,6 +3092,28 @@ const create = async (req, res, next) => {
       regularPriceMarkup =
         supportsRegularPriceMarkup && orderCurrency === 'NPR'
           ? Math.max(0, Number(pricing.regular_price_markup || 0))
+          : 0;
+      percentageProductMarkup =
+        orderCurrency === 'NPR'
+          ? Math.max(
+              0,
+              Number(
+                supportsPercentageProductMarkup
+                  ? pricing.percentage_product_markup
+                  : regularPriceMarkup
+              ) || 0
+            )
+          : 0;
+      nonCommissionProductMarkup =
+        orderCurrency === 'NPR'
+          ? Math.max(
+              0,
+              Number(
+                supportsNonCommissionProductMarkup
+                  ? pricing.non_commission_product_markup
+                  : regularPriceMarkup
+              ) || 0
+            )
           : 0;
     }
 
@@ -3405,7 +3520,10 @@ const create = async (req, res, next) => {
       const unitPriceSnapshot = offerSnapshot
         ? offerSnapshot.offer_price_snapshot
         : Number(baseUnitPrice) > 0
-          ? baseUnitPrice + regularPriceMarkup
+          ? baseUnitPrice +
+            (Number(product?.is_commission || 0) === 1
+              ? percentageProductMarkup
+              : nonCommissionProductMarkup)
           : null;
       const orderItemColumns = ['order_id', 'finished_good_id', 'qty_ordered'];
       const orderItemValues = [orderId, item.finished_good_id, item.qty_ordered];
@@ -3534,8 +3652,13 @@ const correctItems = async (req, res, next) => {
     }
 
     const { clause, params } = buildInClause(productIds);
+    const supportsCommissionFlag = await hasColumn(
+      'finished_goods',
+      'is_commission'
+    );
     const productsResult = await client.query(
-      `SELECT id, name, article_code, color, quantity, price, inner_boxes_per_outer_box
+      `SELECT id, name, article_code, color, quantity, price, inner_boxes_per_outer_box,
+              ${supportsCommissionFlag ? 'is_commission' : '0 AS is_commission'}
        FROM finished_goods WHERE id IN ${clause} FOR UPDATE`,
       params
     );
@@ -3574,6 +3697,14 @@ const correctItems = async (req, res, next) => {
       'users',
       'regular_price_markup'
     );
+    const supportsPercentageProductMarkup = await hasColumn(
+      'users',
+      'percentage_product_markup'
+    );
+    const supportsNonCommissionProductMarkup = await hasColumn(
+      'users',
+      'non_commission_product_markup'
+    );
     const supportsUnitPriceSnapshot = await hasColumn(
       'order_items',
       'unit_price_snapshot'
@@ -3588,10 +3719,14 @@ const correctItems = async (req, res, next) => {
       (await hasColumn('order_items', 'controlled_personal_quantity')) &&
       (await hasColumn('order_items', 'controlled_public_quantity'));
     let correctionRegularMarkup = 0;
+    let correctionPercentageProductMarkup = 0;
+    let correctionNonCommissionProductMarkup = 0;
     let correctionCurrency = 'NPR';
     if (supportsRegularPriceMarkup) {
       const pricingResult = await client.query(
         `SELECT currency_code, regular_price_markup
+                ${supportsPercentageProductMarkup ? ', percentage_product_markup' : ''}
+                ${supportsNonCommissionProductMarkup ? ', non_commission_product_markup' : ''}
          FROM users
          WHERE id = ?`,
         [order.created_by]
@@ -3602,6 +3737,22 @@ const correctItems = async (req, res, next) => {
         correctionRegularMarkup = Math.max(
           0,
           Number(pricing.regular_price_markup || 0)
+        );
+        correctionPercentageProductMarkup = Math.max(
+          0,
+          Number(
+            supportsPercentageProductMarkup
+              ? pricing.percentage_product_markup
+              : correctionRegularMarkup
+          ) || 0
+        );
+        correctionNonCommissionProductMarkup = Math.max(
+          0,
+          Number(
+            supportsNonCommissionProductMarkup
+              ? pricing.non_commission_product_markup
+              : correctionRegularMarkup
+          ) || 0
         );
       }
     }
@@ -3810,7 +3961,10 @@ const correctItems = async (req, res, next) => {
           Number(oldItem?.ordered_from_offer || 0) === 1
             ? oldItem?.offer_price_snapshot
             : basePrice > 0
-              ? basePrice + correctionRegularMarkup
+              ? basePrice +
+                (Number(item.product?.is_commission || 0) === 1
+                  ? correctionPercentageProductMarkup
+                  : correctionNonCommissionProductMarkup)
               : null;
         columns.push('unit_price_snapshot');
         values.push(oldItem?.unit_price_snapshot ?? fallbackPrice ?? null);

@@ -51,6 +51,7 @@ export default function GalleryPage() {
   const [cart, setCart] = useState([]);
   const [cartLoaded, setCartLoaded] = useState(false);
   const [downloadOption, setDownloadOption] = useState("FILTERED");
+  const [downloadProductType, setDownloadProductType] = useState("all");
   const [downloadLoading, setDownloadLoading] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const [dealers, setDealers] = useState([]);
@@ -227,7 +228,9 @@ export default function GalleryPage() {
     0
   );
   const canDownload =
-    downloadOption === "ALL_STANDARD" || downloadOption === "ALL_HIGH"
+    downloadOption === "ALL_STANDARD" ||
+    downloadOption === "ALL_HIGH" ||
+    downloadOption === "JPG_COLLAGE"
       ? sourceProducts.length > 0
       : downloadOption === "SERIES"
       ? Boolean(series)
@@ -270,16 +273,21 @@ export default function GalleryPage() {
     ]);
   };
 
-  const downloadGallery = async () => {
-    if (!canDownload || downloadLoading) return;
-
+  const downloadGallery = async (forcedOption = "") => {
     const optionMap = {
       FILTERED: { scope: "filtered", quality: "standard" },
       SERIES: { scope: "series", quality: "standard" },
       ALL_STANDARD: { scope: "all", quality: "standard" },
       ALL_HIGH: { scope: "all", quality: "high" },
+      JPG_COLLAGE: { scope: "all", quality: "standard", format: "jpg" },
     };
-    const selectedOption = optionMap[downloadOption] || optionMap.FILTERED;
+    const optionKey = typeof forcedOption === "string" && forcedOption
+      ? forcedOption
+      : downloadOption;
+    const selectedOption = optionMap[optionKey] || optionMap.FILTERED;
+    const optionCanDownload =
+      optionKey === "JPG_COLLAGE" ? sourceProducts.length > 0 : canDownload;
+    if (!optionCanDownload || downloadLoading) return;
 
     setDownloadLoading(true);
     setDownloadError("");
@@ -291,10 +299,26 @@ export default function GalleryPage() {
           series,
           search,
           stock,
-          include_hidden: canViewAllProducts ? 1 : undefined,
+          product_type: downloadProductType,
+          include_hidden:
+            optionKey === "JPG_COLLAGE"
+              ? 0
+              : canViewAllProducts
+              ? 1
+              : undefined,
         },
         token
       );
+      if (
+        optionKey === "JPG_COLLAGE" &&
+        (file.contentType.toLowerCase().includes("pdf") ||
+          (!file.contentType.toLowerCase().includes("zip") &&
+            file.filename.toLowerCase().endsWith(".pdf")))
+      ) {
+        throw new Error(
+          "The server returned a PDF instead of JPG collages. Upload the updated catalogue controller and service, then restart the backend."
+        );
+      }
       const url = window.URL.createObjectURL(file.blob);
       const link = document.createElement("a");
       link.href = url;
@@ -322,6 +346,7 @@ export default function GalleryPage() {
           mode: mode === "OFFERS" ? "offers" : "products",
           series,
           search,
+          product_type: downloadProductType,
         },
         token
       );
@@ -378,6 +403,19 @@ export default function GalleryPage() {
 
           <div className="grid w-full gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
             <select
+              value={downloadProductType}
+              onChange={(event) => {
+                setDownloadProductType(event.target.value);
+                setDownloadError("");
+              }}
+              className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 sm:min-w-48 sm:w-auto"
+              aria-label="Products included in gallery download"
+            >
+              <option value="all">Percentage + Non commission</option>
+              <option value="percentage">Percentage products only</option>
+              <option value="non_commission">Non commission products only</option>
+            </select>
+            <select
               value={downloadOption}
               onChange={(event) => {
                 setDownloadOption(event.target.value);
@@ -392,16 +430,30 @@ export default function GalleryPage() {
               </option>
               <option value="ALL_STANDARD">All products - Standard PDF</option>
               <option value="ALL_HIGH">All products - High-quality ZIP</option>
+              {canViewAllProducts ? (
+                <option value="JPG_COLLAGE">Dealer-open photos - JPG collage ZIP</option>
+              ) : null}
             </select>
             <Button
               type="button"
               variant="secondary"
               disabled={!canDownload || loading || downloadLoading}
-              onClick={downloadGallery}
+              onClick={() => downloadGallery()}
             >
               <Download size={16} />
               {downloadLoading ? "Preparing..." : "Download"}
             </Button>
+            {canViewAllProducts ? (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!sourceProducts.length || loading || downloadLoading}
+                onClick={() => downloadGallery("JPG_COLLAGE")}
+              >
+                <Images size={16} />
+                {downloadLoading ? "Preparing..." : "Download dealer-open JPGs"}
+              </Button>
+            ) : null}
             {canOrder ? (
               <Button type="button" onClick={() => navigate("/order-customer")}>
                 <ShoppingCart size={16} />
@@ -436,7 +488,7 @@ export default function GalleryPage() {
                 ))}
               </select>
               <span className="mt-2 block text-xs font-semibold text-emerald-800">
-                Includes only products this dealer can order with at least 1 complete CTN remaining. A 0 CTN balance is excluded.
+                Includes only the selected product type that this dealer can order with at least 1 complete CTN remaining. A 0 CTN balance is excluded.
               </span>
             </label>
             <Button

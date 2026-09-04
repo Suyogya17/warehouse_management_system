@@ -45,9 +45,11 @@ const normalizeProductAccessTemplate = (value) => {
 };
 
 const getUserSelectColumns = async () => {
-  const [supportsExchangeRate, supportsRegularPriceMarkup, supportsParentDealer, supportsParentShare] = await Promise.all([
+  const [supportsExchangeRate, supportsRegularPriceMarkup, supportsPercentageProductMarkup, supportsNonCommissionProductMarkup, supportsParentDealer, supportsParentShare] = await Promise.all([
     hasColumn('users', 'exchange_rate'),
     hasColumn('users', 'regular_price_markup'),
+    hasColumn('users', 'percentage_product_markup'),
+    hasColumn('users', 'non_commission_product_markup'),
     hasColumn('users', 'parent_dealer_id'),
     hasColumn('users', 'parent_allocation_share_percent'),
   ]);
@@ -55,6 +57,10 @@ const getUserSelectColumns = async () => {
     supportsExchangeRate ? ', exchange_rate' : ''
   }${
     supportsRegularPriceMarkup ? ', regular_price_markup' : ''
+  }${
+    supportsPercentageProductMarkup ? ', percentage_product_markup' : ''
+  }${
+    supportsNonCommissionProductMarkup ? ', non_commission_product_markup' : ''
   }${
     supportsParentShare ? ', parent_allocation_share_percent' : ''
   }${
@@ -108,6 +114,12 @@ const buildUserPayload = async (user) => {
     regular_price_markup: normalizeRegularPriceMarkup(
       pricingAccount.regular_price_markup
     ),
+    percentage_product_markup: normalizeRegularPriceMarkup(
+      pricingAccount.percentage_product_markup ?? pricingAccount.regular_price_markup
+    ),
+    non_commission_product_markup: normalizeRegularPriceMarkup(
+      pricingAccount.non_commission_product_markup ?? pricingAccount.regular_price_markup
+    ),
     pricing_account_id: Number(pricingAccount.id || user.id),
     pricing_account_email: pricingAccount.email || user.email,
     parent_dealer_id: user.parent_dealer_id || null,
@@ -132,6 +144,8 @@ const register = async (req, res, next) => {
       currency_code,
       exchange_rate,
       regular_price_markup,
+      percentage_product_markup,
+      non_commission_product_markup,
       product_access_template,
       copy_product_access_from_user_id,
       parent_dealer_id,
@@ -241,9 +255,11 @@ const register = async (req, res, next) => {
         Number(item.finished_good_id)
       );
     }
-    const [supportsExchangeRate, supportsRegularPriceMarkup] = await Promise.all([
+    const [supportsExchangeRate, supportsRegularPriceMarkup, supportsPercentageProductMarkup, supportsNonCommissionProductMarkup] = await Promise.all([
       hasColumn('users', 'exchange_rate'),
       hasColumn('users', 'regular_price_markup'),
+      hasColumn('users', 'percentage_product_markup'),
+      hasColumn('users', 'non_commission_product_markup'),
     ]);
 
     const exists = await query(
@@ -271,6 +287,22 @@ const register = async (req, res, next) => {
       userValues.push(
         supportsRegularMarkupForRole(normalizedRole) && locale.currencyCode === 'NPR'
           ? normalizeRegularPriceMarkup(regular_price_markup)
+          : 0
+      );
+    }
+    if (supportsPercentageProductMarkup) {
+      userColumns.push('percentage_product_markup');
+      userValues.push(
+        supportsRegularMarkupForRole(normalizedRole) && locale.currencyCode === 'NPR'
+          ? normalizeRegularPriceMarkup(percentage_product_markup)
+          : 0
+      );
+    }
+    if (supportsNonCommissionProductMarkup) {
+      userColumns.push('non_commission_product_markup');
+      userValues.push(
+        supportsRegularMarkupForRole(normalizedRole) && locale.currencyCode === 'NPR'
+          ? normalizeRegularPriceMarkup(non_commission_product_markup)
           : 0
       );
     }
@@ -342,6 +374,18 @@ const register = async (req, res, next) => {
         supportsRegularMarkupForRole(normalizedRole) &&
         locale.currencyCode === 'NPR'
           ? normalizeRegularPriceMarkup(regular_price_markup)
+          : 0,
+      percentage_product_markup:
+        supportsPercentageProductMarkup &&
+        supportsRegularMarkupForRole(normalizedRole) &&
+        locale.currencyCode === 'NPR'
+          ? normalizeRegularPriceMarkup(percentage_product_markup)
+          : 0,
+      non_commission_product_markup:
+        supportsNonCommissionProductMarkup &&
+        supportsRegularMarkupForRole(normalizedRole) &&
+        locale.currencyCode === 'NPR'
+          ? normalizeRegularPriceMarkup(non_commission_product_markup)
           : 0,
       parent_dealer_id: creatingShareholderShop ? parentDealerId : null,
       parent_allocation_share_percent: creatingShareholderShop
@@ -476,11 +520,15 @@ const updateUser = async (req, res, next) => {
       currency_code,
       exchange_rate,
       regular_price_markup,
+      percentage_product_markup,
+      non_commission_product_markup,
     } = req.body;
     const userId = req.params.id;
-    const [supportsExchangeRate, supportsRegularPriceMarkup] = await Promise.all([
+    const [supportsExchangeRate, supportsRegularPriceMarkup, supportsPercentageProductMarkup, supportsNonCommissionProductMarkup] = await Promise.all([
       hasColumn('users', 'exchange_rate'),
       hasColumn('users', 'regular_price_markup'),
+      hasColumn('users', 'percentage_product_markup'),
+      hasColumn('users', 'non_commission_product_markup'),
     ]);
     const locale = normalizeLocale(country_code, currency_code);
     const updateFields = [
@@ -529,6 +577,32 @@ const updateUser = async (req, res, next) => {
           : supportsRegularMarkupForRole(role) &&
               (!currency_code || locale.currencyCode === 'NPR')
             ? normalizeRegularPriceMarkup(regular_price_markup)
+            : 0
+      );
+    }
+    if (supportsPercentageProductMarkup) {
+      updateFields.push(
+        'percentage_product_markup = COALESCE(?, percentage_product_markup)'
+      );
+      updateParams.push(
+        percentage_product_markup === undefined
+          ? null
+          : supportsRegularMarkupForRole(role) &&
+              (!currency_code || locale.currencyCode === 'NPR')
+            ? normalizeRegularPriceMarkup(percentage_product_markup)
+            : 0
+      );
+    }
+    if (supportsNonCommissionProductMarkup) {
+      updateFields.push(
+        'non_commission_product_markup = COALESCE(?, non_commission_product_markup)'
+      );
+      updateParams.push(
+        non_commission_product_markup === undefined
+          ? null
+          : supportsRegularMarkupForRole(role) &&
+              (!currency_code || locale.currencyCode === 'NPR')
+            ? normalizeRegularPriceMarkup(non_commission_product_markup)
             : 0
       );
     }

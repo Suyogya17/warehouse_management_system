@@ -17,7 +17,7 @@ import {
   getIndiaPriceFromNepalPrice,
 } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
-import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
+import { getCommissionLabel, getProductNClassification, isCommissionProduct } from "../utils/commission";
 import Select from "react-select";
 import * as XLSX from "xlsx";
 
@@ -31,6 +31,7 @@ const initialForm = {
   price: 0,
   india_price: "",
   is_commission: false,
+  n_classification: "",
   min_quantity: 5,
   inner_box_per_pair: 1,
   inner_boxes_per_outer_box: "",
@@ -50,6 +51,7 @@ const buildFormData = (values, editingId) => {
     getIndiaPriceFromNepalPrice(values.price) ?? ""
   );
   formData.append("is_commission", values.is_commission ? 1 : 0);
+  formData.append("n_classification", values.n_classification || "");
   formData.append("min_quantity", Number(values.min_quantity));
   formData.append("size", values.size || "");
   formData.append("inner_box_per_pair", Number(values.inner_box_per_pair || 1));
@@ -283,6 +285,7 @@ export default function FinishedGoodsPage() {
       price: Number(item.price || 0),
       india_price: item.india_price ?? "",
       is_commission: Number(item.is_commission || 0) === 1,
+      n_classification: getProductNClassification(item),
       min_quantity: item.min_quantity || 5,
       inner_box_per_pair: item.inner_box_per_pair || 1,
       inner_boxes_per_outer_box: item.inner_boxes_per_outer_box ?? "",
@@ -418,6 +421,7 @@ export default function FinishedGoodsPage() {
             }
           : {}),
         Commission: getCommissionLabel(item),
+        "N Classification": getProductNClassification(item),
         "Inner Boxes Per Pair": Number(item.inner_box_per_pair || 0),
         "Inner Boxes Per Outer Box": item.inner_boxes_per_outer_box || "",
         Visibility: item.is_visible ? "Displayed" : "Hidden",
@@ -708,6 +712,43 @@ export default function FinishedGoodsPage() {
               </button>
             </Field>
 
+            <Field label="N classification" hint="Shown as an N1 or N2 badge on the product card.">
+              <div className="flex min-h-11 flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-1.5">
+                {[
+                  { value: "", label: "Not classified" },
+                  { value: "N1", label: "N1" },
+                  { value: "N2", label: "N2" },
+                ].map((option) => {
+                  const checked = form.n_classification === option.value;
+                  return (
+                    <label
+                      key={option.value || "unclassified"}
+                      className={`flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                        checked
+                          ? "bg-indigo-600 text-white shadow-sm"
+                          : "text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="finished-good-n-classification"
+                        value={option.value}
+                        checked={checked}
+                        onChange={() =>
+                          setForm((current) => ({
+                            ...current,
+                            n_classification: option.value,
+                          }))
+                        }
+                        className="h-4 w-4 accent-indigo-600"
+                      />
+                      {option.label}
+                    </label>
+                  );
+                })}
+              </div>
+            </Field>
+
             <Field label="Inner boxes per pair">
               <TextInput
                 type="number"
@@ -884,6 +925,20 @@ export default function FinishedGoodsPage() {
                       {getCommissionLabel(row)}
                     </StatusBadge>
                   ),
+                }]
+              : []),
+            ...(isAdmin
+              ? [{
+                  key: "n_classification",
+                  label: "N class",
+                  render: (row) => {
+                    const classification = getProductNClassification(row);
+                    return classification ? (
+                      <StatusBadge tone={classification === "N1" ? "info" : "success"}>
+                        {classification}
+                      </StatusBadge>
+                    ) : "-";
+                  },
                 }]
               : []),
             ...(isAdmin

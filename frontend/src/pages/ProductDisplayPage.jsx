@@ -4,6 +4,7 @@ import Icon from "../components/Icon";
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import StatusBadge from "../components/StatusBadge";
+import ProductTypeBadges from "../components/ProductTypeBadges";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
@@ -14,7 +15,6 @@ import {
   getIndiaPriceFromNepalPrice,
 } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
-import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
 import { getRoundedCartons } from "../utils/displayStock";
 
 const DEFAULT_DISPLAY_QUANTITY = 450;
@@ -1142,11 +1142,7 @@ export default function ProductDisplayPage() {
                               <StatusBadge tone={item.is_visible ? "success" : "neutral"}>
                                 {item.is_visible ? "Shown to users" : "Hidden from users"}
                               </StatusBadge>
-                              <div className="mt-2">
-                                <StatusBadge tone={isCommissionProduct(item) ? "warning" : "neutral"}>
-                                  {getCommissionLabel(item)}
-                                </StatusBadge>
-                              </div>
+                              <ProductTypeBadges product={item} className="mt-2" />
                             </div>
 
                             <div className="grid grid-cols-2 gap-2 text-sm">

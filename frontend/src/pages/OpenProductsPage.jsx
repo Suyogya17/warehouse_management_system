@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import ProductImageGallery from "../components/ProductImageGallery";
+import ProductTypeBadges from "../components/ProductTypeBadges";
 import VisibilitySummary from "../components/VisibilitySummary";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -20,7 +21,7 @@ import {
   getIndiaPriceFromNepalPrice,
 } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
-import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
+import { isCommissionProduct } from "../utils/commission";
 import { buildVisibilitySummary } from "../utils/visibilitySummary";
 
 const CUSTOMER_ROLES = new Set(["USER", "MEMBER", "ELDER"]);
@@ -172,9 +173,7 @@ function OpenProductCard({
               {selectedVariant.size ? ` · ${selectedVariant.size}` : ""}
             </p>
           </div>
-          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600">
-            {getCommissionLabel(selectedVariant)}
-          </span>
+          <ProductTypeBadges product={selectedVariant} className="shrink-0 justify-end" />
         </div>
 
         <div className="flex gap-1 overflow-x-auto pb-1">

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Button from "../components/Button";
 import DataTable from "../components/DataTable";
 import MultiSeriesFilter from "../components/MultiSeriesFilter";
+import NClassificationFilter from "../components/NClassificationFilter";
 import { Field, TextAreaInput, TextInput } from "../components/Field";
 import SectionCard from "../components/SectionCard";
 import { useAuth } from "../context/AuthContext";
@@ -9,6 +10,7 @@ import { useToast } from "../context/ToastContext";
 import { api } from "../services/api";
 import { getRoundedCartons } from "../utils/displayStock";
 import { formatDate, formatNumber } from "../utils/format";
+import { getProductNClassification, matchesProductNClassification } from "../utils/commission";
 import Select from "react-select";
 
 const emptyWarehouseForm = { name: "" };
@@ -80,6 +82,7 @@ export default function WareHousePage() {
 
   const [search, setSearch] = useState("");
   const [seriesFilters, setSeriesFilters] = useState([]);
+  const [nClassificationFilter, setNClassificationFilter] = useState("all");
   const [movementSearch, setMovementSearch] = useState("");
   const [transferReportFilters, setTransferReportFilters] = useState(emptyTransferReportFilters);
   const [warehouses, setWarehouses] = useState([]);
@@ -356,10 +359,13 @@ export default function WareHousePage() {
   );
 
   const filteredStockRows = useMemo(
-    () => seriesFilters.length
-      ? stockRows.filter((row) => seriesFilters.includes(String(row.sole_code || "").trim()))
-      : stockRows,
-    [seriesFilters, stockRows]
+    () => stockRows.filter((row) => {
+      const matchesSeries =
+        !seriesFilters.length ||
+        seriesFilters.includes(String(row.sole_code || "").trim());
+      return matchesSeries && matchesProductNClassification(row, nClassificationFilter);
+    }),
+    [nClassificationFilter, seriesFilters, stockRows]
   );
 
   const exportWarehouseStock = () => {
@@ -376,11 +382,14 @@ export default function WareHousePage() {
       ["Product", "product_name"],
       ["Article", "article_code"],
       ["Series", "sole_code"],
+      ["N Classification", "n_classification"],
       ["Color", "color"],
       ["Size", "size"],
       ["Warehouse", "warehouse_name"],
       ["Qty", "quantity"],
       ["CTN", "ctn"],
+      ["Reserved Qty", "reserved_quantity"],
+      ["Reserved CTN", "reserved_ctn"],
       ["Unit", "unit"],
       ["Total Stock", "total_product_quantity"],
       ["Updated By", "updated_by_name"],
@@ -399,6 +408,8 @@ export default function WareHousePage() {
                 ? formatDate(row[key])
                 : key === "ctn"
                 ? getCartons(row.quantity, row)
+                : key === "reserved_ctn"
+                ? getCartons(row.reserved_quantity, row)
                 : row[key];
             return `<td>${escapeExcelCell(value)}</td>`;
           })
@@ -523,6 +534,10 @@ export default function WareHousePage() {
 
   const totalWarehouseStock = filteredStockRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
   const totalWarehouseCartons = filteredStockRows.reduce((sum, row) => sum + getCartons(row.quantity, row), 0);
+  const totalReservedWarehouseCartons = filteredStockRows.reduce(
+    (sum, row) => sum + getCartons(row.reserved_quantity, row),
+    0
+  );
   const transferReportTotalQty = transferReportRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
 
   return (
@@ -534,7 +549,7 @@ export default function WareHousePage() {
       >
         <div className="space-y-4 p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-[minmax(0,1fr)_240px]">
+            <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-[minmax(0,1fr)_220px_180px]">
               <Field label="Search product or warehouse">
                 <TextInput
                   value={search}
@@ -546,6 +561,10 @@ export default function WareHousePage() {
                 options={warehouseSeriesOptions}
                 values={seriesFilters}
                 onChange={setSeriesFilters}
+              />
+              <NClassificationFilter
+                value={nClassificationFilter}
+                onChange={setNClassificationFilter}
               />
             </div>
             <div className="flex flex-wrap gap-3">
@@ -563,6 +582,7 @@ export default function WareHousePage() {
               { key: "product_name", label: "Product" },
               { key: "article_code", label: "Article" },
               { key: "sole_code", label: "Series", render: (row) => row.sole_code || "-" },
+              { key: "n_classification", label: "N class", render: (row) => getProductNClassification(row) || "-" },
               { key: "color", label: "Color" },
               { key: "size", label: "Size" },
               { key: "warehouse_name", label: "Warehouse" },
@@ -575,6 +595,11 @@ export default function WareHousePage() {
                 key: "ctn",
                 label: "CTN",
                 render: (row) => formatNumber(getCartons(row.quantity, row)),
+              },
+              {
+                key: "reserved_ctn",
+                label: "Reserved CTN",
+                render: (row) => formatNumber(getCartons(row.reserved_quantity, row)),
               },
               {
                 key: "total_product_quantity",
@@ -596,6 +621,10 @@ export default function WareHousePage() {
             <span className="ml-6 text-sm text-slate-500">
               CTN:{" "}
               <span className="font-medium text-green-700">{formatNumber(totalWarehouseCartons)}</span>
+            </span>
+            <span className="ml-6 text-sm text-slate-500">
+              Reserved CTN:{" "}
+              <span className="font-medium text-amber-700">{formatNumber(totalReservedWarehouseCartons)}</span>
             </span>
           </div>
         </div>

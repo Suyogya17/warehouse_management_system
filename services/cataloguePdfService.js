@@ -502,47 +502,49 @@
 
   const createWhatsAppSheetBuffer = async (variants) => {
     const width = 1080;
-    const rowHeight = 720;
-    const rows = Math.max(1, variants.length);
+    const variantCount = Math.max(1, variants.length);
+    const columns =
+      variantCount <= 3 ? 1 : variantCount <= 12 ? 2 : variantCount <= 30 ? 3 : 4;
+    const cellWidth = Math.floor(width / columns);
+    const cellHeight = columns === 1 ? 720 : Math.round((cellWidth * 2) / 3);
+    const rows = Math.ceil(variantCount / columns);
+    const height = cellHeight * rows;
+    const dividerSize = columns === 1 ? 4 : 3;
     const composites = [];
 
     for (let index = 0; index < variants.length; index += 1) {
       const product = variants[index];
       const imagePath = await resolveUploadPath(product.image_url);
-      const top = index * rowHeight;
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      const left = column * cellWidth + dividerSize;
+      const top = row * cellHeight + dividerSize;
       if (imagePath) {
         try {
           const image = await sharp(imagePath)
             .rotate()
             .resize({
-              width,
-              height: rowHeight,
+              width: cellWidth - dividerSize * 2,
+              height: cellHeight - dividerSize * 2,
               fit: 'contain',
               background: '#f5f1e8',
               withoutEnlargement: false,
             })
             .jpeg({ quality: 88, mozjpeg: true })
             .toBuffer();
-          composites.push({ input: image, left: 0, top });
+          composites.push({ input: image, left, top });
         } catch {
-          // Keep the neutral row background when a source image cannot be decoded.
+          // Keep the neutral cell background when a source image cannot be decoded.
         }
-      }
-
-      if (index < variants.length - 1) {
-        const divider = Buffer.from(
-          `<svg width="${width}" height="8"><rect width="${width}" height="8" fill="#111827"/></svg>`
-        );
-        composites.push({ input: divider, left: 0, top: top + rowHeight - 4 });
       }
     }
 
     return sharp({
       create: {
         width,
-        height: rowHeight * rows,
+        height,
         channels: 3,
-        background: '#f5f1e8',
+        background: '#111827',
       },
     })
       .composite(composites)
@@ -597,16 +599,29 @@
     await fsp.mkdir(CACHE_ROOT, { recursive: true });
     cleanupOldCache();
 
-    const groups = filterCatalogueProducts(products, options);
+    let groups = filterCatalogueProducts(products, options);
+    const isJpgCollageZip = options.format === 'jpg';
+    if (isJpgCollageZip) {
+      groups = groups
+        .map((group) => ({
+          ...group,
+          variants: group.variants.filter((product) => Boolean(product.image_url)),
+        }))
+        .filter((group) => group.variants.length > 0);
+    }
     if (!groups.length) {
-      const error = new Error('No catalogue products match the selected download');
+      const error = new Error(
+        isJpgCollageZip
+          ? 'No photographed products match the selected JPG collage download'
+          : 'No catalogue products match the selected download'
+      );
       error.statusCode = 404;
       throw error;
     }
 
     const isHighQualityZip =
       options.scope === 'all' && options.quality === 'high';
-    const extension = isHighQualityZip ? 'zip' : 'pdf';
+    const extension = isHighQualityZip || isJpgCollageZip ? 'zip' : 'pdf';
     const signature = groups.flatMap((group) =>
       group.variants.map((product) => ({
         id: Number(product.id),
@@ -628,6 +643,7 @@
           search: options.search || '',
           stock: options.stock || '',
           quality: options.quality,
+          format: options.format || 'pdf',
           signature,
         })
       )
@@ -646,7 +662,9 @@
         const tempPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
         const generation = (async () => {
           try {
-            if (isHighQualityZip) {
+            if (isJpgCollageZip) {
+              await createWhatsAppZip(tempPath, groups);
+            } else if (isHighQualityZip) {
               await createZip(tempPath, groups, options);
             } else {
               await generatePdf(tempPath, groups, options);
@@ -676,9 +694,16 @@
       path: cachePath,
       cacheHit,
       filename: `${modeName}-${scopeName}-${
-        isHighQualityZip ? 'high-quality' : 'standard'
+        isJpgCollageZip
+          ? 'jpg-collages'
+          : isHighQualityZip
+          ? 'high-quality'
+          : 'standard'
       }.${extension}`,
-      contentType: isHighQualityZip ? 'application/zip' : 'application/pdf',
+      contentType:
+        isHighQualityZip || isJpgCollageZip
+          ? 'application/zip'
+          : 'application/pdf',
     };
   };
 
@@ -808,9 +833,65 @@
     await completed;
   };
 
+  const streamCatalogueJpgDownload = async (products, options, res) => {
+    const groups = filterCatalogueProducts(products, options)
+      .map((group) => ({
+        ...group,
+        variants: group.variants.filter((product) => Boolean(product.image_url)),
+      }))
+      .filter((group) => group.variants.length > 0);
+
+    if (!groups.length) {
+      const error = new Error(
+        'No photographed products match the selected JPG collage download'
+      );
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const archive = await createZipArchive();
+    const completed = new Promise((resolve, reject) => {
+      res.on('finish', resolve);
+      res.on('error', reject);
+      archive.on('error', reject);
+    });
+    const productTypeName =
+      options.productType === 'percentage'
+        ? 'percentage'
+        : options.productType === 'non_commission'
+        ? 'non-commission'
+        : 'percentage-and-non-commission';
+    const modeName = options.mode === 'offers' ? 'offer-gallery' : 'product-gallery';
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${modeName}-${productTypeName}-jpg-collages.zip"`
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    archive.pipe(res);
+
+    for (const group of groups) {
+      if (res.destroyed) {
+        archive.abort();
+        return;
+      }
+      const filename = `${safeName(group.series, 'other')}-${safeName(
+        group.article,
+        'article'
+      )}.jpg`;
+      const image = await createWhatsAppSheetBuffer(group.variants);
+      archive.append(image, { name: filename });
+    }
+
+    await archive.finalize();
+    await completed;
+  };
+
   module.exports = {
     filterCatalogueProducts,
     getCatalogueDownload,
     getWhatsAppCatalogueDownload,
+    streamCatalogueJpgDownload,
     streamWhatsAppCatalogueDownload,
   };

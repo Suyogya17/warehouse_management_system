@@ -56,8 +56,49 @@ const getProductName = (product = {}) =>
 const normalizeCommissionFlag = (value) =>
   value === true || value === 1 || value === '1' || value === 'true' ? 1 : 0;
 
+const normalizeNClassification = (value) => {
+  const normalized = String(value || '').trim().toUpperCase();
+  return normalized === 'N1' || normalized === 'N2' ? normalized : null;
+};
+
 const normalizeBoolean = (value) =>
   value === true || value === 1 || value === '1' || value === 'true';
+
+const getAllocationPublicationVisibilitySql = (
+  supported,
+  finishedGoodAlias = 'fg',
+  permissionAlias = 'upp'
+) =>
+  supported
+    ? `AND (
+        (
+          NOT EXISTS (
+            SELECT 1 FROM user_product_permissions any_allocation
+            WHERE any_allocation.finished_good_id = ${finishedGoodAlias}.id
+              AND any_allocation.allocation_quantity IS NOT NULL
+          )
+          AND ${finishedGoodAlias}.is_visible = 1
+        )
+        OR (
+          EXISTS (
+            SELECT 1 FROM user_product_permissions any_allocation
+            WHERE any_allocation.finished_good_id = ${finishedGoodAlias}.id
+              AND any_allocation.allocation_quantity IS NOT NULL
+          )
+          AND (
+            COALESCE(${finishedGoodAlias}.allocation_publication_status, 'ACTIVE') = 'ACTIVE'
+            OR (
+              ${finishedGoodAlias}.allocation_publication_status = 'SCHEDULED'
+              AND ${finishedGoodAlias}.allocation_publish_at <= NOW()
+            )
+          )
+          AND (
+            ${finishedGoodAlias}.is_visible = 1
+            OR ${permissionAlias}.allocation_quantity IS NOT NULL
+          )
+        )
+      )`
+    : `AND ${finishedGoodAlias}.is_visible = 1`;
 
 const getFinishedGoodsOrderClause = async (alias = '') => {
   const prefix = alias ? `${alias}.` : '';
@@ -89,6 +130,10 @@ const getAll = async (req, res, next) => {
     const supportsAllocationScope = supportsPercentageAllocations
       ? await hasColumn('user_product_permissions', 'allocation_scope')
       : false;
+    const supportsAllocationPublication =
+      supportsPercentageAllocations &&
+      (await hasColumn('finished_goods', 'allocation_publication_status')) &&
+      (await hasColumn('finished_goods', 'allocation_publish_at'));
 
     let sql = '';
     let params = [];
@@ -132,7 +177,11 @@ const getAll = async (req, res, next) => {
           ON upp.finished_good_id = fg.id
         WHERE upp.user_id = ?
           AND upp.can_view = 1
-          AND fg.is_visible = 1
+          ${getAllocationPublicationVisibilitySql(
+            supportsAllocationPublication,
+            'fg',
+            'upp'
+          )}
           AND fg.is_deleted = 0
           AND NOT EXISTS (
             SELECT 1 FROM user_product_permissions deny
@@ -325,6 +374,10 @@ const getFilters = async (req, res, next) => {
     const userId = Number(req.user?.id);
     let sql = '';
     let params = [];
+    const supportsAllocationPublication =
+      (await hasColumn('user_product_permissions', 'allocation_quantity')) &&
+      (await hasColumn('finished_goods', 'allocation_publication_status')) &&
+      (await hasColumn('finished_goods', 'allocation_publish_at'));
 
     if (['ADMIN', 'CO_ADMIN', 'MEMBER'].includes(userRole)) {
       sql = `SELECT DISTINCT sole_code
@@ -340,7 +393,11 @@ const getFilters = async (req, res, next) => {
               AND upp.user_id = ?
               AND upp.can_view = 1
              WHERE fg.is_deleted = 0
-               AND fg.is_visible = 1
+               ${getAllocationPublicationVisibilitySql(
+                 supportsAllocationPublication,
+                 'fg',
+                 'upp'
+               )}
                AND NULLIF(TRIM(fg.sole_code), '') IS NOT NULL
              ORDER BY fg.sole_code`;
       params = [userId];
@@ -372,6 +429,10 @@ const getOne = async (req, res, next) => {
     const supportsAllocationScope = supportsPercentageAllocations
       ? await hasColumn('user_product_permissions', 'allocation_scope')
       : false;
+    const supportsAllocationPublication =
+      supportsPercentageAllocations &&
+      (await hasColumn('finished_goods', 'allocation_publication_status')) &&
+      (await hasColumn('finished_goods', 'allocation_publish_at'));
 
     let sql;
     let params = [req.params.id];
@@ -388,7 +449,11 @@ const getOne = async (req, res, next) => {
         WHERE fg.id = ?
           AND upp.user_id = ?
           AND upp.can_view = 1
-          AND fg.is_visible = 1
+          ${getAllocationPublicationVisibilitySql(
+            supportsAllocationPublication,
+            'fg',
+            'upp'
+          )}
           AND NOT EXISTS (
             SELECT 1 FROM user_product_permissions deny
             WHERE deny.finished_good_id = fg.id
@@ -448,6 +513,7 @@ const create = async (req, res, next) => {
       price,
       india_price,
       is_commission,
+      n_classification,
       min_quantity,
       inner_box_per_pair,
       inner_boxes_per_outer_box
@@ -458,6 +524,7 @@ const create = async (req, res, next) => {
     const supportsDisplayOrder = await hasColumn('finished_goods', 'display_order');
     const supportsDisplayQuantity = await hasColumn('finished_goods', 'display_quantity');
     const supportsCommissionFlag = await hasColumn('finished_goods', 'is_commission');
+    const supportsNClassification = await hasColumn('finished_goods', 'n_classification');
     const supportsIndiaPrice = await hasColumn('finished_goods', 'india_price');
     const parsedIndiaPrice =
       india_price === undefined || india_price === null || india_price === ''
@@ -531,6 +598,18 @@ const create = async (req, res, next) => {
       baseValues.push(normalizeCommissionFlag(is_commission));
     }
 
+    if (n_classification && !supportsNClassification) {
+      return res.status(400).json({
+        success: false,
+        message: 'N1/N2 classification requires sql/add-finished-good-n-classification.sql.',
+      });
+    }
+
+    if (supportsNClassification) {
+      baseColumns.push('n_classification');
+      baseValues.push(normalizeNClassification(n_classification));
+    }
+
     if (supportsIndiaPrice) {
       baseColumns.push('india_price');
       baseValues.push(parsedIndiaPrice);
@@ -586,11 +665,13 @@ const update = async (req, res, next) => {
       price,
       india_price,
       is_commission,
+      n_classification,
       min_quantity,
       inner_box_per_pair,           
       inner_boxes_per_outer_box
     } = req.body;
     const supportsCommissionFlag = await hasColumn('finished_goods', 'is_commission');
+    const supportsNClassification = await hasColumn('finished_goods', 'n_classification');
     const supportsIndiaPrice = await hasColumn('finished_goods', 'india_price');
     if (
       india_price !== undefined &&
@@ -655,6 +736,18 @@ const update = async (req, res, next) => {
     if (supportsCommissionFlag) {
       sql += `, is_commission = ?`;
       params.push(normalizeCommissionFlag(is_commission));
+    }
+
+    if (n_classification && !supportsNClassification) {
+      return res.status(400).json({
+        success: false,
+        message: 'N1/N2 classification requires sql/add-finished-good-n-classification.sql.',
+      });
+    }
+
+    if (supportsNClassification) {
+      sql += `, n_classification = ?`;
+      params.push(normalizeNClassification(n_classification));
     }
 
     if (supportsIndiaPrice) {

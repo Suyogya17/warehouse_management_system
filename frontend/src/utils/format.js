@@ -71,11 +71,16 @@ export const getProductPriceForUser = (product = {}, user = {}) => {
   if (amount <= 0) return amount;
 
   const usesRegularMarkup = ["USER", "ELDER"].includes(role);
+  const categoryMarkup = Number(product?.is_commission || 0) === 1
+    ? Number(
+        user?.percentage_product_markup ?? user?.regular_price_markup ?? 0
+      )
+    : Number(
+        user?.non_commission_product_markup ?? user?.regular_price_markup ?? 0
+      );
   const regularMarkup =
-    usesRegularMarkup &&
-    currency === "NPR" &&
-    !activeOffer
-      ? Number(user?.regular_price_markup || 0)
+    usesRegularMarkup && currency === "NPR" && !activeOffer
+      ? categoryMarkup
       : 0;
 
   return (

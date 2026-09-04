@@ -13,6 +13,8 @@ import { useNavigate } from "react-router-dom";
 
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import NClassificationFilter from "../../components/NClassificationFilter";
+import ProductTypeBadges from "../../components/ProductTypeBadges";
 import SectionCard from "../../components/SectionCard";
 
 import { useAuth } from "../../context/AuthContext";
@@ -22,7 +24,7 @@ import { useProductInterestTracking } from "../../hooks/useProductInterestTracki
 import { api, APP_BASE_URL } from "../../services/api";
 import { getCustomerVisibleStock, getRoundedCartons } from "../../utils/displayStock";
 import { formatNumber, formatProductPriceForUser } from "../../utils/format";
-import { getCommissionLabel, isCommissionProduct, matchesCommissionFilter } from "../../utils/commission";
+import { matchesCommissionFilter, matchesProductNClassification } from "../../utils/commission";
 import {
   sortProductGroupsByDisplayOrder,
   sortProductsByDisplayOrder,
@@ -262,17 +264,7 @@ function ProductCard({ variants = [], onAddToCart, onProductInterest, cartProduc
           </div>
         )}
 
-        <div>
-          <span
-            className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${
-              isCommissionProduct(selectedVariant)
-                ? "bg-amber-100 text-amber-700"
-                : "bg-slate-100 text-slate-600"
-            }`}
-          >
-            {getCommissionLabel(selectedVariant)}
-          </span>
-        </div>
+        <ProductTypeBadges product={selectedVariant} />
 
         {/* COLOR VARIANTS */}
         {variants.length > 0 && (
@@ -473,6 +465,7 @@ export default function FinishedGoodsUserPage() {
     stock: "all",
     series: "",
     commission: "all",
+    nClassification: "all",
   });
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -566,6 +559,10 @@ export default function FinishedGoodsUserPage() {
           const matchSeries =
             !filters.series || getSeriesName(item.sole_code) === filters.series;
           const matchCommission = matchesCommissionFilter(item, filters.commission);
+          const matchNClassification = matchesProductNClassification(
+            item,
+            filters.nClassification
+          );
 
           // FIX: Filter by available_qty (reserved-aware), not raw quantity
           const availableQty = getAvailableQty(item);
@@ -576,7 +573,7 @@ export default function FinishedGoodsUserPage() {
               ? availableQty > 0 && availableQty < 10
               : availableQty >= 10;
 
-          return matchSearch && matchSize && matchStock && matchSeries && matchCommission;
+          return matchSearch && matchSize && matchStock && matchSeries && matchCommission && matchNClassification;
           
         })
       )
@@ -785,9 +782,14 @@ export default function FinishedGoodsUserPage() {
               <option value="non_commission">Non commission only</option>
             </select>
 
+            <NClassificationFilter
+              value={filters.nClassification}
+              onChange={(value) => setFilters((current) => ({ ...current, nClassification: value }))}
+            />
+
             <button
               onClick={() =>
-                setFilters({ search: "", size: "", stock: "all", series: "", commission: "all" })
+                setFilters({ search: "", size: "", stock: "all", series: "", commission: "all", nClassification: "all" })
               }
               className="px-4 py-2 mx-10 bg-black text-white rounded-xl text-sm font-medium hover:bg-slate-200 transition-all"
             >

@@ -555,6 +555,39 @@ const savePercentageAllocations = async (req, res, next) => {
       'user_product_permissions',
       'allocation_scope'
     );
+    const supportsAllocationPublication =
+      (await hasColumn('finished_goods', 'allocation_publication_status')) &&
+      (await hasColumn('finished_goods', 'allocation_publish_at'));
+    if (!supportsAllocationPublication) {
+      return res.status(409).json({
+        success: false,
+        message:
+          'Allocation draft/show controls require sql/add-allocation-publication-status.sql.',
+      });
+    }
+    const publicationStatus = String(
+      req.body.publication_status || 'ACTIVE'
+    ).trim().toUpperCase();
+    if (!['DRAFT', 'ACTIVE', 'SCHEDULED'].includes(publicationStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Publication status must be Draft, Active, or Scheduled.',
+      });
+    }
+    const requestedPublishAt = req.body.publish_at
+      ? new Date(req.body.publish_at)
+      : null;
+    if (
+      publicationStatus === 'SCHEDULED' &&
+      (!requestedPublishAt ||
+        Number.isNaN(requestedPublishAt.getTime()) ||
+        requestedPublishAt.getTime() <= Date.now())
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Choose a future date and time for the scheduled allocation.',
+      });
+    }
     const allocationScope = String(
       req.body.allocation_scope || 'EXCLUSIVE'
     ).trim().toUpperCase();
@@ -887,14 +920,18 @@ const savePercentageAllocations = async (req, res, next) => {
       }
     }
 
-    if (normalizedTargets.length) {
-      await query(
-        'UPDATE finished_goods SET is_visible = 1 WHERE id = ?',
-        [finishedGoodId]
-      );
-    } else {
-      await syncFinishedGoodVisibility(finishedGoodId);
-    }
+    await query(
+      `UPDATE finished_goods
+       SET allocation_publication_status = ?, allocation_publish_at = ?
+       WHERE id = ?`,
+      [
+        normalizedTargets.length ? publicationStatus : 'DRAFT',
+        normalizedTargets.length && publicationStatus === 'SCHEDULED'
+          ? requestedPublishAt
+          : null,
+        finishedGoodId,
+      ]
+    );
     clearCache();
 
     const product = productRows.rows[0];
@@ -941,6 +978,13 @@ const savePercentageAllocations = async (req, res, next) => {
         unassigned_cartons: Math.max(0, totalCartons - assignedCartons),
         percentage_total: percentageTotal,
         allocation_scope: allocationScope,
+        publication_status: normalizedTargets.length
+          ? publicationStatus
+          : 'DRAFT',
+        publish_at:
+          normalizedTargets.length && publicationStatus === 'SCHEDULED'
+            ? requestedPublishAt.toISOString()
+            : null,
         public_quantity: publicQuantity,
         public_used_quantity: controlledPublicUsed,
         targets: normalizedTargets.map((target) => {

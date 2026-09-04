@@ -5,13 +5,13 @@ import Button from "../components/Button";
 import MultiSeriesFilter from "../components/MultiSeriesFilter";
 import PageHeader from "../components/PageHeader";
 import ProductImageGallery from "../components/ProductImageGallery";
+import ProductTypeBadges from "../components/ProductTypeBadges";
 import SectionCard from "../components/SectionCard";
 import StatCard from "../components/StatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
-import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
 import { getRoundedCartons } from "../utils/displayStock";
 import { formatNumber, formatProductPriceForUser } from "../utils/format";
 
@@ -122,15 +122,7 @@ function OutOfStockCard({ variants = [], user }) {
           </p>
         )}
 
-        <span
-          className={`w-fit rounded-full px-2 py-1 text-[10px] font-semibold ${
-            isCommissionProduct(selectedVariant)
-              ? "bg-amber-100 text-amber-700"
-              : "bg-slate-100 text-slate-600"
-          }`}
-        >
-          {getCommissionLabel(selectedVariant)}
-        </span>
+        <ProductTypeBadges product={selectedVariant} />
 
         <div className="flex gap-1 overflow-x-auto">
           {variants.map((variant) => (

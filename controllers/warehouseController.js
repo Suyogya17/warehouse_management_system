@@ -1,7 +1,7 @@
 const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { getPagination, shouldIncludeTotal } = require('../utils/pagination');
-const { hasColumn } = require('../utils/schemaSupport');
+const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 
 const ACTIVE_ROLES = ['ADMIN', 'CO_ADMIN'];
@@ -169,6 +169,32 @@ const remove = async (req, res, next) => {
 const getStock = async (req, res, next) => {
   try {
     const search = String(req.query.search || '').trim();
+    const [supportsNClassification, supportsWarehouseAllocations, supportsAllocationStatus] =
+      await Promise.all([
+        hasColumn('finished_goods', 'n_classification'),
+        hasTable('order_item_warehouse_allocations'),
+        hasColumn('order_item_warehouse_allocations', 'allocation_status'),
+      ]);
+    const reservedQuantityExpression =
+      supportsWarehouseAllocations && supportsAllocationStatus
+        ? 'COALESCE(reserved.reserved_quantity, 0)'
+        : '0';
+    const reservationJoin =
+      supportsWarehouseAllocations && supportsAllocationStatus
+        ? `LEFT JOIN (
+            SELECT allocation.finished_good_id,
+                   allocation.warehouse_id,
+                   SUM(allocation.quantity) AS reserved_quantity
+            FROM order_item_warehouse_allocations allocation
+            JOIN order_items reserved_item ON reserved_item.id = allocation.order_item_id
+            JOIN orders reserved_order ON reserved_order.id = reserved_item.order_id
+            WHERE allocation.allocation_status = 'PLANNED'
+              AND reserved_order.status IN ('PENDING', 'CONFIRMED', 'PACKED')
+            GROUP BY allocation.finished_good_id, allocation.warehouse_id
+          ) reserved
+            ON reserved.finished_good_id = fgws.finished_good_id
+           AND reserved.warehouse_id = fgws.warehouse_id`
+        : '';
     const params = [];
     let where = 'WHERE fg.is_deleted = 0';
 
@@ -190,10 +216,12 @@ const getStock = async (req, res, next) => {
               fgws.finished_good_id,
               fgws.warehouse_id,
               fgws.quantity,
+              ${reservedQuantityExpression} AS reserved_quantity,
               fgws.updated_at,
               fg.name AS product_name,
               fg.article_code,
               fg.sole_code,
+              ${supportsNClassification ? 'fg.n_classification' : 'NULL AS n_classification'},
               fg.color,
               fg.size,
               fg.unit,
@@ -205,6 +233,7 @@ const getStock = async (req, res, next) => {
        FROM finished_good_warehouse_stock fgws
        JOIN finished_goods fg ON fg.id = fgws.finished_good_id
        JOIN warehouses w ON w.id = fgws.warehouse_id
+       ${reservationJoin}
        LEFT JOIN users created ON created.id = fgws.created_by
        LEFT JOIN users updated ON updated.id = fgws.updated_by
        ${where}

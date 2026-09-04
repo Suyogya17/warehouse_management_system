@@ -134,10 +134,15 @@ const downloadApiFile = async (path, token) => {
 
     const disposition = response.headers.get("Content-Disposition") || "";
     const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+    const contentType = response.headers.get("Content-Type") || "";
+    const fallbackFilename = contentType.toLowerCase().includes("zip")
+      ? "nepcha-product-gallery.zip"
+      : "nepcha-product-gallery.pdf";
 
     return {
       blob: await response.blob(),
-      filename: filenameMatch?.[1] || "nepcha-product-gallery.pdf",
+      filename: filenameMatch?.[1] || fallbackFilename,
+      contentType,
       cacheStatus: response.headers.get("X-Catalogue-Cache") || "",
     };
   } catch (error) {
@@ -649,7 +654,9 @@ export const api = {
     targets,
     token,
     allocationScope = "EXCLUSIVE",
-    publicQuantity = 0
+    publicQuantity = 0,
+    publicationStatus = "ACTIVE",
+    publishAt = null
   ) =>
     apiRequest(
       `/permissions/percentage-allocations/${id}`,
@@ -659,6 +666,8 @@ export const api = {
           targets,
           allocation_scope: allocationScope,
           public_quantity: publicQuantity,
+          publication_status: publicationStatus,
+          publish_at: publishAt,
         }),
       },
       token

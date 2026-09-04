@@ -21,6 +21,8 @@ const initialForm = {
   currency_code: "NPR",
   exchange_rate: 1,
   regular_price_markup: 0,
+  percentage_product_markup: 0,
+  non_commission_product_markup: 0,
   account_relationship: "INDEPENDENT",
   parent_dealer_id: "",
   parent_allocation_percentage: 25,
@@ -137,6 +139,12 @@ export default function UsersPage() {
       currency_code: row.currency_code || "NPR",
       exchange_rate: Number(row.exchange_rate || defaultExchangeRates[row.currency_code] || 1),
       regular_price_markup: Number(row.regular_price_markup || 0),
+      percentage_product_markup: Number(
+        row.percentage_product_markup ?? row.regular_price_markup ?? 0
+      ),
+      non_commission_product_markup: Number(
+        row.non_commission_product_markup ?? row.regular_price_markup ?? 0
+      ),
       account_relationship: row.parent_dealer_id ? "SHAREHOLDER" : "INDEPENDENT",
       parent_dealer_id: row.parent_dealer_id || "",
       parent_allocation_percentage: 25,
@@ -269,6 +277,14 @@ export default function UsersPage() {
                     ["USER", "ELDER"].includes(event.target.value)
                       ? current.regular_price_markup
                       : 0,
+                  percentage_product_markup:
+                    ["USER", "ELDER"].includes(event.target.value)
+                      ? current.percentage_product_markup
+                      : 0,
+                  non_commission_product_markup:
+                    ["USER", "ELDER"].includes(event.target.value)
+                      ? current.non_commission_product_markup
+                      : 0,
                   product_access_template: ["USER", "ELDER", "MEMBER"].includes(
                     event.target.value
                   )
@@ -359,23 +375,42 @@ export default function UsersPage() {
           )}
 
           {["USER", "ELDER"].includes(form.role) && form.currency_code === "NPR" ? (
-            <Field
-              label="Regular product markup (NPR)"
-              hint="Added to normal products only. Offer products are excluded."
-            >
-              <TextInput
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.regular_price_markup}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    regular_price_markup: event.target.value,
-                  }))
-                }
-              />
-            </Field>
+            <>
+              <Field
+                label="Percentage product increase (NPR)"
+                hint="Added only when the product is marked Percentage. Active offers are excluded."
+              >
+                <TextInput
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.percentage_product_markup}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      percentage_product_markup: event.target.value,
+                    }))
+                  }
+                />
+              </Field>
+              <Field
+                label="Non-commission product increase (NPR)"
+                hint="Added only when the product is marked Non commission. Active offers are excluded."
+              >
+                <TextInput
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.non_commission_product_markup}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      non_commission_product_markup: event.target.value,
+                    }))
+                  }
+                />
+              </Field>
+            </>
           ) : null}
 
           {!editingId && form.role === "USER" ? (
@@ -579,14 +614,22 @@ export default function UsersPage() {
                   : `NPR ÷ ${row.exchange_rate || 1}`,
             },
             {
-              key: "regular_price_markup",
-              label: "Regular markup",
+              key: "product_type_markup",
+              label: "Individual price increase",
               render: (row) =>
                 ["USER", "ELDER"].includes(row.role) &&
-                row.currency_code === "NPR" &&
-                Number(row.regular_price_markup || 0) > 0
-                  ? `+${formatPrice(row.regular_price_markup, "NPR")}`
-                  : "-",
+                row.currency_code === "NPR" ? (
+                  <div className="space-y-1 text-xs">
+                    <div>
+                      Percentage: <strong>+{formatPrice(row.percentage_product_markup ?? row.regular_price_markup ?? 0, "NPR")}</strong>
+                    </div>
+                    <div>
+                      Non commission: <strong>+{formatPrice(row.non_commission_product_markup ?? row.regular_price_markup ?? 0, "NPR")}</strong>
+                    </div>
+                  </div>
+                ) : (
+                  "-"
+                ),
             },
             { key: "created_at", label: "Created", type: "date" },
             {

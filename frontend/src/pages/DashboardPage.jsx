@@ -4,7 +4,9 @@ import { ArrowRight, ChevronLeft, ChevronRight, Package as PackageIcon, Eye, Eye
 
 import PageHeader from "../components/PageHeader";
 import MultiSeriesFilter from "../components/MultiSeriesFilter";
+import NClassificationFilter from "../components/NClassificationFilter";
 import ProductImageGallery from "../components/ProductImageGallery";
+import ProductTypeBadges from "../components/ProductTypeBadges";
 import StatCard from "../components/StatCard";
 import VisibilitySummary from "../components/VisibilitySummary";
 
@@ -14,9 +16,9 @@ import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber, formatProductPriceForUser } from "../utils/format";
 import { canManageProductVisibility } from "../utils/pagePermissions";
-import { getCommissionLabel, isCommissionProduct } from "../utils/commission";
 import { getRoundedCartons } from "../utils/displayStock";
 import { buildVisibilitySummary } from "../utils/visibilitySummary";
+import { matchesProductNClassification } from "../utils/commission";
 
 const getAvailableQty = (product) =>
   Number(product?.available_qty ?? product?.display_quantity ?? product?.quantity ?? 0);
@@ -142,17 +144,7 @@ function ProductCard({
         {selectedVariant.size && (
           <div className="text-xs text-slate-600">Size: <span className="font-semibold">{selectedVariant.size}</span></div>
         )}
-        <div>
-          <span
-            className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${
-              isCommissionProduct(selectedVariant)
-                ? "bg-amber-100 text-amber-700"
-                : "bg-slate-100 text-slate-600"
-            }`}
-          >
-            {getCommissionLabel(selectedVariant)}
-          </span>
-        </div>
+        <ProductTypeBadges product={selectedVariant} />
         {variants.length >= 1 && (
           <div className="flex gap-1 overflow-x-auto whitespace-wrap">
             {variants.map((variant) => (
@@ -956,6 +948,7 @@ export default function DashboardPage() {
   const [search, setSearch]             = useState("");
   const [stockFilter, setStockFilter]   = useState("all");
   const [seriesFilters, setSeriesFilters] = useState([]);
+  const [nClassificationFilter, setNClassificationFilter] = useState("all");
   const [onHoldSearch, setOnHoldSearch] = useState("");
   const [onHoldSeriesFilters, setOnHoldSeriesFilters] = useState([]);
   const [selectedHoldCountry, setSelectedHoldCountry] = useState("NP");
@@ -1476,7 +1469,11 @@ export default function DashboardPage() {
             stockFilter === "low" ? qty > 0 && qty < 10 : qty > 0;
           const matchSeries =
             !seriesFilters.length || seriesFilters.includes(getSeriesName(item.sole_code));
-          return isDisplayed && matchSearch && matchStock && matchSeries;
+          const matchNClassification = matchesProductNClassification(
+            item,
+            nClassificationFilter
+          );
+          return isDisplayed && matchSearch && matchStock && matchSeries && matchNClassification;
         })
       )
       .map((variants) => [...variants].sort(sortByDisplayOrder))
@@ -1495,6 +1492,7 @@ export default function DashboardPage() {
     groupedProducts,
     onHoldProductIds,
     search,
+    nClassificationFilter,
     seriesFilters,
     stockFilter,
   ]);
@@ -1510,7 +1508,7 @@ export default function DashboardPage() {
     onHoldPage * PRODUCTS_PER_PAGE
   );
 
-  useEffect(() => { setCurrentPage(1); }, [search, stockFilter, seriesFilters]);
+  useEffect(() => { setCurrentPage(1); }, [search, stockFilter, seriesFilters, nClassificationFilter]);
   useEffect(() => { setOnHoldPage(1); }, [onHoldSearch, onHoldSeriesFilters]);
   useEffect(() => {
     setOnHoldSeriesFilters([]);
@@ -1641,8 +1639,9 @@ export default function DashboardPage() {
                 <option value="low">Low Stock</option>
               </select>
               <MultiSeriesFilter options={seriesList} values={seriesFilters} onChange={setSeriesFilters} label="" />
-              {(search || stockFilter !== "all" || seriesFilters.length) && (
-                <button onClick={() => { setSearch(""); setStockFilter("all"); setSeriesFilters([]); }}
+              <NClassificationFilter value={nClassificationFilter} onChange={setNClassificationFilter} />
+              {(search || stockFilter !== "all" || seriesFilters.length || nClassificationFilter !== "all") && (
+                <button onClick={() => { setSearch(""); setStockFilter("all"); setSeriesFilters([]); setNClassificationFilter("all"); }}
                   className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition-all">
                   Clear
                 </button>

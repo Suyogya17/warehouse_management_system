@@ -45,6 +45,8 @@ export default function ProductPercentagePage() {
   const [pairQuantities, setPairQuantities] = useState({});
   const [divisionMode, setDivisionMode] = useState("PERCENTAGE");
   const [allocationScope, setAllocationScope] = useState("CONTROLLED");
+  const [publicationStatus, setPublicationStatus] = useState("DRAFT");
+  const [publicationDateTime, setPublicationDateTime] = useState("");
   const [publicPairQuantity, setPublicPairQuantity] = useState(0);
   const [publicUsedQuantity, setPublicUsedQuantity] = useState(0);
   const [controlledUsedByUser, setControlledUsedByUser] = useState({});
@@ -208,6 +210,14 @@ export default function ProductPercentagePage() {
     setEditing(product);
     setDivisionMode(savedScope === "CONTROLLED" ? "PAIRS" : "PERCENTAGE");
     setAllocationScope(savedScope);
+    setPublicationStatus(
+      String(product.allocation_publication_status || "DRAFT").toUpperCase()
+    );
+    setPublicationDateTime(
+      product.allocation_publish_at
+        ? new Date(product.allocation_publish_at).toISOString().slice(0, 16)
+        : ""
+    );
     setPublicPairQuantity(Number(saved[0]?.public_quantity || 0));
     setPublicUsedQuantity(Number(saved[0]?.public_used_quantity || 0));
     setControlledUsedByUser(
@@ -404,6 +414,11 @@ export default function ProductPercentagePage() {
     allocationScope === "CONTROLLED"
       ? controlledReleasedRemainingPairs > editorTotalPairs
       : assignedPairs > editorTotalPairs;
+  const scheduledPublicationInvalid =
+    publicationStatus === "SCHEDULED" &&
+    (!publicationDateTime ||
+      Number.isNaN(new Date(publicationDateTime).getTime()) ||
+      new Date(publicationDateTime).getTime() <= Date.now());
 
   const changeDivisionMode = (nextMode) => {
     if (nextMode === divisionMode) return;
@@ -465,12 +480,21 @@ export default function ProductPercentagePage() {
         allocationScope,
         allocationScope === "CONTROLLED"
           ? Number(publicPairQuantity || 0)
-          : 0
+          : 0,
+        publicationStatus,
+        publicationStatus === "SCHEDULED" && publicationDateTime
+          ? new Date(publicationDateTime).toISOString()
+          : null
       );
       showToast({
         tone: "success",
         title: "Product quantity separated",
-        message: `${editing.article_code || editing.name} was allocated to ${targets.length} users.`,
+        message:
+          publicationStatus === "DRAFT"
+            ? `${editing.article_code || editing.name} was saved as an allocation draft.`
+            : publicationStatus === "SCHEDULED"
+              ? `${editing.article_code || editing.name} will become visible to assigned users at the scheduled time.`
+              : `${editing.article_code || editing.name} is now visible to assigned users.`,
       });
       setEditing(null);
       await load();
@@ -929,6 +953,9 @@ export default function ProductPercentagePage() {
                   personalRemainingPairs -
                   publicRemainingPairs
               );
+              const savedPublicationStatus = String(
+                product.allocation_publication_status || "ACTIVE"
+              ).toUpperCase();
               return (
                 <article
                   key={product.id}
@@ -947,9 +974,10 @@ export default function ProductPercentagePage() {
                         {product.color || "No color"} · {product.size || "-"}
                       </p>
                     </div>
-                    <StatusBadge tone={targets.length ? "success" : "neutral"}>
-                      {targets.length
-                        ? `${targets.length} · ${
+                    <div className="flex shrink-0 flex-col items-end gap-1.5">
+                      <StatusBadge tone={targets.length ? "success" : "neutral"}>
+                        {targets.length
+                          ? `${targets.length} · ${
                             String(
                               targets[0]?.allocation_scope || "EXCLUSIVE"
                             ).toUpperCase() === "CONTROLLED"
@@ -959,9 +987,27 @@ export default function ProductPercentagePage() {
                                   ).toUpperCase() === "PRIVATE"
                                 ? "Private qty"
                                 : "Exclusive"
-                          }`
-                        : "Not allocated"}
-                    </StatusBadge>
+                            }`
+                          : "Not allocated"}
+                      </StatusBadge>
+                      {targets.length ? (
+                        <StatusBadge
+                          tone={
+                            savedPublicationStatus === "ACTIVE"
+                              ? "success"
+                              : savedPublicationStatus === "SCHEDULED"
+                                ? "warning"
+                                : "neutral"
+                          }
+                        >
+                          {savedPublicationStatus === "ACTIVE"
+                            ? "Allocated · active"
+                            : savedPublicationStatus === "SCHEDULED"
+                              ? `Scheduled${product.allocation_publish_at ? ` · ${formatDate(product.allocation_publish_at)}` : ""}`
+                              : "Allocation draft"}
+                        </StatusBadge>
+                      ) : null}
+                    </div>
                   </div>
 
                   <div className="mt-4 grid grid-cols-3 gap-2 text-center">
@@ -972,7 +1018,7 @@ export default function ProductPercentagePage() {
                       </p>
                     </div>
                     <div className="rounded-xl bg-indigo-50 px-2 py-2">
-                      <p className="text-[10px] uppercase text-indigo-500">CTN</p>
+                      <p className="text-[10px] uppercase text-indigo-500">CTN LEFT</p>
                       <p className="font-bold text-indigo-800">
                         {formatNumber(totalCartons)}
                       </p>
@@ -1925,6 +1971,66 @@ export default function ProductPercentagePage() {
               </p>
             ) : null}
 
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
+              <h3 className="text-sm font-black text-slate-950">
+                When should assigned dealers see this product?
+              </h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Allocated quantities remain reserved in every mode. Saving a draft does not open the product publicly.
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                {[
+                  ["DRAFT", "Save as draft", "Nobody can see or order it yet."],
+                  ["ACTIVE", "Show assigned users now", "Only assigned users can use their balance."],
+                  ["SCHEDULED", "Schedule for later", "Show it automatically at a future time."],
+                ].map(([value, label, description]) => (
+                  <label
+                    key={value}
+                    className={`cursor-pointer rounded-xl border p-3 transition ${
+                      publicationStatus === value
+                        ? "border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100"
+                        : "border-slate-200 hover:border-slate-300"
+                    }`}
+                  >
+                    <span className="flex items-start gap-2">
+                      <input
+                        type="radio"
+                        name="allocation-publication-status"
+                        value={value}
+                        checked={publicationStatus === value}
+                        onChange={() => setPublicationStatus(value)}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <span className="block text-sm font-bold text-slate-900">
+                          {label}
+                        </span>
+                        <span className="mt-1 block text-xs leading-4 text-slate-500">
+                          {description}
+                        </span>
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {publicationStatus === "SCHEDULED" ? (
+                <label className="mt-3 block text-xs font-bold uppercase text-slate-600">
+                  Show date and time
+                  <input
+                    type="datetime-local"
+                    value={publicationDateTime}
+                    onChange={(event) => setPublicationDateTime(event.target.value)}
+                    className="mt-1 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm normal-case text-slate-900 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+                  />
+                  {scheduledPublicationInvalid ? (
+                    <span className="mt-1 block normal-case text-red-600">
+                      Select a future date and time.
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
+            </div>
+
             <div className="mt-5 flex justify-end gap-2">
               <Button
                 type="button"
@@ -1948,11 +2054,18 @@ export default function ProductPercentagePage() {
                   allocationExceedsStock ||
                   hasInvalidAllocation ||
                   allocationBelowUsed ||
+                  scheduledPublicationInvalid ||
                   (allocationScope === "CONTROLLED" &&
                     Number(publicPairQuantity || 0) < publicUsedQuantity)
                 }
               >
-                {saving ? "Saving" : "Save allocation"}
+                {saving
+                  ? "Saving"
+                  : publicationStatus === "DRAFT"
+                    ? "Save allocation as draft"
+                    : publicationStatus === "SCHEDULED"
+                      ? "Save scheduled allocation"
+                      : "Save & show assigned users"}
               </Button>
             </div>
           </form>

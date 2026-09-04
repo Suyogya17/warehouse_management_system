@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import DataTable from "../components/DataTable";
 import MultiSeriesFilter from "../components/MultiSeriesFilter";
+import NClassificationFilter from "../components/NClassificationFilter";
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import StatusBadge from "../components/StatusBadge";
@@ -11,6 +12,7 @@ import { useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
 import { getRoundedCartons } from "../utils/displayStock";
 import { formatNumber } from "../utils/format";
+import { getProductNClassification, matchesProductNClassification } from "../utils/commission";
 
 const getCartons = (quantity, item) => {
   const pairs = Number(quantity || 0);
@@ -42,6 +44,7 @@ export default function StockPage() {
   const [search, setSearch] = useState("");
   const [searchId, setSearchId] = useState("");
   const [seriesFilters, setSeriesFilters] = useState([]);
+  const [nClassificationFilter, setNClassificationFilter] = useState("all");
   const [stockFilter, setStockFilter] = useState("all");
 
   const load = useCallback(async () => {
@@ -103,6 +106,8 @@ export default function StockPage() {
           !seriesFilters.includes(getSeriesName(item.sole_code))
         ) return false;
 
+        if (!matchesProductNClassification(item, nClassificationFilter)) return false;
+
         if (qId && !String(item.id || "").toLowerCase().includes(qId)) return false;
 
         if (!q) return true;
@@ -122,7 +127,7 @@ export default function StockPage() {
         );
       })
       .sort((a, b) => Number(b.available_qty || 0) - Number(a.available_qty || 0));
-  }, [availability, search, searchId, seriesFilters, stockFilter, warehousesByProductId]);
+  }, [availability, search, searchId, seriesFilters, nClassificationFilter, stockFilter, warehousesByProductId]);
 
   const exportToExcel = () => {
     if (!filteredAvailability.length) {
@@ -139,6 +144,7 @@ export default function StockPage() {
       Product: item.name || "",
       Article: item.article_code || "",
       "Sole Code": item.sole_code || "",
+      "N Classification": getProductNClassification(item),
       Warehouse: formatWarehouses(
         warehousesByProductId.get(String(item.id)) || [],
         item.unit || "pairs"
@@ -202,7 +208,7 @@ const totalAvailableCartons = filteredAvailability.reduce((sum, item) => sum + g
 
       <SectionCard title="Products Availability" icon="stock">
         <div className="p-4">
-          <div className="mb-4 grid gap-3 md:grid-cols-[80px_minmax(0,1fr)_170px_180px_auto]">
+          <div className="mb-4 grid gap-3 md:grid-cols-[80px_minmax(0,1fr)_170px_170px_180px_auto]">
             <input
               type="text"
               value={searchId}
@@ -222,6 +228,10 @@ const totalAvailableCartons = filteredAvailability.reduce((sum, item) => sum + g
               values={seriesFilters}
               onChange={setSeriesFilters}
               label=""
+            />
+            <NClassificationFilter
+              value={nClassificationFilter}
+              onChange={setNClassificationFilter}
             />
             <select
               value={stockFilter}
@@ -246,6 +256,7 @@ const totalAvailableCartons = filteredAvailability.reduce((sum, item) => sum + g
               { key: "name", label: "Product" },
               { key: "article_code", label: "Article" },
               { key: "sole_code", label: "Series", render: (row) => row.sole_code || "-" },
+              { key: "n_classification", label: "N class", render: (row) => getProductNClassification(row) || "-" },
               {
                 key: "warehouse",
                 label: "Warehouse",
