@@ -21,6 +21,16 @@ router.put(
   authorize('ADMIN', 'CO_ADMIN'),
   ctrl.savePercentageAllocations
 );
+router.put(
+  '/percentage-allocations/:finished_good_id/publication',
+  authorize('ADMIN', 'CO_ADMIN'),
+  ctrl.updatePercentageAllocationPublication
+);
+router.post(
+  '/percentage-allocations/:finished_good_id/restore',
+  authorize('ADMIN', 'CO_ADMIN'),
+  ctrl.restorePercentageAllocations
+);
 router.post(
   '/percentage-allocations/:finished_good_id/transfer-balance',
   authorize('ADMIN', 'CO_ADMIN'),

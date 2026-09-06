@@ -33,6 +33,7 @@ export default function ProductPercentagePage() {
   const [legacyHistoryCount, setLegacyHistoryCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [publicationUpdatingId, setPublicationUpdatingId] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState("");
   const [allocationFilter, setAllocationFilter] = useState("all");
@@ -54,6 +55,10 @@ export default function ProductPercentagePage() {
   const [transferCartons, setTransferCartons] = useState({});
   const [transferReason, setTransferReason] = useState("");
   const [transferring, setTransferring] = useState(false);
+  const [restoringProductId, setRestoringProductId] = useState(null);
+  const [restoreConflict, setRestoreConflict] = useState(null);
+  const [reconcileOrderIds, setReconcileOrderIds] = useState([]);
+  const [restoreShortageUserId, setRestoreShortageUserId] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -211,7 +216,9 @@ export default function ProductPercentagePage() {
     setDivisionMode(savedScope === "CONTROLLED" ? "PAIRS" : "PERCENTAGE");
     setAllocationScope(savedScope);
     setPublicationStatus(
-      String(product.allocation_publication_status || "DRAFT").toUpperCase()
+      saved.length
+        ? String(product.allocation_publication_status || "DRAFT").toUpperCase()
+        : "DRAFT"
     );
     setPublicationDateTime(
       product.allocation_publish_at
@@ -530,6 +537,180 @@ export default function ProductPercentagePage() {
         message: error.data?.message || error.message,
       });
     }
+  };
+
+  const updateAllocationPublication = async (product, nextStatus) => {
+    try {
+      setPublicationUpdatingId(Number(product.id));
+      const result = await api.updateProductPercentagePublication(
+        product.id,
+        nextStatus,
+        token
+      );
+      await load();
+      announceDataRefresh("finished-goods");
+      showToast({
+        tone: "success",
+        title:
+          nextStatus === "ACTIVE"
+            ? "Product shown to dealers"
+            : "Product hidden from dealers",
+        message: result.message,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Could not change product visibility",
+        message: error.data?.message || error.message,
+      });
+    } finally {
+      setPublicationUpdatingId(null);
+    }
+  };
+
+  const attemptRestoreAllocation = async (
+    product,
+    selectedOrderIds = [],
+    snapshotAuditId = null,
+    shortageUserId = null
+  ) => {
+    try {
+      setRestoringProductId(Number(product.id));
+      const result = await api.restoreProductPercentageAllocation(
+        product.id,
+        {
+          reconcile_order_ids: selectedOrderIds,
+          snapshot_audit_id: snapshotAuditId,
+          shortage_user_id: shortageUserId || null,
+        },
+        token
+      );
+      setRestoreConflict(null);
+      setReconcileOrderIds([]);
+      setRestoreShortageUserId("");
+      showToast({
+        tone: "success",
+        title: "Allocation restored as draft",
+        message:
+          result.message ||
+          "The previous allocation and its original order period were restored.",
+      });
+      await load();
+      announceDataRefresh("finished-goods");
+      return true;
+    } catch (error) {
+      const details = error.data?.details;
+      if (
+        details?.reconciliation_candidates?.length ||
+        details?.reservation_breakdown?.length
+      ) {
+        setRestoreConflict({
+          product,
+          details,
+          snapshotAuditId,
+          errorMessage: selectedOrderIds.length
+            ? error.data?.message || error.message
+            : "",
+        });
+        if (!selectedOrderIds.length) {
+          setReconcileOrderIds([]);
+          if (!shortageUserId) setRestoreShortageUserId("");
+        }
+        if (selectedOrderIds.length) {
+          showToast({
+            tone: "error",
+            title: "Selected orders are not enough",
+            message: error.data?.message || error.message,
+          });
+        }
+      } else {
+        showToast({
+          tone: "error",
+          title: "Could not restore allocation",
+          message: error.data?.message || error.message,
+        });
+      }
+      return false;
+    } finally {
+      setRestoringProductId(null);
+    }
+  };
+
+  const restoreAllocation = async (product) => {
+    const label = product.article_code || product.name || `FG.ID ${product.id}`;
+    if (
+      !window.confirm(
+        `Restore the latest saved percentage allocation for ${label}? It will be restored as a draft, so dealers will not see it until you activate it.`
+      )
+    ) {
+      return;
+    }
+    await attemptRestoreAllocation(product);
+  };
+
+  const restoreAllocationVersion = async (historyRow) => {
+    const product = products.find(
+      (item) => Number(item.id) === Number(historyRow.finished_good_id)
+    );
+    if (!product) {
+      showToast({
+        tone: "error",
+        title: "Product unavailable",
+        message: "This historical product is no longer available to restore.",
+      });
+      return;
+    }
+    if ((allocationsByProduct.get(Number(product.id)) || []).length) {
+      showToast({
+        tone: "error",
+        title: "Allocation already exists",
+        message: "Remove or edit the current allocation before restoring an older version.",
+      });
+      return;
+    }
+    if (
+      !window.confirm(
+        `Restore the allocation saved on ${formatDate(historyRow.created_at)} for ${historyRow.article_code || historyRow.product_name}? It will be restored as a draft.`
+      )
+    ) {
+      return;
+    }
+    await attemptRestoreAllocation(product, [], Number(historyRow.id));
+  };
+
+  const submitReservationReconciliation = async (event) => {
+    event.preventDefault();
+    if (!restoreConflict || !reconcileOrderIds.length) {
+      showToast({
+        tone: "error",
+        title: "Select a reservation",
+        message:
+          "Select at least one eligible order that should count against its dealer allocation.",
+      });
+      return;
+    }
+    await attemptRestoreAllocation(
+      restoreConflict.product,
+      reconcileOrderIds,
+      restoreConflict.snapshotAuditId
+    );
+  };
+
+  const submitAvailableBalanceRestore = async () => {
+    if (!restoreConflict || !restoreShortageUserId) {
+      showToast({
+        tone: "error",
+        title: "Select a dealer",
+        message: "Choose the dealer whose unused balance should absorb the stock shortage.",
+      });
+      return;
+    }
+    await attemptRestoreAllocation(
+      restoreConflict.product,
+      [],
+      restoreConflict.snapshotAuditId,
+      Number(restoreShortageUserId)
+    );
   };
 
   const openTransferEditor = (product, source, productTargets) => {
@@ -956,6 +1137,14 @@ export default function ProductPercentagePage() {
               const savedPublicationStatus = String(
                 product.allocation_publication_status || "ACTIVE"
               ).toUpperCase();
+              const hasRestorableSnapshot = allocationHistory.some(
+                (history) =>
+                  Number(history.finished_good_id) === Number(product.id) &&
+                  history.action === "SAVE_PRODUCT_PERCENTAGE_ALLOCATION" &&
+                  history.has_snapshot &&
+                  Array.isArray(history.targets) &&
+                  history.targets.length > 0
+              );
               return (
                 <article
                   key={product.id}
@@ -1161,8 +1350,55 @@ export default function ProductPercentagePage() {
                       >
                         Remove
                       </Button>
+                    ) : hasRestorableSnapshot ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        disabled={restoringProductId === Number(product.id)}
+                        onClick={() => restoreAllocation(product)}
+                      >
+                        {restoringProductId === Number(product.id)
+                          ? "Restoring…"
+                          : "Restore product percentage"}
+                      </Button>
                     ) : null}
                   </div>
+                  {targets.length ? (
+                    <div className="mt-3 border-t border-slate-200 pt-3">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={
+                          savedPublicationStatus === "ACTIVE"
+                            ? "secondary"
+                            : "primary"
+                        }
+                        disabled={
+                          publicationUpdatingId === Number(product.id)
+                        }
+                        onClick={() =>
+                          updateAllocationPublication(
+                            product,
+                            savedPublicationStatus === "ACTIVE"
+                              ? "DRAFT"
+                              : "ACTIVE"
+                          )
+                        }
+                      >
+                        {publicationUpdatingId === Number(product.id)
+                          ? "Updating visibility…"
+                          : savedPublicationStatus === "ACTIVE"
+                            ? "Hide product"
+                            : "Show product to dealers"}
+                      </Button>
+                      <p className="mt-2 text-[11px] text-slate-500">
+                        {savedPublicationStatus === "ACTIVE"
+                          ? "Hiding keeps every dealer allocation and previous order unchanged."
+                          : "The saved allocation stays hidden until you show it to assigned dealers."}
+                      </p>
+                    </div>
+                  ) : null}
                 </article>
               );
             })}
@@ -1359,19 +1595,43 @@ export default function ProductPercentagePage() {
               {
                 key: "action",
                 label: "Action",
-                render: (row) => (
-                  <StatusBadge
-                    tone={
-                      row.action === "REMOVE_PRODUCT_PERCENTAGE_ALLOCATION"
-                        ? "danger"
-                        : "success"
-                    }
-                  >
-                    {row.action === "REMOVE_PRODUCT_PERCENTAGE_ALLOCATION"
-                      ? "REMOVED"
-                      : "SAVED"}
-                  </StatusBadge>
-                ),
+                render: (row) => {
+                  const hasCurrentAllocation = (
+                    allocationsByProduct.get(Number(row.finished_good_id)) || []
+                  ).length > 0;
+                  return (
+                    <div className="space-y-2">
+                      <StatusBadge
+                        tone={
+                          row.action === "REMOVE_PRODUCT_PERCENTAGE_ALLOCATION"
+                            ? "danger"
+                            : "success"
+                        }
+                      >
+                        {row.action === "REMOVE_PRODUCT_PERCENTAGE_ALLOCATION"
+                          ? "REMOVED"
+                          : row.action === "RESTORE_PRODUCT_PERCENTAGE_ALLOCATION"
+                            ? "RESTORED"
+                            : "SAVED"}
+                      </StatusBadge>
+                      {row.has_snapshot && !hasCurrentAllocation ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          disabled={
+                            restoringProductId === Number(row.finished_good_id)
+                          }
+                          onClick={() => restoreAllocationVersion(row)}
+                        >
+                          {restoringProductId === Number(row.finished_good_id)
+                            ? "Restoring…"
+                            : "Restore this version"}
+                        </Button>
+                      ) : null}
+                    </div>
+                  );
+                },
               },
               ]}
             />
@@ -1391,6 +1651,172 @@ export default function ProductPercentagePage() {
           </div>
         )}
       </SectionCard>
+
+      {restoreConflict ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4"
+          onMouseDown={() => {
+            if (!restoringProductId) {
+              setRestoreConflict(null);
+              setReconcileOrderIds([]);
+              setRestoreShortageUserId("");
+            }
+          }}
+        >
+          <form
+            onSubmit={submitReservationReconciliation}
+            onMouseDown={(event) => event.stopPropagation()}
+            className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl sm:p-6"
+          >
+            <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
+              Reservation conflict
+            </p>
+            <h2 className="mt-1 text-xl font-black text-slate-950">
+              Review orders before restoring {restoreConflict.product.article_code || restoreConflict.product.name}
+            </h2>
+            <p className="mt-2 text-sm text-slate-600">
+              The saved allocation needs {formatNumber(restoreConflict.details.required_quantity)} pairs,
+              but only {formatNumber(restoreConflict.details.available_quantity)} pairs are unreserved.
+              Select an order only when it should consume that same dealer&apos;s percentage allocation.
+            </p>
+
+            {restoreConflict.errorMessage ? (
+              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">
+                {restoreConflict.errorMessage}
+              </div>
+            ) : null}
+
+            <div className="mt-4 space-y-2">
+              {(restoreConflict.details.reconciliation_candidates?.length
+                ? restoreConflict.details.reconciliation_candidates
+                : restoreConflict.details.reservation_breakdown
+              ).map((reservation) => {
+                const eligible = Boolean(reservation.eligible_for_reconciliation);
+                const checked = reconcileOrderIds.includes(Number(reservation.order_id));
+                return (
+                  <label
+                    key={reservation.order_id}
+                    className={`grid gap-3 rounded-xl border p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center ${
+                      eligible
+                        ? "border-slate-300 bg-white"
+                        : "border-slate-200 bg-slate-50 opacity-70"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={!eligible || Boolean(restoringProductId)}
+                      onChange={(event) => {
+                        const orderId = Number(reservation.order_id);
+                        setReconcileOrderIds((current) =>
+                          event.target.checked
+                            ? [...new Set([...current, orderId])]
+                            : current.filter((id) => id !== orderId)
+                        );
+                      }}
+                      className="h-5 w-5 rounded border-slate-300 text-indigo-600"
+                    />
+                    <span>
+                      <strong className="block text-slate-950">
+                        Order #{reservation.order_id} · {reservation.dealer_name}
+                      </strong>
+                      <span className="mt-1 block text-xs text-slate-500">
+                        {reservation.status} · Ordered {formatNumber(
+                          reservation.ordered_cartons ?? reservation.reserved_cartons
+                        )} CTN / {formatNumber(
+                          reservation.ordered_quantity ?? reservation.reserved_quantity
+                        )} pairs
+                      </span>
+                      <span className="mt-1 block text-xs text-slate-500">
+                        Delivered {formatNumber(reservation.delivered_cartons || 0)} CTN · Reserved {formatNumber(reservation.reserved_cartons || 0)} CTN
+                      </span>
+                      {reservation.is_offer ? (
+                        <span className="mt-1 block text-xs font-semibold text-amber-700">
+                          Currently classified as an offer order. Selecting it will reclassify this product line as a regular percentage-allocation order.
+                        </span>
+                      ) : null}
+                      {!eligible ? (
+                        <span className="mt-1 block text-xs font-semibold text-slate-500">
+                          This dealer is not included in the saved allocation version being restored.
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="text-right text-sm font-black text-slate-900">
+                      {formatNumber(
+                        reservation.ordered_cartons ?? reservation.reserved_cartons
+                      )} CTN
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+              This correction is permanent and recorded in Activity Log. It does not cancel an order, deduct stock again, or change delivered quantities.
+            </div>
+
+            <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50 p-4">
+              <p className="text-sm font-black text-indigo-950">
+                Restore only the available balance
+              </p>
+              <p className="mt-1 text-xs text-indigo-800">
+                The missing {formatNumber(restoreConflict.details.shortage_quantity)} pairs must be removed from one dealer&apos;s unused allocation. Other dealer balances remain unchanged.
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <select
+                  value={restoreShortageUserId}
+                  disabled={Boolean(restoringProductId)}
+                  onChange={(event) => setRestoreShortageUserId(event.target.value)}
+                  className="min-h-11 rounded-xl border border-indigo-300 bg-white px-3 text-sm font-semibold text-slate-900"
+                >
+                  <option value="">Select dealer for shortage</option>
+                  {(restoreConflict.details.restored_targets || [])
+                    .filter(
+                      (target) =>
+                        Number(target.remaining_quantity || 0) >=
+                        Number(restoreConflict.details.shortage_quantity || 0)
+                    )
+                    .map((target) => (
+                      <option key={target.user_id} value={target.user_id}>
+                        {target.dealer_name} — {formatNumber(target.remaining_quantity)} pairs left
+                      </option>
+                    ))}
+                </select>
+                <Button
+                  type="button"
+                  disabled={!restoreShortageUserId || Boolean(restoringProductId)}
+                  onClick={submitAvailableBalanceRestore}
+                >
+                  {restoringProductId ? "Restoring…" : "Restore available balance"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={Boolean(restoringProductId)}
+                onClick={() => {
+                  setRestoreConflict(null);
+                  setReconcileOrderIds([]);
+                  setRestoreShortageUserId("");
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={!reconcileOrderIds.length || Boolean(restoringProductId)}
+              >
+                {restoringProductId
+                  ? "Reconciling…"
+                  : "Reconcile selected and restore"}
+              </Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       {transferEditor ? (
         <div
@@ -1971,66 +2397,6 @@ export default function ProductPercentagePage() {
               </p>
             ) : null}
 
-            <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
-              <h3 className="text-sm font-black text-slate-950">
-                When should assigned dealers see this product?
-              </h3>
-              <p className="mt-1 text-xs text-slate-500">
-                Allocated quantities remain reserved in every mode. Saving a draft does not open the product publicly.
-              </p>
-              <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                {[
-                  ["DRAFT", "Save as draft", "Nobody can see or order it yet."],
-                  ["ACTIVE", "Show assigned users now", "Only assigned users can use their balance."],
-                  ["SCHEDULED", "Schedule for later", "Show it automatically at a future time."],
-                ].map(([value, label, description]) => (
-                  <label
-                    key={value}
-                    className={`cursor-pointer rounded-xl border p-3 transition ${
-                      publicationStatus === value
-                        ? "border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100"
-                        : "border-slate-200 hover:border-slate-300"
-                    }`}
-                  >
-                    <span className="flex items-start gap-2">
-                      <input
-                        type="radio"
-                        name="allocation-publication-status"
-                        value={value}
-                        checked={publicationStatus === value}
-                        onChange={() => setPublicationStatus(value)}
-                        className="mt-0.5"
-                      />
-                      <span>
-                        <span className="block text-sm font-bold text-slate-900">
-                          {label}
-                        </span>
-                        <span className="mt-1 block text-xs leading-4 text-slate-500">
-                          {description}
-                        </span>
-                      </span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-              {publicationStatus === "SCHEDULED" ? (
-                <label className="mt-3 block text-xs font-bold uppercase text-slate-600">
-                  Show date and time
-                  <input
-                    type="datetime-local"
-                    value={publicationDateTime}
-                    onChange={(event) => setPublicationDateTime(event.target.value)}
-                    className="mt-1 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm normal-case text-slate-900 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
-                  />
-                  {scheduledPublicationInvalid ? (
-                    <span className="mt-1 block normal-case text-red-600">
-                      Select a future date and time.
-                    </span>
-                  ) : null}
-                </label>
-              ) : null}
-            </div>
-
             <div className="mt-5 flex justify-end gap-2">
               <Button
                 type="button"
@@ -2054,18 +2420,11 @@ export default function ProductPercentagePage() {
                   allocationExceedsStock ||
                   hasInvalidAllocation ||
                   allocationBelowUsed ||
-                  scheduledPublicationInvalid ||
                   (allocationScope === "CONTROLLED" &&
                     Number(publicPairQuantity || 0) < publicUsedQuantity)
                 }
               >
-                {saving
-                  ? "Saving"
-                  : publicationStatus === "DRAFT"
-                    ? "Save allocation as draft"
-                    : publicationStatus === "SCHEDULED"
-                      ? "Save scheduled allocation"
-                      : "Save & show assigned users"}
+                {saving ? "Saving" : "Save allocation"}
               </Button>
             </div>
           </form>

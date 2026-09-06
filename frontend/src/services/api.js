@@ -672,10 +672,25 @@ export const api = {
       },
       token
     ),
+  updateProductPercentagePublication: (id, publicationStatus, token) =>
+    apiRequest(
+      `/permissions/percentage-allocations/${id}/publication`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ publication_status: publicationStatus }),
+      },
+      token
+    ),
   transferProductPercentageBalance: (id, payload, token) =>
     apiRequest(
       `/permissions/percentage-allocations/${id}/transfer-balance`,
       { method: "POST", body: JSON.stringify(payload) },
+      token
+    ),
+  restoreProductPercentageAllocation: (id, payload, token) =>
+    apiRequest(
+      `/permissions/percentage-allocations/${id}/restore`,
+      { method: "POST", body: JSON.stringify(payload || {}) },
       token
     ),
 
