@@ -280,13 +280,21 @@ export default function GalleryPage() {
       ALL_STANDARD: { scope: "all", quality: "standard" },
       ALL_HIGH: { scope: "all", quality: "high" },
       JPG_COLLAGE: { scope: "all", quality: "standard", format: "jpg" },
+      JPG_ADMIN_HIDDEN_OR_OUT: {
+        scope: "all",
+        quality: "standard",
+        format: "jpg",
+        admin_jpg_scope: "hidden_or_out_of_stock",
+      },
     };
     const optionKey = typeof forcedOption === "string" && forcedOption
       ? forcedOption
       : downloadOption;
     const selectedOption = optionMap[optionKey] || optionMap.FILTERED;
     const optionCanDownload =
-      optionKey === "JPG_COLLAGE" ? sourceProducts.length > 0 : canDownload;
+      ["JPG_COLLAGE", "JPG_ADMIN_HIDDEN_OR_OUT"].includes(optionKey)
+        ? sourceProducts.length > 0
+        : canDownload;
     if (!optionCanDownload || downloadLoading) return;
 
     setDownloadLoading(true);
@@ -301,7 +309,9 @@ export default function GalleryPage() {
           stock,
           product_type: downloadProductType,
           include_hidden:
-            optionKey === "JPG_COLLAGE"
+            optionKey === "JPG_ADMIN_HIDDEN_OR_OUT"
+              ? 1
+              : optionKey === "JPG_COLLAGE"
               ? 0
               : canViewAllProducts
               ? 1
@@ -310,7 +320,7 @@ export default function GalleryPage() {
         token
       );
       if (
-        optionKey === "JPG_COLLAGE" &&
+        ["JPG_COLLAGE", "JPG_ADMIN_HIDDEN_OR_OUT"].includes(optionKey) &&
         (file.contentType.toLowerCase().includes("pdf") ||
           (!file.contentType.toLowerCase().includes("zip") &&
             file.filename.toLowerCase().endsWith(".pdf")))
@@ -433,6 +443,9 @@ export default function GalleryPage() {
               {canViewAllProducts ? (
                 <option value="JPG_COLLAGE">Dealer-open photos - JPG collage ZIP</option>
               ) : null}
+              {canViewAllProducts ? (
+                <option value="JPG_ADMIN_HIDDEN_OR_OUT">Admin hidden / out-of-stock photos - JPG collage ZIP</option>
+              ) : null}
             </select>
             <Button
               type="button"
@@ -452,6 +465,17 @@ export default function GalleryPage() {
               >
                 <Images size={16} />
                 {downloadLoading ? "Preparing..." : "Download dealer-open JPGs"}
+              </Button>
+            ) : null}
+            {canViewAllProducts ? (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!sourceProducts.length || loading || downloadLoading}
+                onClick={() => downloadGallery("JPG_ADMIN_HIDDEN_OR_OUT")}
+              >
+                <Images size={16} />
+                {downloadLoading ? "Preparing..." : "Download hidden / out-of-stock JPGs"}
               </Button>
             ) : null}
             {canOrder ? (

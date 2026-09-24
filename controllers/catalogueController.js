@@ -78,6 +78,17 @@ const filterDealerOpenProducts = async (products) => {
   return products.filter((product) => openProductIds.has(Number(product.id)));
 };
 
+const getAdminAvailablePairs = (product = {}) =>
+  Math.max(
+    0,
+    Number(
+      product.available_qty ??
+        product.physical_stock ??
+        product.quantity ??
+        0
+    )
+  );
+
 const download = async (req, res, next) => {
   try {
     const mode = req.query.mode === 'offers' ? 'offers' : 'products';
@@ -86,8 +97,13 @@ const download = async (req, res, next) => {
       : 'filtered';
     const quality = req.query.quality === 'high' ? 'high' : 'standard';
     const format = req.query.format === 'jpg' ? 'jpg' : 'pdf';
+    const adminJpgScope =
+      req.query.admin_jpg_scope === 'hidden_or_out_of_stock'
+        ? 'hidden_or_out_of_stock'
+        : 'dealer_open';
+    const isAdmin = ['ADMIN', 'CO_ADMIN'].includes(req.user.role);
 
-    if (format === 'jpg' && !['ADMIN', 'CO_ADMIN'].includes(req.user.role)) {
+    if (format === 'jpg' && !isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Only administrators can download the JPG collage catalogue',
@@ -109,15 +125,15 @@ const download = async (req, res, next) => {
     }
 
     const catalogueRequest =
-      format === 'jpg' && ['ADMIN', 'CO_ADMIN'].includes(req.user.role)
+      format === 'jpg' && isAdmin
         ? {
             ...req,
             query: {
               ...req.query,
-              // A generic admin JPG catalogue represents products currently
-              // open to dealers. Hidden/draft products remain available only
-              // through admin screens, not in the dealer catalogue export.
-              include_hidden: '0',
+              // Dealer-open JPGs intentionally exclude hidden products. The
+              // dedicated admin scope may include them, but is admin-only.
+              include_hidden:
+                adminJpgScope === 'hidden_or_out_of_stock' ? '1' : '0',
             },
           }
         : req;
@@ -128,7 +144,19 @@ const download = async (req, res, next) => {
       req.query.product_type
     );
     if (format === 'jpg') {
-      products = await filterDealerOpenProducts(products);
+      const dealerOpenProducts = await filterDealerOpenProducts(products);
+      if (adminJpgScope === 'hidden_or_out_of_stock') {
+        const dealerOpenIds = new Set(
+          dealerOpenProducts.map((product) => Number(product.id))
+        );
+        products = products.filter(
+          (product) =>
+            !dealerOpenIds.has(Number(product.id)) ||
+            getAdminAvailablePairs(product) <= 0
+        );
+      } else {
+        products = dealerOpenProducts;
+      }
       await streamCatalogueJpgDownload(
         products,
         {
@@ -140,6 +168,7 @@ const download = async (req, res, next) => {
           search: req.query.search,
           stock: req.query.stock,
           productType: String(req.query.product_type || 'all').toLowerCase(),
+          adminJpgScope,
           userId: req.user.id,
           role: req.user.role,
         },

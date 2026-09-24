@@ -1180,6 +1180,85 @@ const setDashboardFeatured = async (req, res, next) => {
   }
 };
 
+// ─── DASHBOARD CUSTOM CAROUSEL SLIDES ──────────────────────────────────────
+const getDashboardCarouselSlides = async (req, res, next) => {
+  try {
+    if (!(await hasTable('dashboard_carousel_slides'))) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const canManage = ['ADMIN', 'CO_ADMIN'].includes(req.user?.role);
+    const rows = await query(
+      `SELECT id, title, image_url, display_order, is_active, created_at
+       FROM dashboard_carousel_slides
+       ${canManage ? '' : 'WHERE is_active = 1'}
+       ORDER BY display_order ASC, id ASC`
+    );
+    return res.json({ success: true, data: rows });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const createDashboardCarouselSlide = async (req, res, next) => {
+  try {
+    if (!(await hasTable('dashboard_carousel_slides'))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Custom carousel images are not enabled yet. Run sql/add-dashboard-carousel-slides.sql first.',
+      });
+    }
+    const imageUrl = getImagePath(req);
+    if (!imageUrl) {
+      return res.status(400).json({ success: false, message: 'Choose an image to upload.' });
+    }
+
+    const title = String(req.body.title || '').trim() || null;
+    const nextOrder = Number((await query(
+      'SELECT COALESCE(MAX(display_order), 0) + 1 AS next_order FROM dashboard_carousel_slides'
+    ))[0]?.next_order || 1);
+    const rows = await query(
+      `INSERT INTO dashboard_carousel_slides
+         (title, image_url, display_order, is_active, created_by)
+       VALUES (?, ?, ?, 1, ?)`,
+      [title, imageUrl, nextOrder, req.user?.id || null]
+    );
+
+    clearCache();
+    await auditLog({
+      ...getActor(req), actionType: 'CREATE', module: 'product_display',
+      entity_type: 'dashboard_carousel_slide', entity_id: rows.insertId,
+      entityName: title || 'Custom dashboard carousel image',
+      description: 'Uploaded a custom dashboard carousel image', metadata: { image_url: imageUrl },
+    });
+    return res.status(201).json({ success: true, data: { id: rows.insertId, title, image_url: imageUrl } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const removeDashboardCarouselSlide = async (req, res, next) => {
+  try {
+    if (!(await hasTable('dashboard_carousel_slides'))) {
+      return res.status(400).json({ success: false, message: 'Custom carousel images are not enabled yet.' });
+    }
+    const id = Number(req.params.id);
+    const existing = (await query('SELECT id, title FROM dashboard_carousel_slides WHERE id = ?', [id]))[0];
+    if (!existing) return res.status(404).json({ success: false, message: 'Custom carousel image not found.' });
+    await query('DELETE FROM dashboard_carousel_slides WHERE id = ?', [id]);
+    clearCache();
+    await auditLog({
+      ...getActor(req), actionType: 'DELETE', module: 'product_display',
+      entity_type: 'dashboard_carousel_slide', entity_id: id,
+      entityName: existing.title || 'Custom dashboard carousel image',
+      description: 'Removed a custom dashboard carousel image', metadata: {},
+    });
+    return res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── OFFER ALLOCATION HISTORY ──────────────────────────────────────────────
 const getOfferAllocationHistory = async (req, res, next) => {
   try {
@@ -1855,6 +1934,9 @@ module.exports = {
   setPrice,
   setDisplayOrder,
   setDashboardFeatured,
+  getDashboardCarouselSlides,
+  createDashboardCarouselSlide,
+  removeDashboardCarouselSlide,
   getOfferAllocationHistory,
   setOffer,
   transferOfferBalance

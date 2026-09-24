@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ShoppingCart,
   Plus,
+  Minus,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -16,6 +17,7 @@ import PageHeader from "../../components/PageHeader";
 import NClassificationFilter from "../../components/NClassificationFilter";
 import ProductTypeBadges from "../../components/ProductTypeBadges";
 import SectionCard from "../../components/SectionCard";
+import MultiSeriesFilter from "../../components/MultiSeriesFilter";
 
 import { useAuth } from "../../context/AuthContext";
 import { useDataRefresh } from "../../hooks/useDataRefresh";
@@ -56,7 +58,37 @@ const getSortLabel = (sort) => {
   return "Oldest";
 };
 
-function ProductCard({ variants = [], onAddToCart, onProductInterest, cartProductIds, user }) {
+const CATALOG_VIEW_STORAGE_KEY = "userProductCatalogView";
+const DEFAULT_FILTERS = {
+  search: "",
+  size: "",
+  stock: "all",
+  series: [],
+  commission: "all",
+  nClassification: "all",
+};
+
+const getSavedCatalogView = () => {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(CATALOG_VIEW_STORAGE_KEY) || "{}");
+    return {
+      filters: { ...DEFAULT_FILTERS, ...(saved.filters || {}), series: Array.isArray(saved.filters?.series) ? saved.filters.series : [] },
+      sort: saved.sort || "display",
+      page: Math.max(1, Number(saved.page) || 1),
+    };
+  } catch {
+    return { filters: DEFAULT_FILTERS, sort: "display", page: 1 };
+  }
+};
+
+function ProductCard({
+  variants = [],
+  onAddToCart,
+  onUpdateCartQuantity,
+  onProductInterest,
+  cartByProductId,
+  user,
+}) {
   const [selectedVariant, setSelectedVariant] = useState(
     variants?.find((v) => getAvailableQty(v) > 0) || variants?.[0] || null
   );
@@ -127,7 +159,8 @@ function ProductCard({ variants = [], onAddToCart, onProductInterest, cartProduc
 
   if (!selectedVariant) return null;
 
-  const isInCart = cartProductIds.has(Number(selectedVariant.id));
+  const cartItem = cartByProductId.get(Number(selectedVariant.id));
+  const isInCart = Boolean(cartItem);
   const availableQty = getAvailableQty(selectedVariant);
   const isLowStock = availableQty > 0 && availableQty < 10;
   const isOutOfStock = availableQty <= 0;
@@ -135,6 +168,12 @@ function ProductCard({ variants = [], onAddToCart, onProductInterest, cartProduc
     selectedVariant.created_at &&
     new Date(selectedVariant.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const cartons = getRoundedCartons(availableQty, selectedVariant.inner_boxes_per_outer_box);
+  const pairsPerCarton = Number(selectedVariant.inner_boxes_per_outer_box || 0);
+  const cartUsesCartons = cartItem?.orderBy === "cartons" && pairsPerCarton > 0;
+  const cartQuantity = Number(cartItem?.qty_ordered || 0);
+  const maxCartQuantity = cartUsesCartons
+    ? Math.floor(availableQty / pairsPerCarton)
+    : availableQty;
   const selectedImageUrl = selectedVariant.image_url
     ? `${APP_BASE_URL}${selectedVariant.image_url}`
     : "";
@@ -313,30 +352,54 @@ function ProductCard({ variants = [], onAddToCart, onProductInterest, cartProduc
         </div>
 
         {/* ADD TO CART BUTTON */}
-        <div className="flex justify-center mt-auto pt-1">
-          <button
-            onClick={() => onAddToCart(selectedVariant)}
-            disabled={isOutOfStock}
-            className={`my-2 px-3 py-2 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 transition-all ${
-              isInCart
-                ? "bg-green-500 text-white hover:bg-green-600"
-                : isOutOfStock
-                ? "bg-gray-200 text-gray-500 cursor-not-allowed"
-                : "bg-indigo-500 text-white hover:bg-indigo-600 active:scale-95"
-            }`}
-          >
-            {isInCart ? (
-              <>
-                <Check size={16} />
-                In Cart
-              </>
-            ) : (
-              <>
+        <div className="mt-auto pt-2">
+          {isInCart ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-2">
+              <p className="mb-2 text-center text-xs font-semibold text-emerald-800">
+                Added to cart — {cartUsesCartons ? "cartons" : "pairs"}
+              </p>
+              <div className="flex items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => onUpdateCartQuantity(selectedVariant, cartQuantity - 1)}
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-emerald-300 bg-white text-emerald-800 transition hover:bg-emerald-100"
+                  aria-label="Decrease cart quantity"
+                >
+                  <Minus size={16} />
+                </button>
+                <div className="min-w-14 text-center">
+                  <strong className="block text-lg text-emerald-900">{cartQuantity}</strong>
+                  <span className="text-[10px] font-semibold uppercase text-emerald-700">
+                    {cartUsesCartons ? "CTN" : "pairs"}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  disabled={cartQuantity >= maxCartQuantity}
+                  onClick={() => onUpdateCartQuantity(selectedVariant, cartQuantity + 1)}
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-emerald-300 bg-white text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label="Increase cart quantity"
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex justify-center">
+              <button
+                onClick={() => onAddToCart(selectedVariant)}
+                disabled={isOutOfStock}
+                className={`my-2 px-3 py-2 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 transition-all ${
+                  isOutOfStock
+                    ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                    : "bg-indigo-500 text-white hover:bg-indigo-600 active:scale-95"
+                }`}
+              >
                 <Plus size={16} />
                 Add to Cart
-              </>
-            )}
-          </button>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -458,16 +521,11 @@ export default function FinishedGoodsUserPage() {
   const [items, setItems] = useState([]);
   const [cart, setCart] = useState([]);
   const [cartLoaded, setCartLoaded] = useState(false);
-  const [sort, setSort] = useState("display");
-  const [filters, setFilters] = useState({
-    search: "",
-    size: "",
-    stock: "all",
-    series: "",
-    commission: "all",
-    nClassification: "all",
-  });
-  const [currentPage, setCurrentPage] = useState(1);
+  const savedCatalogView = useMemo(() => getSavedCatalogView(), []);
+  const [sort, setSort] = useState(savedCatalogView.sort);
+  const [filters, setFilters] = useState(savedCatalogView.filters);
+  const [currentPage, setCurrentPage] = useState(savedCatalogView.page);
+  const restoredCatalogView = useRef(false);
 
   const productsPerPage = 12;
 
@@ -557,7 +615,7 @@ export default function FinishedGoodsUserPage() {
 
           const matchSize = !filters.size || item.size === filters.size;
           const matchSeries =
-            !filters.series || getSeriesName(item.sole_code) === filters.series;
+            !filters.series.length || filters.series.includes(getSeriesName(item.sole_code));
           const matchCommission = matchesCommissionFilter(item, filters.commission);
           const matchNClassification = matchesProductNClassification(
             item,
@@ -597,8 +655,20 @@ export default function FinishedGoodsUserPage() {
   });
 
   useEffect(() => {
-    setCurrentPage(1);
+    if (restoredCatalogView.current) setCurrentPage(1);
+    restoredCatalogView.current = true;
   }, [filters, sort]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        CATALOG_VIEW_STORAGE_KEY,
+        JSON.stringify({ filters, sort, page: currentPage })
+      );
+    } catch {
+      // Keep browsing functional when browser storage is unavailable.
+    }
+  }, [currentPage, filters, sort]);
 
   // ─── PAGINATION ───────────────────────────────────
 
@@ -615,6 +685,10 @@ export default function FinishedGoodsUserPage() {
     () => new Set(cart.map((c) => Number(c.finished_good_id))),
     [cart]
   );
+  const cartByProductId = useMemo(
+    () => new Map(cart.map((item) => [Number(item.finished_good_id), item])),
+    [cart]
+  );
 
   // ─── ADD TO CART ──────────────────────────────────
 
@@ -626,7 +700,7 @@ export default function FinishedGoodsUserPage() {
 
     const productId = Number(product.id);
 
-    // Already in cart — take user to order page
+    // It is already visible on the card, where the +/- control changes it.
     if (cartProductIds.has(productId)) {
       // navigate("/order-customer");
       return;
@@ -658,6 +732,30 @@ export default function FinishedGoodsUserPage() {
 
     setCart((prev) => [...prev, cartItem]);
     
+  };
+
+  const handleCartQuantityChange = (product, quantity) => {
+    const productId = Number(product.id);
+    if (quantity < 1) {
+      setCart((current) => current.filter((item) => Number(item.finished_good_id) !== productId));
+      return;
+    }
+    const item = cartByProductId.get(productId);
+    if (!item) return;
+    const availablePairs = getAvailableQty(product);
+    const pairsPerCarton = Number(product.inner_boxes_per_outer_box || 0);
+    const maxQuantity =
+      item.orderBy === "cartons" && pairsPerCarton > 0
+        ? Math.floor(availablePairs / pairsPerCarton)
+        : availablePairs;
+    if (quantity > maxQuantity) return;
+    setCart((current) =>
+      current.map((cartItem) =>
+        Number(cartItem.finished_good_id) === productId
+          ? { ...cartItem, qty_ordered: quantity }
+          : cartItem
+      )
+    );
   };
 
   const totalCartItems = cart.reduce(
@@ -749,18 +847,11 @@ export default function FinishedGoodsUserPage() {
               ))}
             </select>
 
-            <select
-              value={filters.series}
-              onChange={(e) => setFilters((f) => ({ ...f, series: e.target.value }))}
-              className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            >
-              <option value="">All Series</option>
-              {seriesList.map((series) => (
-                <option key={series} value={series}>
-                  {series}
-                </option>
-              ))}
-            </select>
+            <MultiSeriesFilter
+              options={seriesList}
+              values={filters.series}
+              onChange={(series) => setFilters((current) => ({ ...current, series }))}
+            />
 
             <select
               value={filters.stock}
@@ -789,7 +880,7 @@ export default function FinishedGoodsUserPage() {
 
             <button
               onClick={() =>
-                setFilters({ search: "", size: "", stock: "all", series: "", commission: "all", nClassification: "all" })
+                setFilters(DEFAULT_FILTERS)
               }
               className="px-4 py-2 mx-10 bg-black text-white rounded-xl text-sm font-medium hover:bg-slate-200 transition-all"
             >
@@ -812,8 +903,9 @@ export default function FinishedGoodsUserPage() {
                 key={variants.map((variant) => variant.id).join("-")}
                 variants={variants}
                 onAddToCart={handleAddToCart}
+                onUpdateCartQuantity={handleCartQuantityChange}
                 onProductInterest={trackProductInterest}
-                cartProductIds={cartProductIds}
+                cartByProductId={cartByProductId}
                 user={user}
               />
             ))}

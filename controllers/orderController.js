@@ -6372,6 +6372,12 @@ const prepareDeliveryNote = async (req, res, next) => {
     }
 
     let deliveryNoteNumber = order.delivery_note_number;
+    const requestedWarehouseId = Number(req.body?.warehouse_id || 0);
+    const existingOnly = req.body?.existing_only === true;
+    const singleExistingWarehouse =
+      existingOnly &&
+      Number.isInteger(requestedWarehouseId) &&
+      requestedWarehouseId > 0;
     const supportsPerWarehouseDeliveryNotes = await hasTable(
       'order_warehouse_delivery_notes'
     );
@@ -6392,7 +6398,7 @@ const prepareDeliveryNote = async (req, res, next) => {
     }
 
     const capabilities = await getWarehouseAllocationCapabilities();
-    if (status !== 'DELIVERED') {
+    if (status !== 'DELIVERED' && !existingOnly) {
       await ensurePlannedWarehouseAllocations(client, order.id, req.user.id);
       if (status === 'PACKED' && capabilities.supportsPackedQuantity) {
         await client.query(
@@ -6413,6 +6419,128 @@ const prepareDeliveryNote = async (req, res, next) => {
       order.id,
       capabilities
     );
+
+    if (singleExistingWarehouse) {
+      const targetFulfillment = (
+        preparedOrder.warehouse_fulfillments || []
+      ).find(
+        (fulfillment) =>
+          Number(fulfillment.warehouse_id) === requestedWarehouseId
+      );
+      if (!targetFulfillment) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'The selected warehouse DN was not found.',
+        });
+      }
+
+      const pendingItems = (targetFulfillment.items || []).filter(
+        (item) =>
+          String(item.allocation_status || '').toUpperCase() === 'PLANNED' &&
+          Number(item.quantity || 0) > 0
+      );
+      if (!pendingItems.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message:
+            'This warehouse DN has no remaining planned quantity to print.',
+        });
+      }
+
+      const pendingAllocationIds = new Set(
+        pendingItems.map((item) => Number(item.allocation_id))
+      );
+      preparedOrder.items = (preparedOrder.items || [])
+        .map((item) => ({
+          ...item,
+          warehouse_allocations: (item.warehouse_allocations || []).filter(
+            (allocation) =>
+              Number(allocation.warehouse_id) === requestedWarehouseId &&
+              String(allocation.allocation_status || '').toUpperCase() ===
+                'PLANNED' &&
+              pendingAllocationIds.has(Number(allocation.id))
+          ),
+        }))
+        .filter((item) => item.warehouse_allocations.length > 0);
+
+      const pendingPairs = pendingItems.reduce(
+        (sum, item) => sum + Number(item.quantity || 0),
+        0
+      );
+      const pendingCartons = pendingItems.reduce((sum, item) => {
+        const pairsPerCarton = Number(item.pairs_per_carton || 0);
+        return (
+          sum +
+          (pairsPerCarton > 0
+            ? Number(item.quantity || 0) / pairsPerCarton
+            : 0)
+        );
+      }, 0);
+      const remainingFulfillment = {
+        ...targetFulfillment,
+        items: pendingItems,
+        pairs: pendingPairs,
+        cartons: pendingCartons,
+        delivered_pairs: 0,
+        pending_pairs: pendingPairs,
+      };
+      preparedOrder.warehouse_fulfillments = [remainingFulfillment];
+      preparedOrder.warehouse_print_groups = [remainingFulfillment];
+      preparedOrder.warehouse_delivery_note_numbers = [
+        targetFulfillment.delivery_note_number ||
+          targetFulfillment.warehouse_slip_number,
+      ].filter(Boolean);
+    } else if (existingOnly) {
+      const existingFulfillments = (
+        preparedOrder.warehouse_fulfillments || []
+      ).filter(
+        (fulfillment) =>
+          !['VOID', 'REASSIGNED'].includes(
+            String(fulfillment.status || '').toUpperCase()
+          ) &&
+          (fulfillment.items || []).some((item) =>
+            ['PLANNED', 'DEDUCTED'].includes(
+              String(item.allocation_status || '').toUpperCase()
+            )
+          )
+      );
+      if (!existingFulfillments.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: 'This order has no saved warehouse DNs to reprint.',
+        });
+      }
+
+      const existingWarehouseIds = new Set(
+        existingFulfillments.map((fulfillment) =>
+          Number(fulfillment.warehouse_id)
+        )
+      );
+      preparedOrder.items = (preparedOrder.items || [])
+        .map((item) => ({
+          ...item,
+          warehouse_allocations: (item.warehouse_allocations || []).filter(
+            (allocation) =>
+              existingWarehouseIds.has(Number(allocation.warehouse_id)) &&
+              ['PLANNED', 'DEDUCTED'].includes(
+                String(allocation.allocation_status || '').toUpperCase()
+              )
+          ),
+        }))
+        .filter((item) => item.warehouse_allocations.length > 0);
+      preparedOrder.warehouse_fulfillments = existingFulfillments;
+      preparedOrder.warehouse_print_groups = existingFulfillments;
+      preparedOrder.warehouse_delivery_note_numbers = existingFulfillments
+        .map(
+          (fulfillment) =>
+            fulfillment.delivery_note_number ||
+            fulfillment.warehouse_slip_number
+        )
+        .filter(Boolean);
+    }
 
     await client.query('COMMIT');
     clearCache();
@@ -6435,6 +6563,10 @@ const prepareDeliveryNote = async (req, res, next) => {
       metadata: {
         order_number: order.id,
         delivery_note_number: deliveryNoteNumber,
+        existing_pending_warehouse_only: existingOnly,
+        requested_warehouse_id: singleExistingWarehouse
+          ? requestedWarehouseId
+          : null,
         warehouse_delivery_note_numbers:
           preparedOrder.warehouse_delivery_note_numbers || [],
         warehouse_slips: preparedOrder.warehouse_fulfillments,

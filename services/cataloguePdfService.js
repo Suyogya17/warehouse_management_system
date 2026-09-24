@@ -862,11 +862,15 @@
         ? 'non-commission'
         : 'percentage-and-non-commission';
     const modeName = options.mode === 'offers' ? 'offer-gallery' : 'product-gallery';
+    const audienceName =
+      options.adminJpgScope === 'hidden_or_out_of_stock'
+        ? 'admin-hidden-or-out-of-stock'
+        : 'dealer-open';
 
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${modeName}-${productTypeName}-jpg-collages.zip"`
+      `attachment; filename="${modeName}-${audienceName}-${productTypeName}-jpg-collages.zip"`
     );
     res.setHeader('Cache-Control', 'no-store');
     archive.pipe(res);

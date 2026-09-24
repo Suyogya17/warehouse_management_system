@@ -539,22 +539,35 @@ export default function ProductPercentagePage() {
     }
   };
 
-  const updateAllocationPublication = async (product, nextStatus) => {
+  const updateAllocationPublication = async (
+    product,
+    nextStatus,
+    visibilityMode = null,
+    selectedUserId = null
+  ) => {
     try {
       setPublicationUpdatingId(Number(product.id));
       const result = await api.updateProductPercentagePublication(
         product.id,
         nextStatus,
-        token
+        token,
+        visibilityMode,
+        selectedUserId
       );
       await load();
       announceDataRefresh("finished-goods");
       showToast({
         tone: "success",
         title:
-          nextStatus === "ACTIVE"
-            ? "Product shown to dealers"
-            : "Product hidden from dealers",
+          visibilityMode === "PUBLIC"
+            ? "Public remainder opened"
+            : visibilityMode === "SELECTED_DEALER"
+              ? "Opened for one dealer"
+            : visibilityMode === "ALLOCATED_ONLY"
+              ? "Opened for assigned dealers"
+              : nextStatus === "ACTIVE"
+                ? "Product shown to dealers"
+                : "Product hidden from dealers",
         message: result.message,
       });
     } catch (error) {
@@ -1137,6 +1150,25 @@ export default function ProductPercentagePage() {
               const savedPublicationStatus = String(
                 product.allocation_publication_status || "ACTIVE"
               ).toUpperCase();
+              const allocationIsPublic =
+                savedPublicationStatus === "ACTIVE" &&
+                savedAllocationScope !== "EXCLUSIVE" &&
+                Number(product.is_visible || 0) === 1;
+              const openedAssignedTargets = targets.filter(
+                (target) => Number(target.can_view || 0) === 1
+              );
+              const oneDealerOnly =
+                savedPublicationStatus === "ACTIVE" &&
+                !allocationIsPublic &&
+                openedAssignedTargets.length === 1;
+              const openedDealerName = oneDealerOnly
+                ? openedAssignedTargets[0]?.user_name ||
+                  openedAssignedTargets[0]?.user_email ||
+                  "one dealer"
+                : "";
+              const controlledPublicBalanceReady =
+                savedAllocationScope !== "CONTROLLED" ||
+                publicRemainingPairs > 0;
               const hasRestorableSnapshot = allocationHistory.some(
                 (history) =>
                   Number(history.finished_good_id) === Number(product.id) &&
@@ -1190,7 +1222,11 @@ export default function ProductPercentagePage() {
                           }
                         >
                           {savedPublicationStatus === "ACTIVE"
-                            ? "Allocated · active"
+                            ? allocationIsPublic
+                              ? "Public remainder · open"
+                              : oneDealerOnly
+                                ? `Only ${openedDealerName}`
+                              : "Assigned dealers only"
                             : savedPublicationStatus === "SCHEDULED"
                               ? `Scheduled${product.allocation_publish_at ? ` · ${formatDate(product.allocation_publish_at)}` : ""}`
                               : "Allocation draft"}
@@ -1276,7 +1312,28 @@ export default function ProductPercentagePage() {
                                 </span>
                               </div>
                             </div>
-                            <div className="mt-2 flex justify-end">
+                            <div className="mt-2 flex flex-wrap justify-end gap-2">
+                              {!allocationIsPublic ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="secondary"
+                                  disabled={
+                                    publicationUpdatingId === Number(product.id)
+                                  }
+                                  title={`Show this product only to ${target.user_name || target.user_email}`}
+                                  onClick={() =>
+                                    updateAllocationPublication(
+                                      product,
+                                      "ACTIVE",
+                                      "SELECTED_DEALER",
+                                      Number(target.user_id)
+                                    )
+                                  }
+                                >
+                                  Open only for this dealer
+                                </Button>
+                              ) : null}
                               <Button
                                 type="button"
                                 size="sm"
@@ -1366,36 +1423,118 @@ export default function ProductPercentagePage() {
                   </div>
                   {targets.length ? (
                     <div className="mt-3 border-t border-slate-200 pt-3">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={
-                          savedPublicationStatus === "ACTIVE"
-                            ? "secondary"
-                            : "primary"
-                        }
-                        disabled={
-                          publicationUpdatingId === Number(product.id)
-                        }
-                        onClick={() =>
-                          updateAllocationPublication(
-                            product,
-                            savedPublicationStatus === "ACTIVE"
-                              ? "DRAFT"
-                              : "ACTIVE"
-                          )
-                        }
-                      >
-                        {publicationUpdatingId === Number(product.id)
-                          ? "Updating visibility…"
-                          : savedPublicationStatus === "ACTIVE"
-                            ? "Hide product"
-                            : "Show product to dealers"}
-                      </Button>
+                      <p className="text-xs font-bold text-slate-800">
+                        Dealer visibility
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {savedPublicationStatus !== "ACTIVE" ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={publicationUpdatingId === Number(product.id)}
+                            onClick={() =>
+                              updateAllocationPublication(
+                                product,
+                                "ACTIVE",
+                                "ALLOCATED_ONLY"
+                              )
+                            }
+                          >
+                            {publicationUpdatingId === Number(product.id)
+                              ? "Updating visibility…"
+                              : "Open for assigned dealers only"}
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            disabled={publicationUpdatingId === Number(product.id)}
+                            onClick={() =>
+                              updateAllocationPublication(product, "DRAFT", "DRAFT")
+                            }
+                          >
+                            Hide from all dealers
+                          </Button>
+                        )}
+                        {savedPublicationStatus === "ACTIVE" &&
+                        !allocationIsPublic &&
+                        openedAssignedTargets.length < targets.length ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            disabled={publicationUpdatingId === Number(product.id)}
+                            onClick={() =>
+                              updateAllocationPublication(
+                                product,
+                                "ACTIVE",
+                                "ALLOCATED_ONLY"
+                              )
+                            }
+                          >
+                            Open for all assigned dealers
+                          </Button>
+                        ) : null}
+                        {savedPublicationStatus === "ACTIVE" &&
+                        !allocationIsPublic ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            disabled={
+                              publicationUpdatingId === Number(product.id) ||
+                              savedAllocationScope === "EXCLUSIVE" ||
+                              !controlledPublicBalanceReady
+                            }
+                            title={
+                              savedAllocationScope === "EXCLUSIVE"
+                                ? "Edit allocation and choose Controlled release or Private quantity + public remainder first."
+                                : !controlledPublicBalanceReady
+                                  ? "Set a public CTN/pairs balance in Edit allocation before opening this product to other dealers."
+                                  : "Open the public remainder to other permitted dealers."
+                            }
+                            onClick={() =>
+                              updateAllocationPublication(
+                                product,
+                                "ACTIVE",
+                                "PUBLIC"
+                              )
+                            }
+                          >
+                            Open remainder for all dealers
+                          </Button>
+                        ) : null}
+                        {allocationIsPublic ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            disabled={publicationUpdatingId === Number(product.id)}
+                            onClick={() =>
+                              updateAllocationPublication(
+                                product,
+                                "ACTIVE",
+                                "ALLOCATED_ONLY"
+                              )
+                            }
+                          >
+                            Make assigned-only again
+                          </Button>
+                        ) : null}
+                      </div>
                       <p className="mt-2 text-[11px] text-slate-500">
-                        {savedPublicationStatus === "ACTIVE"
-                          ? "Hiding keeps every dealer allocation and previous order unchanged."
-                          : "The saved allocation stays hidden until you show it to assigned dealers."}
+                        {savedPublicationStatus !== "ACTIVE"
+                          ? "This allocation is saved but hidden. Open it only for the dealers you assigned when you are ready."
+                          : allocationIsPublic
+                            ? "Assigned dealers keep their own balance. Other permitted dealers can use only the public remainder."
+                            : oneDealerOnly
+                              ? `Only ${openedDealerName} can currently see and order this product. Use “Open for assigned dealers only” when the other assigned dealers should also see it.`
+                            : savedAllocationScope === "EXCLUSIVE"
+                              ? "Only the assigned dealers can see and order this product. Change the allocation mode before opening it to everyone else."
+                              : !controlledPublicBalanceReady
+                                ? "Only assigned dealers can see it. Add a public CTN/pairs balance in Edit allocation before opening it to everyone else."
+                                : "Only assigned dealers can see it now. You can open the public remainder to other permitted dealers later."}
                       </p>
                     </div>
                   ) : null}

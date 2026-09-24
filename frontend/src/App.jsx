@@ -45,6 +45,7 @@ const ImportTrackingPage = lazy(() => import("./pages/ImportTrackingPage"));
 const OffersPage = lazy(() => import("./pages/OffersPage"));
 const GalleryPage = lazy(() => import("./pages/GalleryPage"));
 const ChatPage = lazy(() => import("./pages/ChatPage"));
+const PartyOrderReportPage = lazy(() => import("./pages/PartyOrderReportPage"));
 
 const PageFallback = () => <NepchaLoader />;
 
@@ -170,6 +171,15 @@ export default function App() {
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
               {withSuspense(<AnalyticsPage />)}
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="party-order-report"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              {withSuspense(<PartyOrderReportPage />)}
             </ProtectedRoute>
           }
         />

@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const ctrl = require("../controllers/analyticsController");
 const productIntelligence = require("../controllers/productIntelligenceController");
+const partyOrderReport = require("../controllers/partyOrderReportController");
 const { authenticate, authorize } = require("../middleware/authMiddleware");
 const { cacheResponse } = require("../middleware/cacheMiddleware");
 
@@ -16,6 +17,7 @@ router.get("/sales/product/:id", cacheResponse(15000), ctrl.getProductSales);
 router.get("/dealers/product-orders", cacheResponse(15000), ctrl.getDealerProductOrders);
 router.get("/dealers/detail", cacheResponse(15000), ctrl.getDealerDetail);
 router.get("/dealers", cacheResponse(30000), ctrl.getDealers);
+router.get("/party-order-report", cacheResponse(10000), partyOrderReport.getPartyOrderReport);
 router.get("/users", cacheResponse(30000), ctrl.getUsers);
 router.get("/support", cacheResponse(30000), ctrl.getSupport);
 

@@ -90,6 +90,10 @@ export default function ProductDisplayPage() {
   const [featuredSelection, setFeaturedSelection] = useState([]);
   const [featuredProductSearch, setFeaturedProductSearch] = useState("");
   const [savingFeatured, setSavingFeatured] = useState(false);
+  const [customCarouselSlides, setCustomCarouselSlides] = useState([]);
+  const [customCarouselTitle, setCustomCarouselTitle] = useState("");
+  const [customCarouselFile, setCustomCarouselFile] = useState(null);
+  const [savingCustomCarouselSlide, setSavingCustomCarouselSlide] = useState(false);
   const [savingOrder, setSavingOrder] = useState(false);
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -100,14 +104,16 @@ export default function ProductDisplayPage() {
   const loadItems = useCallback(async () => {
     if (!isAuthorized) return;
 
-    const [productsResult, permissionsResult, usersResult] = await Promise.all([
+    const [productsResult, permissionsResult, usersResult, carouselSlidesResult] = await Promise.all([
       api.getFinishedGoods(token),
       api.getPermissions(token),
       api.getUsers(token),
+      api.getDashboardCarouselSlides(token),
     ]);
     setItems(productsResult.data || []);
     setPermissions(permissionsResult.data || []);
     setUsers((usersResult.data || []).filter((item) => managedUserRoles.has(item.role)));
+    setCustomCarouselSlides(carouselSlidesResult.data || []);
   }, [isAuthorized, token]);
 
   useEffect(() => {
@@ -453,6 +459,40 @@ export default function ProductDisplayPage() {
       });
     } finally {
       setSavingFeatured(false);
+    }
+  };
+
+  const uploadCustomCarouselSlide = async () => {
+    if (!customCarouselFile) {
+      showToast({ tone: "error", title: "Choose an image", message: "Select a JPG, PNG, WebP, or AVIF image from your computer first." });
+      return;
+    }
+    try {
+      setSavingCustomCarouselSlide(true);
+      const payload = new FormData();
+      payload.append("image", customCarouselFile);
+      payload.append("title", customCarouselTitle);
+      const result = await api.createDashboardCarouselSlide(payload, token);
+      setCustomCarouselSlides((current) => [...current, result.data]);
+      setCustomCarouselTitle("");
+      setCustomCarouselFile(null);
+      announceDataRefresh("dashboard");
+      showToast({ tone: "success", title: "Carousel image uploaded", message: "This image will appear on the customer dashboard without changing a product photo." });
+    } catch (error) {
+      showToast({ tone: "error", title: "Upload failed", message: error.data?.message || error.message });
+    } finally {
+      setSavingCustomCarouselSlide(false);
+    }
+  };
+
+  const removeCustomCarouselSlide = async (slide) => {
+    try {
+      await api.deleteDashboardCarouselSlide(slide.id, token);
+      setCustomCarouselSlides((current) => current.filter((item) => Number(item.id) !== Number(slide.id)));
+      announceDataRefresh("dashboard");
+      showToast({ tone: "success", title: "Carousel image removed", message: "The custom dashboard image is no longer shown to customers." });
+    } catch (error) {
+      showToast({ tone: "error", title: "Removal failed", message: error.data?.message || error.message });
     }
   };
 
@@ -875,6 +915,53 @@ export default function ProductDisplayPage() {
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
                 No products selected. The USER dashboard carousel will show the newest 5 products.
               </div>
+            )}
+          </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Custom Dashboard Carousel Images"
+        subtitle="Upload a desktop image for the customer dashboard. It is separate from product images and stock."
+        icon="image"
+      >
+        <div className="grid gap-4 p-3 sm:p-5 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+          <div className="space-y-3 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/50 p-4">
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-500">Optional title</label>
+              <input
+                type="text"
+                value={customCarouselTitle}
+                onChange={(event) => setCustomCarouselTitle(event.target.value)}
+                placeholder="For example: New arrival"
+                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-500">Image from computer</label>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/avif"
+                onChange={(event) => setCustomCarouselFile(event.target.files?.[0] || null)}
+                className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-white file:px-3 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 file:shadow-sm"
+              />
+              <p className="mt-2 text-xs text-slate-500">JPG, PNG, WebP, or AVIF. The site converts it to an optimized image.</p>
+            </div>
+            <Button type="button" icon="upload" onClick={uploadCustomCarouselSlide} disabled={savingCustomCarouselSlide}>
+              {savingCustomCarouselSlide ? "Uploading..." : "Upload to carousel"}
+            </Button>
+          </div>
+
+          <div className="min-w-0 space-y-2">
+            <p className="text-sm font-semibold text-slate-900">Uploaded custom images</p>
+            {customCarouselSlides.length ? customCarouselSlides.map((slide) => (
+              <div key={slide.id} className="flex min-w-0 items-center gap-3 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
+                <img src={`${APP_BASE_URL}${slide.image_url}`} alt={slide.title || "Custom carousel slide"} className="h-14 w-20 rounded-lg object-cover" />
+                <p className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-800">{slide.title || "Custom carousel image"}</p>
+                <Button type="button" size="sm" variant="danger" icon="delete" onClick={() => removeCustomCarouselSlide(slide)}>Remove</Button>
+              </div>
+            )) : (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-sm text-slate-500">No custom carousel images uploaded.</div>
             )}
           </div>
         </div>

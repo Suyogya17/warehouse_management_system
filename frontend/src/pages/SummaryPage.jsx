@@ -35,7 +35,7 @@ const getItemCartons = (item) => {
   return pairsPerCarton > 0 ? pairs / pairsPerCarton : 0;
 };
 
-const emptyStatusTotals = () => ({ pairs: 0, cartons: 0, orders: new Set() });
+const emptyStatusTotals = () => ({ pairs: 0, cartons: 0, orders: new Set(), details: [] });
 
 const isInRange = (dateStr, from, to) => {
   if (!dateStr) return false;
@@ -62,6 +62,61 @@ const formatWarehouseTotals = (warehouseTotals = [], unit = "pairs") =>
         .join(", ")
     : "-";
 
+const uniqueNames = (values = []) => [...new Set(values.filter(Boolean))];
+
+function StatusDetailsModal({ status, totals, details, onClose }) {
+  if (!status) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/55 p-3 backdrop-blur-sm" onMouseDown={onClose}>
+      <div className="max-h-[92vh] w-full max-w-7xl overflow-hidden rounded-2xl bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <StatusBadge tone={statusTone[status]}>{status}</StatusBadge>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Matching order details</p>
+            </div>
+            <h2 className="mt-2 text-xl font-semibold text-slate-950">
+              {formatNumber(totals?.pairs)} pairs · {formatNumber(totals?.cartons)} carton
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">{details.length} matching product line{details.length === 1 ? "" : "s"} from the current date and search filters.</p>
+          </div>
+          <Button variant="secondary" onClick={onClose}>Close</Button>
+        </div>
+
+        <div className="max-h-[73vh] overflow-auto">
+          <table className="w-full min-w-[1450px] border-collapse text-left text-sm">
+            <thead className="sticky top-0 z-10 bg-indigo-50 text-xs uppercase tracking-wide text-slate-700">
+              <tr>
+                {["Order / date", "Party", "Product", "Quantity", "Order placed by", "Confirmed by", "Packed by", "Delivered by", "Warehouse / DN", "Notes"].map((label) => (
+                  <th key={label} className="border-b border-slate-300 px-4 py-3">{label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200">
+              {details.map((detail) => (
+                <tr key={`${detail.order_id}-${detail.order_item_id}`} className="align-top hover:bg-slate-50">
+                  <td className="px-4 py-3"><p className="font-bold text-slate-950">#{detail.order_id}</p><p className="mt-1 whitespace-nowrap text-xs text-slate-500">{formatDate(detail.created_at)}</p></td>
+                  <td className="px-4 py-3 font-semibold text-slate-900">{detail.customer_name}</td>
+                  <td className="px-4 py-3"><p className="font-semibold text-slate-900">{detail.finished_good_id} - {detail.product_name}</p><p className="mt-1 text-xs text-slate-500">{detail.article_code} · {detail.color || "No color"} · {detail.size || "No size"}</p></td>
+                  <td className="px-4 py-3"><p className="font-bold text-slate-900">{formatNumber(detail.pairs)} pairs</p><p className="text-xs text-slate-500">{formatNumber(detail.cartons)} carton</p></td>
+                  <td className="px-4 py-3"><p className="font-medium text-slate-900">{detail.created_by_name || "Unknown"}</p></td>
+                  <td className="px-4 py-3"><p className="font-medium text-slate-900">{detail.confirmed_by_name || "Not confirmed"}</p>{detail.confirmed_at ? <p className="mt-1 text-xs text-slate-500">{formatDate(detail.confirmed_at)}</p> : null}</td>
+                  <td className="px-4 py-3"><p className="font-medium text-slate-900">{detail.packed_by_name || "Not packed"}</p>{detail.packed_at ? <p className="mt-1 text-xs text-slate-500">{formatDate(detail.packed_at)}</p> : null}</td>
+                  <td className="px-4 py-3"><p className="font-medium text-slate-900">{detail.delivered_by_names.length ? detail.delivered_by_names.join(", ") : "Not delivered"}</p>{detail.delivered_at ? <p className="mt-1 text-xs text-slate-500">{formatDate(detail.delivered_at)}</p> : null}</td>
+                  <td className="px-4 py-3"><p className="font-medium text-slate-900">{detail.warehouse_names.length ? detail.warehouse_names.join(", ") : "Not assigned"}</p><p className="mt-1 text-xs text-slate-500">{detail.delivery_note_numbers.length ? detail.delivery_note_numbers.join(", ") : "DN not assigned"}</p></td>
+                  <td className="max-w-xs px-4 py-3 text-xs text-slate-600">{detail.cancellation_reason || detail.notes || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!details.length ? <div className="p-10 text-center text-sm text-slate-500">No matching {status.toLowerCase()} order details.</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SummaryPage() {
   const { token }     = useAuth();
   const { showToast } = useToast();
@@ -69,6 +124,7 @@ export default function SummaryPage() {
   const [orders, setOrders]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch]   = useState("");
+  const [selectedStatus, setSelectedStatus] = useState("");
 
   const today = toDateInputValue();
   const [fromDate, setFromDate] = useState(today);
@@ -143,6 +199,37 @@ export default function SummaryPage() {
           statusTotals.pairs   += pairs;
           statusTotals.cartons += getItemCartons(item);
           statusTotals.orders.add(order.id);
+          const allocations = item.warehouse_allocations || [];
+          statusTotals.details.push({
+            order_id: order.id,
+            order_item_id: item.id,
+            created_at: order.created_at,
+            customer_name: customerName,
+            created_by_name: createdBy,
+            finished_good_id: item.finished_good_id,
+            product_name: productName,
+            article_code: item.article_code || "-",
+            color: item.color || "",
+            size: item.size || "",
+            pairs,
+            cartons: getItemCartons(item),
+            confirmed_by_name: order.confirmed_by_name || "",
+            confirmed_at: order.confirmed_at,
+            packed_by_name: order.packed_by_name || "",
+            packed_at: order.packed_at,
+            delivered_by_names: uniqueNames([
+              order.delivered_by_name,
+              ...allocations.map((allocation) => allocation.delivered_by_name),
+            ]),
+            delivered_at: order.delivered_at,
+            warehouse_names: uniqueNames(allocations.map((allocation) => allocation.warehouse_name)),
+            delivery_note_numbers: uniqueNames([
+              order.delivery_note_number,
+              ...(order.warehouse_delivery_note_numbers || []),
+            ]),
+            notes: order.notes || "",
+            cancellation_reason: order.cancellation_reason || "",
+          });
         });
       });
 
@@ -208,6 +295,13 @@ export default function SummaryPage() {
       ),
     [filteredRows]
   );
+
+  const selectedStatusDetails = useMemo(() => {
+    if (!selectedStatus) return [];
+    return filteredRows
+      .flatMap((row) => row[selectedStatus]?.details || [])
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  }, [filteredRows, selectedStatus]);
 
   // ── helpers ───────────────────────────────────────────────
   const formatQty = (totals, unit = "pairs") => (
@@ -615,30 +709,19 @@ export default function SummaryPage() {
                 </p>
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
 
-                  <div className="rounded-xl bg-white border border-slate-200 px-3 py-2.5 space-y-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">PENDING</p>
-                    {formatTotalQty(pageTotals.PENDING)}
-                  </div>
-
-                  <div className="rounded-xl bg-white border border-slate-200 px-3 py-2.5 space-y-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Confirmed</p>
-                    {formatTotalQty(pageTotals.CONFIRMED)}
-                  </div>
-
-                  <div className="rounded-xl bg-white border border-slate-200 px-3 py-2.5 space-y-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Packed</p>
-                    {formatTotalQty(pageTotals.PACKED)}
-                  </div>
-
-                  <div className="rounded-xl bg-white border border-slate-200 px-3 py-2.5 space-y-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Delivered</p>
-                    {formatTotalQty(pageTotals.DELIVERED)}
-                  </div>
-
-                  <div className="rounded-xl bg-white border border-slate-200 px-3 py-2.5 space-y-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Cancelled</p>
-                    {formatTotalQty(pageTotals.CANCELLED)}
-                  </div>
+                  {TRACKED_STATUSES.map((status) => (
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => setSelectedStatus(status)}
+                      className="group rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left transition hover:-translate-y-0.5 hover:border-indigo-400 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-indigo-100"
+                      title={`View ${status.toLowerCase()} order details`}
+                    >
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 group-hover:text-indigo-600">{status}</p>
+                      {formatTotalQty(pageTotals[status])}
+                      <p className="mt-2 text-[10px] font-bold uppercase tracking-wide text-indigo-600">View who and orders</p>
+                    </button>
+                  ))}
 
                   <div className="rounded-xl bg-indigo-500 px-3 py-2.5 space-y-1 col-span-2 sm:col-span-4 lg:col-span-1">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-indigo-200">Grand Total</p>
@@ -652,6 +735,12 @@ export default function SummaryPage() {
           </>
         )}
       </SectionCard>
+      <StatusDetailsModal
+        status={selectedStatus}
+        totals={selectedStatus ? pageTotals[selectedStatus] : null}
+        details={selectedStatusDetails}
+        onClose={() => setSelectedStatus("")}
+      />
     </div>
   );
 }

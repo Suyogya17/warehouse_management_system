@@ -84,6 +84,16 @@ export default function UserOrderPage() {
       return sum + Number(pairs || 0);
     }, 0);
 
+  const getTotalCartons = (cartData) =>
+    cartData.reduce((sum, item) => {
+      const pairsPerCarton = Number(item.product?.inner_boxes_per_outer_box || 0);
+      const pairs =
+        item.orderBy === "cartons" && pairsPerCarton > 0
+          ? Number(item.qty_ordered || 0) * pairsPerCarton
+          : Number(item.qty_ordered || 0);
+      return sum + (pairsPerCarton > 0 ? pairs / pairsPerCarton : 0);
+    }, 0);
+
   // ─── LOAD CART ────────────────────────────────────
 
   useEffect(() => {
@@ -302,6 +312,8 @@ export default function UserOrderPage() {
   // ─── DERIVED ──────────────────────────────────────
 
   const totalItems = cart.reduce((sum, item) => sum + Number(item.qty_ordered || 0), 0);
+  const totalPairsInCart = getTotalPairs(cart);
+  const totalCartonsInCart = getTotalCartons(cart);
 
   const knownCustomers = useMemo(() => {
     if (customerHistory.length) {
@@ -557,11 +569,13 @@ export default function UserOrderPage() {
               );
             })}
 
-            <div className="flex justify-end text-sm text-slate-600 pt-1 px-5">
-              Total pairs in cart:{" "}
-              <span className="ml-1 font-bold text-indigo-600">
-                {formatNumber(getTotalPairs(cart))}
-              </span>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm">
+              <span className="font-semibold text-indigo-950">Order total</span>
+              <div className="flex items-center gap-3 font-bold text-indigo-700">
+                <span>{formatNumber(totalCartonsInCart)} CTN</span>
+                <span className="text-indigo-300">/</span>
+                <span>{formatNumber(totalPairsInCart)} pairs</span>
+              </div>
             </div>
           </div>
         )}
@@ -745,6 +759,26 @@ export default function UserOrderPage() {
 },
                 
                 { key: "status", label: "Status", render: (row) => <StatusBadge tone={statusTone[row.status]}>{row.status}</StatusBadge> },
+                {
+                  key: "delivery_notes",
+                  label: "DN Number",
+                  render: (row) => {
+                    const notes = [
+                      ...(Array.isArray(row.warehouse_delivery_note_numbers)
+                        ? row.warehouse_delivery_note_numbers
+                        : []),
+                      row.delivery_note_number,
+                    ].filter(Boolean);
+                    const uniqueNotes = [...new Set(notes)];
+                    return uniqueNotes.length ? (
+                      <div className="max-w-40 whitespace-normal text-xs font-semibold text-slate-700">
+                        {uniqueNotes.join(", ")}
+                      </div>
+                    ) : (
+                      <span className="text-slate-400">Not assigned</span>
+                    );
+                  },
+                },
                 { key: "items", label: "Items", render: renderOrderItems },
                  {
               key: "created_at",

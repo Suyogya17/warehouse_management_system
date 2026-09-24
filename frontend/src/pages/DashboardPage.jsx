@@ -559,7 +559,7 @@ function PublishedNotices({ notices = [] }) {
   );
 }
 
-function UserDashboardShowcase({ products = [], notices = [], user }) {
+function UserDashboardShowcase({ products = [], notices = [], customSlides = [], user }) {
   const [featuredIndex, setFeaturedIndex] = useState(0);
 
   const productGroups = useMemo(() => {
@@ -594,17 +594,25 @@ function UserDashboardShowcase({ products = [], notices = [], user }) {
   );
   const adminFeaturedGroups = useMemo(
     () =>
-      productGroups
-        .filter((group) => group.some((item) => Number(item.dashboard_featured) === 1))
+      products
+        .filter((item) => Number(item.is_visible) === 1 && !isActiveOffer(item) && Number(item.dashboard_featured) === 1)
         .sort((a, b) => {
-          const orderA = Math.min(...a.map((item) => Number(item.dashboard_featured_order || 999999)));
-          const orderB = Math.min(...b.map((item) => Number(item.dashboard_featured_order || 999999)));
-          return orderA - orderB;
+          return Number(a.dashboard_featured_order || 999999) - Number(b.dashboard_featured_order || 999999);
         })
+        // Each chosen FG.ID is its own slide. Do not regroup colours by article.
+        .map((item) => [item])
         .slice(0, 5),
-    [productGroups]
+    [products]
   );
-  const carouselProductGroups = adminFeaturedGroups.length ? adminFeaturedGroups : newestProductGroups;
+  const customSlideGroups = useMemo(
+    () =>
+      customSlides
+        .filter((slide) => Number(slide.is_active ?? 1) === 1)
+        .map((slide) => [{ ...slide, is_custom_carousel_slide: true }]),
+    [customSlides]
+  );
+  const productCarouselGroups = adminFeaturedGroups.length ? adminFeaturedGroups : newestProductGroups;
+  const carouselProductGroups = [...customSlideGroups, ...productCarouselGroups];
 
   useEffect(() => {
     setFeaturedIndex(0);
@@ -679,7 +687,7 @@ function UserDashboardShowcase({ products = [], notices = [], user }) {
               ))}
             </div>
             <span className="absolute left-4 top-4 rounded-full bg-white/90 px-3 py-1 text-xs font-bold text-slate-700 shadow-sm">
-              {adminFeaturedGroups.length ? "Featured" : "Newest"}
+              {featured?.is_custom_carousel_slide ? "Custom" : adminFeaturedGroups.length ? "Featured" : "Newest"}
             </span>
             {carouselProductGroups.length > 1 ? (
               <>
@@ -720,13 +728,13 @@ function UserDashboardShowcase({ products = [], notices = [], user }) {
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-indigo-600">
-                  {adminFeaturedGroups.length ? "Featured product" : "Newest product"} {carouselProductGroups.length > 1 ? `${featuredIndex + 1} / ${carouselProductGroups.length}` : ""}
+                  {featured?.is_custom_carousel_slide ? "Custom carousel image" : adminFeaturedGroups.length ? "Featured product" : "Newest product"} {carouselProductGroups.length > 1 ? `${featuredIndex + 1} / ${carouselProductGroups.length}` : ""}
                 </p>
                 <h1 className="mt-2 break-words text-3xl font-black leading-tight text-slate-950 sm:text-4xl">
-                  {featured?.article_code || featured?.name || "Our Products"}
+                  {featured?.title || featured?.article_code || featured?.name || "Our Products"}
                 </h1>
                 <p className="mt-2 break-words text-sm font-semibold text-slate-600">
-                  {featured?.name || "Browse latest articles and available stock"}
+                  {featured?.is_custom_carousel_slide ? "Custom dashboard image" : featured?.name || "Browse latest articles and available stock"}
                 </p>
               </div>
               <Link
@@ -785,7 +793,7 @@ function UserDashboardShowcase({ products = [], notices = [], user }) {
                       )}
                     </div>
                     <p className="truncate px-2 py-1 text-[11px] font-bold text-slate-700">
-                      {slide?.article_code || slide?.name || "-"}
+              {slide?.title || slide?.article_code || slide?.name || "-"}
                     </p>
                   </button>
                 ))}
@@ -943,6 +951,7 @@ export default function DashboardPage() {
     permissions: [],
     users: [],
     advertisements: [],
+    carouselSlides: [],
   });
 
   const [search, setSearch]             = useState("");
@@ -985,6 +994,7 @@ export default function DashboardPage() {
       ["permissions", canManageVisibility ? api.getPermissions(token, { compact: 1 }) : Promise.resolve({ data: [] })],
       ["users", canManageVisibility ? api.getUsers(token) : Promise.resolve({ data: [] })],
       ["advertisements", isCustomerDashboard ? api.getAdvertisements(token) : Promise.resolve({ data: [] })],
+      ["carouselSlides", isCustomerDashboard ? api.getDashboardCarouselSlides(token) : Promise.resolve({ data: [] })],
     ];
 
     const results = await Promise.allSettled(
@@ -1569,6 +1579,7 @@ export default function DashboardPage() {
         <UserDashboardShowcase
           products={state.availability}
           notices={publishedNotices}
+          customSlides={state.carouselSlides}
           user={user}
         />
       )}

@@ -131,6 +131,13 @@ export default function DataTable({
         const number = Number(value || 0);
         return Number.isFinite(number) ? sum + number : sum;
       }, 0);
+      const secondaryTotal = summary.secondaryValue
+        ? filteredData.reduce((sum, row) => {
+            const value = summary.secondaryValue(row);
+            const number = Number(value || 0);
+            return Number.isFinite(number) ? sum + number : sum;
+          }, 0)
+        : null;
       return {
         label:
           summary.label ||
@@ -138,6 +145,8 @@ export default function DataTable({
           summary.key,
         total,
         suffix: summary.suffix || "",
+        secondaryTotal,
+        secondarySuffix: summary.secondarySuffix || "",
       };
     })
     .filter((item) => item.label);
@@ -405,6 +414,12 @@ export default function DataTable({
                   {formatNumber(item.total)}
                   {item.suffix ? ` ${item.suffix}` : ""}
                 </p>
+                {item.secondaryTotal !== null ? (
+                  <p className="mt-0.5 text-xs font-medium text-slate-500">
+                    {formatNumber(item.secondaryTotal)}
+                    {item.secondarySuffix ? ` ${item.secondarySuffix}` : ""}
+                  </p>
+                ) : null}
               </div>
             ))}
           </div>

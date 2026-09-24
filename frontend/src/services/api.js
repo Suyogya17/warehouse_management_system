@@ -534,6 +534,23 @@ export const api = {
       token
     ),
 
+  getDashboardCarouselSlides: (token) =>
+    apiRequest("/finished-goods/dashboard-carousel-slides", {}, token),
+
+  createDashboardCarouselSlide: (payload, token) =>
+    apiRequest(
+      "/finished-goods/dashboard-carousel-slides",
+      { method: "POST", body: payload },
+      token
+    ),
+
+  deleteDashboardCarouselSlide: (id, token) =>
+    apiRequest(
+      `/finished-goods/dashboard-carousel-slides/${id}`,
+      { method: "DELETE" },
+      token
+    ),
+
   updateFinishedGoodDisplayQuantity: (id, displayQuantity, token) =>
     apiRequest(
       `/finished-goods/${id}/display-quantity`,
@@ -672,12 +689,22 @@ export const api = {
       },
       token
     ),
-  updateProductPercentagePublication: (id, publicationStatus, token) =>
+  updateProductPercentagePublication: (
+    id,
+    publicationStatus,
+    token,
+    visibilityMode = null,
+    selectedUserId = null
+  ) =>
     apiRequest(
       `/permissions/percentage-allocations/${id}/publication`,
       {
         method: "PUT",
-        body: JSON.stringify({ publication_status: publicationStatus }),
+        body: JSON.stringify({
+          publication_status: publicationStatus,
+          visibility_mode: visibilityMode,
+          selected_user_id: selectedUserId,
+        }),
       },
       token
     ),
@@ -751,10 +778,10 @@ export const api = {
       token
     ),
 
-  prepareOrderDeliveryNote: (id, token) =>
+  prepareOrderDeliveryNote: (id, token, options = {}) =>
     apiRequest(
       `/orders/${id}/delivery-note/prepare`,
-      { method: "POST" },
+      { method: "POST", body: JSON.stringify(options) },
       token
     ),
 
@@ -915,6 +942,14 @@ deleteStockAdjustment: (id, token) =>
     const query = buildQueryString(params);
     return apiRequest(
       `/analytics/dealers/product-orders${query ? `?${query}` : ""}`,
+      {},
+      token
+    );
+  },
+  getPartyOrderReport: (params, token) => {
+    const query = buildQueryString(params);
+    return apiRequest(
+      `/analytics/party-order-report${query ? `?${query}` : ""}`,
       {},
       token
     );
