@@ -1342,6 +1342,7 @@ export default function OrdersPage() {
             `Phone: ${preparedOrder.customer_phone || "-"}`,
             `Address: ${preparedOrder.customer_address || "-"}`,
             `PAN: ${preparedOrder.pan_number || "-"}`,
+            `Notes: ${preparedOrder.notes || "-"}`,
             `Transport: ${preparedOrder.transport_name || "-"}`,
           ].join("\n");
           const tableRows = Array.from({ length: rowsPerPage }, (_, rowIndex) => {
@@ -1810,6 +1811,7 @@ export default function OrdersPage() {
                   <strong>Phone:</strong> ${escapeHtml(preparedOrder.customer_phone || "-")}<br/>
                   <strong>Address:</strong> ${escapeHtml(preparedOrder.customer_address || "-")}<br/>
                   <strong>PAN:</strong> ${escapeHtml(preparedOrder.pan_number || "-")}<br/>
+                  <strong>Notes: </strong> ${escapeHtml(preparedOrder.notes || "-")}<br/>
                   <strong>Transport:</strong> ${escapeHtml(preparedOrder.transport_name || "-")}
                 </td>
               </tr>
@@ -2600,6 +2602,7 @@ export default function OrdersPage() {
                 );
               },
             },
+            {key: "notes", label: "Notes", minWidth: 165, render: (row) => row.notes || "-"},
             {
               key: "cancellation_reason",
               label: "Cancel Reason",

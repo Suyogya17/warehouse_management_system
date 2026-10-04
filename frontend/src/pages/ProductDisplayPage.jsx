@@ -104,16 +104,22 @@ export default function ProductDisplayPage() {
   const loadItems = useCallback(async () => {
     if (!isAuthorized) return;
 
-    const [productsResult, permissionsResult, usersResult, carouselSlidesResult] = await Promise.all([
+    const [productsResult, permissionsResult, usersResult] = await Promise.all([
       api.getFinishedGoods(token),
       api.getPermissions(token),
       api.getUsers(token),
-      api.getDashboardCarouselSlides(token),
     ]);
     setItems(productsResult.data || []);
     setPermissions(permissionsResult.data || []);
     setUsers((usersResult.data || []).filter((item) => managedUserRoles.has(item.role)));
-    setCustomCarouselSlides(carouselSlidesResult.data || []);
+
+    try {
+      const carouselSlidesResult = await api.getDashboardCarouselSlides(token);
+      setCustomCarouselSlides(carouselSlidesResult.data || []);
+    } catch (error) {
+      console.error("Product display carousel slides load failed:", error);
+      setCustomCarouselSlides([]);
+    }
   }, [isAuthorized, token]);
 
   useEffect(() => {
