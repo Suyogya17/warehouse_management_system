@@ -195,6 +195,20 @@ export const api = {
       token
     ),
 
+  setDashboardProductsPermission: (id, enabled, token) =>
+    apiRequest(
+      `/auth/users/${id}/dashboard-products-permission`,
+      { method: "PUT", body: JSON.stringify({ enabled }) },
+      token
+    ),
+
+  setWarehouseBillingPermission: (id, enabled, token) =>
+    apiRequest(
+      `/auth/users/${id}/warehouse-billing-permission`,
+      { method: "PUT", body: JSON.stringify({ enabled }) },
+      token
+    ),
+
   getAdvertisements: (token) => apiRequest("/advertisements", {}, token),
 
   getNotifications: (token) =>
@@ -838,6 +852,8 @@ export const api = {
       { method: "POST", body: JSON.stringify(payload) },
       token
     ),
+  logWarehouseBilling: (id, payload, token) =>
+    apiRequest(`/orders/${id}/warehouse-billing`, { method: "POST", body: JSON.stringify(payload) }, token),
 
   updateStockBatch: (id, data, token) =>
     apiRequest(
@@ -955,6 +971,14 @@ deleteStockAdjustment: (id, token) =>
     const query = buildQueryString(params);
     return apiRequest(
       `/analytics/party-order-report${query ? `?${query}` : ""}`,
+      {},
+      token
+    );
+  },
+  getOrderShortageHistory: (params, token) => {
+    const query = buildQueryString(params);
+    return apiRequest(
+      `/analytics/order-shortage-history${query ? `?${query}` : ""}`,
       {},
       token
     );

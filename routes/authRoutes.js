@@ -8,6 +8,8 @@ const {
   deleteUser,
   listPagePermissions,
   setPagePermission,
+  setDashboardProductsPermission,
+  setWarehouseBillingPermission,
 } = require('../controllers/authController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 const { query } = require('../config/db');
@@ -45,6 +47,10 @@ router.get('/users', authenticate, authorize('ADMIN', 'CO_ADMIN'), listUsers);
 router.get('/page-permissions', authenticate, authorize('ADMIN'), listPagePermissions);
 
 router.put('/users/:id/product-visibility-permission', authenticate, authorize('ADMIN'), setPagePermission);
+
+router.put('/users/:id/dashboard-products-permission', authenticate, authorize('ADMIN'), setDashboardProductsPermission);
+
+router.put('/users/:id/warehouse-billing-permission', authenticate, authorize('ADMIN'), setWarehouseBillingPermission);
 
 // PUT /api/auth/users/:id  (ADMIN only)
 router.put('/users/:id', authenticate, authorize('ADMIN','CO_ADMIN'), updateUser);

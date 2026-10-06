@@ -3,6 +3,11 @@ const auditLog = require('../utils/auditLog');
 const { hasColumn, hasTable } = require('../utils/schemaSupport');
 const { appendFiscalInsertFields, getNepaliFiscalMeta } = require('../utils/nepaliFiscalYear');
 const { clearCache } = require('../middleware/cacheMiddleware');
+const {
+  DASHBOARD_PRODUCTS_PAGE_KEY,
+  PRODUCT_VISIBILITY_PAGE_KEY,
+  WAREHOUSE_BILLING_PAGE_KEY,
+} = require('../utils/userPagePermissions');
 const paginationUtils = require('../utils/pagination');
 const getPagePagination =
   paginationUtils.getPagePagination ||
@@ -562,6 +567,8 @@ const buildWarehouseFulfillments = (
       warehouse_id: warehouseId,
       delivery_note_number: note.delivery_note_number,
       delivery_note_status: String(note.status || 'ACTIVE').toUpperCase(),
+      billing_count: Number(note.billing_count || 0),
+      last_billed_at: note.last_billed_at || null,
       reassigned_to_delivery_note_numbers: String(
         note.reassigned_to_delivery_note_numbers || ''
       )
@@ -1231,8 +1238,11 @@ const loadWarehouseDeliveryNotes = async (client, orderIds = []) => {
   const supportsReassignment = await hasTable(
     'order_warehouse_dn_reassignments'
   );
+  const supportsBillingHistory = await hasTable('warehouse_billing_history');
   const result = await client.query(
-    `SELECT note.*, warehouse.name AS warehouse_name${
+    `SELECT note.*, warehouse.name AS warehouse_name${supportsBillingHistory ? `,
+       (SELECT COUNT(*) FROM warehouse_billing_history bill WHERE bill.order_id=note.order_id AND bill.warehouse_id=note.warehouse_id) AS billing_count,
+       (SELECT MAX(created_at) FROM warehouse_billing_history bill WHERE bill.order_id=note.order_id AND bill.warehouse_id=note.warehouse_id) AS last_billed_at` : ''}${
       supportsReassignment
         ? `, GROUP_CONCAT(DISTINCT destination.delivery_note_number
              ORDER BY destination.id SEPARATOR ', ') AS reassigned_to_delivery_note_numbers`
@@ -1566,6 +1576,21 @@ const allocateWarehouseStockForDelivery = async (client, item, userId) => {
 // ─── GET ALL ORDERS ───────────────────────────────
 const getAll = async (req, res, next) => {
   try {
+    if (req.query.billing === '1' && req.user.role === 'CO_ADMIN') {
+      const billingPermissions = await query(
+        `SELECT can_view FROM user_page_permissions
+         WHERE user_id = ? AND page_key = ? LIMIT 1`,
+        [req.user.id, WAREHOUSE_BILLING_PAGE_KEY]
+      );
+
+      if (Number(billingPermissions[0]?.can_view || 0) !== 1) {
+        return res.status(403).json({
+          success: false,
+          message: 'An admin has not granted you access to Warehouse Billing.',
+        });
+      }
+    }
+
     const [
       supportsCancellationCode,
       supportsDuplicateOrderLink,
@@ -1578,6 +1603,9 @@ const getAll = async (req, res, next) => {
       supportsOrderBsDate,
       supportsOrderFiscalYear,
       supportsParentDealer,
+      supportsCommissionFlag,
+      supportsDeliveryNotePrintedAt,
+      supportsDeliveryNotePrintCount,
     ] =
       await Promise.all([
         hasColumn('orders', 'cancellation_code'),
@@ -1591,6 +1619,9 @@ const getAll = async (req, res, next) => {
         hasColumn('orders', 'bs_date'),
         hasColumn('orders', 'bs_fiscal_year'),
         hasColumn('users', 'parent_dealer_id'),
+        hasColumn('finished_goods', 'is_commission'),
+        hasColumn('orders', 'delivery_note_printed_at'),
+        hasColumn('orders', 'delivery_note_print_count'),
       ]);
     const params = [];
     const conditions = [];
@@ -1779,7 +1810,10 @@ const getAll = async (req, res, next) => {
               o.packed_at,
               o.delivered_by,
               o.delivered_at,
+              ${supportsDeliveryNotePrintedAt ? 'o.delivery_note_printed_at' : 'NULL AS delivery_note_printed_at'},
+              ${supportsDeliveryNotePrintCount ? 'o.delivery_note_print_count' : '0 AS delivery_note_print_count'},
               u_created.name AS created_by_name,
+              u_created.email AS created_by_email,
               ${
                 supportsParentDealer
                   ? `u_created.parent_dealer_id,
@@ -1841,7 +1875,8 @@ const getAll = async (req, res, next) => {
                 fg.article_code, fg.color, fg.size,
                 fg.unit, fg.quantity AS physical_stock,
                 fg.display_quantity,
-                fg.inner_boxes_per_outer_box
+                fg.inner_boxes_per_outer_box,
+                ${supportsCommissionFlag ? 'fg.is_commission' : '0 AS is_commission'}
          FROM order_items oi
          JOIN finished_goods fg ON fg.id = oi.finished_good_id
          WHERE oi.order_id IN ${clause}
@@ -2275,6 +2310,31 @@ const getOverview = async (req, res, next) => {
 // ─── GET AVAILABILITY ─────────────────────────────
 const getAvailability = async (req, res, next) => {
   try {
+    if (req.query.dashboard === '1' && req.user.role === 'CO_ADMIN') {
+      const pagePermissions = await query(
+        `SELECT page_key, can_view, can_edit
+         FROM user_page_permissions
+         WHERE user_id = ? AND page_key IN (?, ?)`,
+        [req.user.id, DASHBOARD_PRODUCTS_PAGE_KEY, PRODUCT_VISIBILITY_PAGE_KEY]
+      );
+      const dashboardPermission = pagePermissions.find(
+        (permission) => permission.page_key === DASHBOARD_PRODUCTS_PAGE_KEY
+      );
+      const visibilityPermission = pagePermissions.find(
+        (permission) => permission.page_key === PRODUCT_VISIBILITY_PAGE_KEY
+      );
+      const allowed = dashboardPermission
+        ? Number(dashboardPermission.can_view) === 1
+        : Number(visibilityPermission?.can_edit || 0) === 1;
+
+      if (!allowed) {
+        return res.status(403).json({
+          success: false,
+          message: 'An admin has not granted you access to dashboard products.',
+        });
+      }
+    }
+
     return res.json({
       success: true,
       data: await loadAvailabilityForRequest(req),
@@ -6679,7 +6739,19 @@ const logPrint = async (req, res, next) => {
       },
     });
 
-    return res.json({ success: true });
+    const printStateRows = await query(
+      `SELECT delivery_note_printed_at, delivery_note_print_count
+       FROM orders WHERE id = ? LIMIT 1`,
+      [order.id]
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        printed_at: printStateRows[0]?.delivery_note_printed_at || null,
+        print_count: Number(printStateRows[0]?.delivery_note_print_count || 0),
+      },
+    });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     next(err);
@@ -6688,4 +6760,16 @@ const logPrint = async (req, res, next) => {
   }
 };
 
-module.exports = { getAll, getFilters, getOverview, getAvailability, getOfferPurchases, getOfferVsRegularReport, create, correctItems, updateStatus, assignDeliveryNote, correctWarehouseDeliveryNoteNumbers, reopenPacking, undoConfirmation, verifyWarehouseFulfillment, deliverWarehouseFulfillment, undoWarehouseFulfillmentDelivery, prepareDeliveryNote, logPrint };
+const logWarehouseBilling = async (req, res, next) => {
+  try {
+    if (!(await hasTable('warehouse_billing_history'))) return res.status(409).json({ success:false, message:'Run sql/add-warehouse-billing-history.sql first.' });
+    const orderId=Number(req.params.id), warehouseId=Number(req.body?.warehouse_id);
+    const rows=await query('SELECT COUNT(*) AS count FROM warehouse_billing_history WHERE order_id=? AND warehouse_id=?',[orderId,warehouseId]);
+    const count=Number(rows[0]?.count||0);
+    if(count && req.body?.confirm_rebill!==true) return res.status(409).json({success:false,message:`Bill already created ${count} time${count===1?'':'s'}. Confirm only if correcting a human error.`,data:{billing_count:count}});
+    await query('INSERT INTO warehouse_billing_history (order_id,warehouse_id,delivery_note_number,created_by,output_type,invoice_number,final_total) VALUES (?,?,?,?,?,?,?)',[orderId,warehouseId,req.body?.delivery_note_number||null,req.user.id,req.body?.output_type||'PDF',req.body?.invoice_number||null,Number(req.body?.final_total||0)]);
+    return res.json({success:true,data:{billing_count:count+1}});
+  } catch(err){ next(err); }
+};
+
+module.exports = { getAll, getFilters, getOverview, getAvailability, getOfferPurchases, getOfferVsRegularReport, create, correctItems, updateStatus, assignDeliveryNote, correctWarehouseDeliveryNoteNumbers, reopenPacking, undoConfirmation, verifyWarehouseFulfillment, deliverWarehouseFulfillment, undoWarehouseFulfillmentDelivery, prepareDeliveryNote, logPrint, logWarehouseBilling };

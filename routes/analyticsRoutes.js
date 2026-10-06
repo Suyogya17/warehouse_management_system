@@ -3,6 +3,7 @@ const ctrl = require("../controllers/analyticsController");
 const productIntelligence = require("../controllers/productIntelligenceController");
 const partyOrderReport = require("../controllers/partyOrderReportController");
 const deliveryReport = require("../controllers/deliveryReportController");
+const orderShortageHistory = require("../controllers/orderShortageHistoryController");
 const { authenticate, authorize } = require("../middleware/authMiddleware");
 const { cacheResponse } = require("../middleware/cacheMiddleware");
 
@@ -19,6 +20,7 @@ router.get("/dealers/product-orders", cacheResponse(15000), ctrl.getDealerProduc
 router.get("/dealers/detail", cacheResponse(15000), ctrl.getDealerDetail);
 router.get("/dealers", cacheResponse(30000), ctrl.getDealers);
 router.get("/party-order-report", cacheResponse(10000), partyOrderReport.getPartyOrderReport);
+router.get("/order-shortage-history", cacheResponse(10000), orderShortageHistory.getOrderShortageHistory);
 router.get("/delivery-report", cacheResponse(10000), deliveryReport.getDeliveryReport);
 router.get("/users", cacheResponse(30000), ctrl.getUsers);
 router.get("/support", cacheResponse(30000), ctrl.getSupport);

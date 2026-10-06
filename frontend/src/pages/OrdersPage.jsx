@@ -14,6 +14,7 @@ import { formatEnglishDate, formatNepaliDate, formatNumber, formatTime } from ".
 import { hasRole } from "../utils/roles";
 import Select from "react-select";
 import { Search } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 const initialForm = {
   customer_name: "",
@@ -128,6 +129,7 @@ const formatWarehouseShortage = (shortage = {}) => {
 };
 
 export default function OrdersPage() {
+  const navigate = useNavigate();
   const [orderSearch, setOrderSearch] = useState("");
   const [stockSearch, setStockSearch] = useState("");
   const { token, user } = useAuth();
@@ -1745,6 +1747,17 @@ export default function OrdersPage() {
         total + group.rows.reduce((sum, row) => sum + row.cartons, 0),
       0
     );
+    const overallPairs = groups.reduce(
+      (total, group) =>
+        total + group.rows.reduce((sum, row) => sum + row.pairs, 0),
+      0
+    );
+    const warehouseCartonBreakdown = groups
+      .map((group) => {
+        const cartons = group.rows.reduce((sum, row) => sum + row.cartons, 0);
+        return `${group.name}: ${formatPrintNumber(cartons)} CTN`;
+      })
+      .join(" · ");
     // Each actual warehouse starts on its own paper. A warehouse only continues
     // onto another paper when its own item count cannot fit safely on one A4 page.
     // Windows and macOS Chrome use slightly different print font metrics.
@@ -1765,7 +1778,7 @@ export default function OrdersPage() {
       }));
     });
 
-    const pageHtml = pages
+    let pageHtml = pages
       .map((page, pageIndex) => {
         const pagePairs = page.rows.reduce((sum, row) => sum + row.pairs, 0);
         const pageCartons = page.rows.reduce(
@@ -1791,7 +1804,11 @@ export default function OrdersPage() {
           <section class="print-page${pageIndex === pages.length - 1 ? " last" : ""}">
             <div class="page-indicator">Page ${pageIndex + 1} of ${pages.length}</div>
             <div class="warehouse-title">
-              ${escapeHtml(page.warehouseSlipNumber)} · ${escapeHtml(page.name)} · Overall Total: ${formatPrintNumber(overallCartons)} CTN
+              <div>${escapeHtml(page.warehouseSlipNumber)} · ${escapeHtml(page.name)}</div>
+              <div class="warehouse-summary">
+                All warehouses: ${escapeHtml(warehouseCartonBreakdown)}
+                · Overall total: ${formatPrintNumber(overallCartons)} CTN / ${formatPrintNumber(overallPairs)} pairs
+              </div>
             </div>
             <table class="top-grid">
               <tr>
@@ -1803,7 +1820,8 @@ export default function OrdersPage() {
                   <strong>Order Placed:</strong> ${escapeHtml(orderPlacedEnglishDate)} · BS ${escapeHtml(orderPlacedNepaliDate)} · ${escapeHtml(orderPlacedTime)}<br/>
                   <strong>Created By:</strong> ${escapeHtml(preparedOrder.created_by_name || "-")}<br/>
                   <strong>Printed:</strong> ${escapeHtml(englishDate)} · ${escapeHtml(nepaliDate)} · ${escapeHtml(currentTime)}<br/>
-                  <strong>Printed By:</strong> ${escapeHtml(user?.name || "User")}
+                  <strong>Printed By:</strong> ${escapeHtml(user?.name || "User")}<br/>
+                  <strong>Print Count:</strong> __DN_PRINT_COUNT__
                 </td>
                 <td width="48%">
                   <strong>Customer:</strong> ${escapeHtml(preparedOrder.customer_name || "-")}<br/>
@@ -1838,7 +1856,7 @@ export default function OrdersPage() {
       .join("");
 
     try {
-      await api.logOrderPrint(preparedOrder.id, token, {
+      const printResult = await api.logOrderPrint(preparedOrder.id, token, {
         print_type: "warehouse_delivery_slips",
         warehouse_groups: groups.map((group) => group.name),
         warehouse_slips: groups.map((group) => ({
@@ -1849,6 +1867,20 @@ export default function OrdersPage() {
           pairs: group.rows.reduce((sum, row) => sum + row.pairs, 0),
         })),
       });
+      const printCount = Number(printResult?.data?.print_count || 0);
+      pageHtml = pageHtml.replaceAll("__DN_PRINT_COUNT__", String(printCount));
+      setOrders((current) =>
+        current.map((currentOrder) =>
+          Number(currentOrder.id) === Number(preparedOrder.id)
+            ? {
+                ...currentOrder,
+                delivery_note_print_count: printCount,
+                delivery_note_printed_at:
+                  printResult?.data?.printed_at || currentOrder.delivery_note_printed_at,
+              }
+            : currentOrder
+        )
+      );
     } catch (error) {
       printWindow.close();
       showToast({
@@ -1871,9 +1903,10 @@ export default function OrdersPage() {
             @page { size: A4 portrait; margin: 8mm; }
             .print-page { position: relative; width: 194mm; min-height: 260mm; height: auto; overflow: visible; padding-bottom: 6mm; page-break-after: always; break-after: page; }
             .print-page.last { page-break-after: auto; break-after: auto; }
-            .page-indicator { position: absolute; top: 3px; right: 0; font-size: 14px; font-weight: 700; }
+            .page-indicator { margin: 0 0 3px; text-align: right; font-size: 14px; font-weight: 700; }
             .header { text-align: center; font-size: 26px; font-weight: 800; letter-spacing: .08em; }
             .warehouse-title { margin: 5px 0 7px; border: 2px solid #111; padding: 6px 10px; text-align: center; font-size: 18px; font-weight: 800; }
+            .warehouse-summary { margin-top: 3px; font-size: 14px; font-weight: 700; }
             table { width: 100%; border-collapse: collapse; }
             .top-grid { margin-bottom: 6px; }
             .top-grid td { border: 1px solid #111; padding: 6px 8px; font-size: 16px; line-height: 1.25; vertical-align: top; }
@@ -2768,6 +2801,14 @@ export default function OrdersPage() {
                           ? `DNs: ${warehouseDeliveryNoteNumbers.join(", ")}`
                           : "DNs: Not assigned"}
                     </small>
+                    {(row.warehouse_fulfillments || []).some((item) => Number(item.billing_count || 0) > 0) ? (
+                      <small className="block font-bold text-emerald-700">✓ Bill created</small>
+                    ) : null}
+                    {Number(row.delivery_note_print_count || 0) > 0 ? (
+                      <small className="block font-semibold text-indigo-700">
+                        Printed {Number(row.delivery_note_print_count)} {Number(row.delivery_note_print_count) === 1 ? "time" : "times"}
+                      </small>
+                    ) : null}
                     {canCorrectWarehouseSource &&
                     !row.delivery_note_number &&
                     !row.warehouse_dns_corrected &&
@@ -2866,6 +2907,15 @@ export default function OrdersPage() {
                                   <div className="mt-1 text-xs font-semibold text-slate-700">
                                     {formatNumber(fulfillment.cartons)} CTN / {formatNumber(fulfillment.pairs)} pairs
                                   </div>
+                                  {Number(fulfillment.delivered_pairs || 0) > 0 ? (
+                                    <Button
+                                      size="sm"
+                                      className="mt-2 h-auto min-h-8 w-full whitespace-normal px-2 py-1 text-xs"
+                                      onClick={() => navigate(`/warehouse-billing?order_id=${row.id}&warehouse_id=${fulfillment.warehouse_id}`)}
+                                    >
+                                      Create warehouse bill
+                                    </Button>
+                                  ) : null}
                                   {!isInactive && !isCompleted && pendingWarehouseItems.length > 0 ? (
                                     <Button
                                       size="sm"

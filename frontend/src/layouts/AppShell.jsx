@@ -6,7 +6,7 @@ import Icon from "../components/Icon";
 import NotificationWatcher from "../components/NotificationWatcher";
 import ChatWidget from "../components/ChatWidget";
 import { normalizeRole } from "../utils/roles";
-import { canManageProductVisibility } from "../utils/pagePermissions";
+import { canAccessWarehouseBilling, canManageProductVisibility } from "../utils/pagePermissions";
 import { api } from "../services/api";
 import { formatNepaliDate } from "../utils/format";
 
@@ -30,6 +30,8 @@ const navByRole = {
     { to: "/production", label: "Production", icon: "production" },
     { to: "/orders", label: "Orders", icon: "orders" },
     { to: "/party-order-report", label: "Party Order Report", icon: "ledger" },
+    { to: "/order-shortage-history", label: "Shortage History", icon: "hidden" },
+    { to: "/warehouse-billing", label: "Warehouse Billing", icon: "ledger" },
     { to: "/analytics", label: "Factory Analytics", icon: "dashboard" },
     { to: "/stock", label: "Stock", icon: "stock" },
     { to: "/warehouses", label: "Warehouses", icon: "box" },
@@ -59,6 +61,8 @@ const navByRole = {
     { to: "/production", label: "Production", icon: "production" },
     { to: "/orders", label: "Orders", icon: "orders" },
     { to: "/party-order-report", label: "Party Order Report", icon: "ledger" },
+    { to: "/order-shortage-history", label: "Shortage History", icon: "hidden" },
+    { to: "/warehouse-billing", label: "Warehouse Billing", icon: "ledger" },
     { to: "/analytics", label: "Factory Analytics", icon: "dashboard" },
     { to: "/stock", label: "Stock", icon: "stock" },
     { to: "/warehouses", label: "Warehouses", icon: "box" },
@@ -171,7 +175,7 @@ export default function AppShell() {
   const navItems = useMemo(() => {
     const items = navByRole[role] || [];
 
-    if (role !== "CO_ADMIN" || canManageProductVisibility(user)) return items;
+    if (role !== "CO_ADMIN") return items;
 
     const restrictedVisibilityRoutes = new Set([
       "/permissions",
@@ -180,7 +184,11 @@ export default function AppShell() {
       "/on-hold",
     ]);
 
-    return items.filter((item) => !restrictedVisibilityRoutes.has(item.to));
+    return items.filter((item) => {
+      if (restrictedVisibilityRoutes.has(item.to) && !canManageProductVisibility(user)) return false;
+      if (item.to === "/warehouse-billing" && !canAccessWarehouseBilling(user)) return false;
+      return true;
+    });
   }, [role, user]);
   const unreadCount = notifications.filter((item) => !item.read).length;
 

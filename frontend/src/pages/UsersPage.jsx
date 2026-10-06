@@ -10,7 +10,11 @@ import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api } from "../services/api";
 import { formatNumber, formatPrice } from "../utils/format";
-import { PRODUCT_VISIBILITY_PAGE_KEY } from "../utils/pagePermissions";
+import {
+  DASHBOARD_PRODUCTS_PAGE_KEY,
+  PRODUCT_VISIBILITY_PAGE_KEY,
+  WAREHOUSE_BILLING_PAGE_KEY,
+} from "../utils/pagePermissions";
 
 const initialForm = {
   name: "",
@@ -186,6 +190,65 @@ export default function UsersPage() {
         permission.page_key === PRODUCT_VISIBILITY_PAGE_KEY &&
         Number(permission.can_edit) === 1
     );
+
+  const dashboardPermissionFor = (id) =>
+    pagePermissions.find(
+      (permission) =>
+        Number(permission.user_id) === Number(id) &&
+        permission.page_key === DASHBOARD_PRODUCTS_PAGE_KEY
+    );
+
+  const hasDashboardProductsPermission = (id) => {
+    const explicitPermission = dashboardPermissionFor(id);
+    if (explicitPermission) return Number(explicitPermission.can_view) === 1;
+    return hasProductVisibilityPermission(id);
+  };
+
+  const toggleDashboardProductsPermission = async (row) => {
+    const enabled = !hasDashboardProductsPermission(row.id);
+
+    try {
+      await api.setDashboardProductsPermission(row.id, enabled, token);
+      await load();
+      announceDataRefresh("users");
+
+      showToast({
+        tone: "success",
+        title: enabled ? "Dashboard access granted" : "Dashboard access removed",
+        message: `${row.name || row.email} ${enabled ? "can now" : "can no longer"} see products on the dashboard.`,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Permission update failed",
+        message: error.message,
+      });
+    }
+  };
+
+  const hasWarehouseBillingPermission = (id) =>
+    pagePermissions.some(
+      (permission) =>
+        Number(permission.user_id) === Number(id) &&
+        permission.page_key === WAREHOUSE_BILLING_PAGE_KEY &&
+        Number(permission.can_view) === 1
+    );
+
+  const toggleWarehouseBillingPermission = async (row) => {
+    const enabled = !hasWarehouseBillingPermission(row.id);
+    try {
+      await api.setWarehouseBillingPermission(row.id, enabled, token);
+      await load();
+      announceDataRefresh("users");
+      showToast({
+        tone: "success",
+        title: enabled ? "Billing access granted" : "Billing access removed",
+        message: `${row.name || row.email} ${enabled ? "can now" : "can no longer"} access Warehouse Billing.`,
+      });
+    } catch (error) {
+      showToast({ tone: "error", title: "Permission update failed", message: error.message });
+    }
+  };
 
   const toggleProductVisibilityPermission = async (row) => {
     const enabled = !hasProductVisibilityPermission(row.id);
@@ -637,9 +700,33 @@ export default function UsersPage() {
               label: "Actions",
               render: (row) => {
                 const hasVisibilityAccess = hasProductVisibilityPermission(row.id);
+                const hasDashboardAccess = hasDashboardProductsPermission(row.id);
+                const hasBillingAccess = hasWarehouseBillingPermission(row.id);
 
                 return (
                   <div className="flex flex-wrap gap-2">
+                    {row.role === "CO_ADMIN" ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={hasBillingAccess ? "ghost" : "primary"}
+                        icon={hasBillingAccess ? "eyeOff" : "eye"}
+                        onClick={() => toggleWarehouseBillingPermission(row)}
+                      >
+                        {hasBillingAccess ? "Remove billing access" : "Allow billing access"}
+                      </Button>
+                    ) : null}
+                    {row.role === "CO_ADMIN" ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={hasDashboardAccess ? "ghost" : "primary"}
+                        icon={hasDashboardAccess ? "eyeOff" : "eye"}
+                        onClick={() => toggleDashboardProductsPermission(row)}
+                      >
+                        {hasDashboardAccess ? "Hide dashboard products" : "Show dashboard products"}
+                      </Button>
+                    ) : null}
                     {row.role === "CO_ADMIN" ? (
                       <Button
                         type="button"

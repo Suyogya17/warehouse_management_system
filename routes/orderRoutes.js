@@ -23,5 +23,6 @@ router.put('/:id/warehouse-fulfillments/:warehouseId/undo-delivery', authorize('
 router.put('/:id/reopen-packing', authorize('ADMIN', 'CO_ADMIN'), ctrl.reopenPacking);
 router.put('/:id/undo-confirmation', authorize('ADMIN', 'CO_ADMIN'), ctrl.undoConfirmation);
 router.post('/:id/print', authorize('ADMIN', 'CO_ADMIN'), ctrl.logPrint);
+router.post('/:id/warehouse-billing', authorize('ADMIN', 'CO_ADMIN'), ctrl.logWarehouseBilling);
 
 module.exports = router;

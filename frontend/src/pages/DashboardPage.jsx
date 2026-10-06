@@ -15,7 +15,7 @@ import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
 import { api, APP_BASE_URL } from "../services/api";
 import { formatNumber, formatProductPriceForUser } from "../utils/format";
-import { canManageProductVisibility } from "../utils/pagePermissions";
+import { canManageProductVisibility, canViewDashboardProducts } from "../utils/pagePermissions";
 import { getRoundedCartons } from "../utils/displayStock";
 import { buildVisibilitySummary } from "../utils/visibilitySummary";
 import { matchesProductNClassification } from "../utils/commission";
@@ -968,7 +968,8 @@ export default function DashboardPage() {
   const isAdmin = user.role === "ADMIN" || user.role === "CO_ADMIN";
   const isCustomerDashboard = ["USER", "ELDER"].includes(user.role);
   const canManageVisibility = canManageProductVisibility(user);
-  const canViewDashboard = isAdmin || user.role === "MEMBER";
+  const canViewProducts = canViewDashboardProducts(user);
+  const canViewDashboard = user.role === "MEMBER" || canViewProducts;
   const canViewOnHold = canManageVisibility || user.role === "MEMBER";
 
   const load = useCallback(async () => {
@@ -984,8 +985,9 @@ export default function DashboardPage() {
       ["orders", user.role !== "MEMBER" ? api.getOrders(token, { limit: 100, include_items: 0 }) : Promise.resolve({ data: [] })],
       [
         "availability",
-        canManageVisibility || user.role === "MEMBER" || isCustomerDashboard
+        canViewProducts || user.role === "MEMBER" || isCustomerDashboard
           ? api.getAvailability(token, {
+              dashboard: user.role === "CO_ADMIN" ? 1 : undefined,
               include_hidden:
                 canManageVisibility || user.role === "MEMBER" ? 1 : undefined,
             })
@@ -1018,7 +1020,7 @@ export default function DashboardPage() {
     if (Object.keys(updates).length) {
       setState((current) => ({ ...current, ...updates }));
     }
-  }, [token, user.role, canManageVisibility, isCustomerDashboard]);
+  }, [token, user.role, canManageVisibility, canViewProducts, isCustomerDashboard]);
 
   useEffect(() => { load().catch(console.error); }, [load]);
   useDataRefresh(load, "dashboard");

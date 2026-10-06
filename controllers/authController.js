@@ -4,7 +4,12 @@ const { query } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
 const { hasColumn } = require('../utils/schemaSupport');
-const { PRODUCT_VISIBILITY_PAGE_KEY, getUserPagePermissions } = require('../utils/userPagePermissions');
+const {
+  PRODUCT_VISIBILITY_PAGE_KEY,
+  DASHBOARD_PRODUCTS_PAGE_KEY,
+  WAREHOUSE_BILLING_PAGE_KEY,
+  getUserPagePermissions,
+} = require('../utils/userPagePermissions');
 const { resolveOfferAudienceUserId } = require('../utils/offerAccountLinks');
 const { clearCache } = require('../middleware/cacheMiddleware');
 const {
@@ -677,9 +682,9 @@ const listPagePermissions = async (req, res, next) => {
               u.name AS user_name, u.email, u.role
        FROM user_page_permissions upp
        JOIN users u ON u.id = upp.user_id
-       WHERE upp.page_key = ?
+       WHERE upp.page_key IN (?, ?, ?)
        ORDER BY u.name`,
-      [PRODUCT_VISIBILITY_PAGE_KEY]
+      [PRODUCT_VISIBILITY_PAGE_KEY, DASHBOARD_PRODUCTS_PAGE_KEY, WAREHOUSE_BILLING_PAGE_KEY]
     );
 
     return res.json({ success: true, data: rows });
@@ -730,6 +735,85 @@ const setPagePermission = async (req, res, next) => {
   }
 };
 
+const setDashboardProductsPermission = async (req, res, next) => {
+  try {
+    const userId = Number(req.params.id);
+    const enabled = Boolean(req.body.enabled);
+    const users = await query('SELECT id, role FROM users WHERE id = ?', [userId]);
+
+    if (!users.length) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (users[0].role !== 'CO_ADMIN') {
+      return res.status(400).json({
+        success: false,
+        message: 'Dashboard product access can only be assigned to co-admin users.',
+      });
+    }
+
+    await query(
+      `INSERT INTO user_page_permissions
+         (user_id, page_key, can_view, can_create, can_edit, can_delete)
+       VALUES (?, ?, ?, 0, 0, 0)
+       ON DUPLICATE KEY UPDATE can_view = VALUES(can_view)`,
+      [userId, DASHBOARD_PRODUCTS_PAGE_KEY, enabled ? 1 : 0]
+    );
+    clearCache();
+
+    await auditLog({
+      userId: req.user.id,
+      action: enabled ? 'GRANT_PAGE_PERMISSION' : 'REVOKE_PAGE_PERMISSION',
+      tableName: 'user_page_permissions',
+      recordId: userId,
+      detail: `${enabled ? 'Granted' : 'Revoked'} dashboard product access for user #${userId}`,
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const setWarehouseBillingPermission = async (req, res, next) => {
+  try {
+    const userId = Number(req.params.id);
+    const enabled = Boolean(req.body.enabled);
+    const users = await query('SELECT id, role FROM users WHERE id = ?', [userId]);
+
+    if (!users.length) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    if (users[0].role !== 'CO_ADMIN') {
+      return res.status(400).json({
+        success: false,
+        message: 'Warehouse billing access can only be assigned to co-admin users.',
+      });
+    }
+
+    await query(
+      `INSERT INTO user_page_permissions
+         (user_id, page_key, can_view, can_create, can_edit, can_delete)
+       VALUES (?, ?, ?, 0, 0, 0)
+       ON DUPLICATE KEY UPDATE can_view = VALUES(can_view)`,
+      [userId, WAREHOUSE_BILLING_PAGE_KEY, enabled ? 1 : 0]
+    );
+    clearCache();
+
+    await auditLog({
+      userId: req.user.id,
+      action: enabled ? 'GRANT_PAGE_PERMISSION' : 'REVOKE_PAGE_PERMISSION',
+      tableName: 'user_page_permissions',
+      recordId: userId,
+      detail: `${enabled ? 'Granted' : 'Revoked'} warehouse billing access for user #${userId}`,
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -739,4 +823,6 @@ module.exports = {
   deleteUser,
   listPagePermissions,
   setPagePermission,
+  setDashboardProductsPermission,
+  setWarehouseBillingPermission,
 };

@@ -2,6 +2,8 @@ const { query } = require('../config/db');
 const { hasTable } = require('./schemaSupport');
 
 const PRODUCT_VISIBILITY_PAGE_KEY = 'product_visibility';
+const DASHBOARD_PRODUCTS_PAGE_KEY = 'dashboard_products';
+const WAREHOUSE_BILLING_PAGE_KEY = 'warehouse_billing';
 
 const getUserPagePermissions = async (userId) => {
   const supportsPagePermissions = await hasTable('user_page_permissions');
@@ -36,6 +38,8 @@ const hasUserPagePermission = async (userId, pageKey, action = 'can_view') => {
 
 module.exports = {
   PRODUCT_VISIBILITY_PAGE_KEY,
+  DASHBOARD_PRODUCTS_PAGE_KEY,
+  WAREHOUSE_BILLING_PAGE_KEY,
   getUserPagePermissions,
   hasUserPagePermission,
 };

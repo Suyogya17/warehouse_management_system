@@ -10,6 +10,7 @@ import {
   NepchaLoader,
 } from "./components/NepchaLoader";
 import ProtectedRoute from "./components/ProtectedRoute";
+import { canAccessWarehouseBilling } from "./utils/pagePermissions";
 
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const RawMaterialsPage = lazy(() => import("./pages/RawMaterialsPage"));
@@ -46,6 +47,8 @@ const OffersPage = lazy(() => import("./pages/OffersPage"));
 const GalleryPage = lazy(() => import("./pages/GalleryPage"));
 const ChatPage = lazy(() => import("./pages/ChatPage"));
 const PartyOrderReportPage = lazy(() => import("./pages/PartyOrderReportPage"));
+const OrderShortageHistoryPage = lazy(() => import("./pages/OrderShortageHistoryPage"));
+const WarehouseBillingPage = lazy(() => import("./pages/WarehouseBillingPage"));
 
 const PageFallback = () => <NepchaLoader />;
 
@@ -183,6 +186,16 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+
+        <Route
+          path="order-shortage-history"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              {withSuspense(<OrderShortageHistoryPage />)}
+            </ProtectedRoute>
+          }
+        />
+        <Route path="warehouse-billing" element={<ProtectedRoute roles={canAccessWarehouseBilling(user) ? ["ADMIN", "CO_ADMIN"] : ["ADMIN"]}>{withSuspense(<WarehouseBillingPage />)}</ProtectedRoute>} />
 
         <Route
           path="activity-logs"

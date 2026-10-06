@@ -20,6 +20,7 @@ const toDateInputValue = (date = new Date()) => {
 const TOTAL_STOCK_MOVEMENTS = new Set([
   "PRODUCTION_IN",
   "ORDER_OUT",
+  "DELIVERY_REVERSAL",
   "ADJUSTMENT_IN",
   "ADJUSTMENT_OUT",
   "TRANSFER_IN",
@@ -33,6 +34,7 @@ const getMovementLabel = (movement) => {
 
   if (type === "PRODUCTION_IN") return "Added from production";
   if (type === "ORDER_OUT") return "Sold / delivered";
+  if (type === "DELIVERY_REVERSAL") return "Delivery reversed / stock restored";
   if (type === "ADJUSTMENT_IN" && notes.startsWith("finished goods purchase")) {
     return "Added from purchase";
   }
@@ -48,6 +50,7 @@ const getMovementLabel = (movement) => {
 
 const getMovementKind = (movement) => {
   const type = String(movement.movement_type || "").toUpperCase();
+  if (type === "DELIVERY_REVERSAL") return "IN";
   return type.endsWith("_IN") ? "IN" : "OUT";
 };
 
@@ -55,7 +58,7 @@ const getMovementReference = (movement) => {
   const parts = [];
   const type = String(movement.movement_type || "").toUpperCase();
 
-  if (type === "ORDER_OUT") {
+  if (type === "ORDER_OUT" || type === "DELIVERY_REVERSAL") {
     if (movement.delivery_note_number) parts.push(`Delivery ${movement.delivery_note_number}`);
     if (movement.order_customer_name) parts.push(`Customer: ${movement.order_customer_name}`);
   }
@@ -74,6 +77,7 @@ export default function ProductLedgerPage() {
 
   const [finishedGoods, setFinishedGoods] = useState([]);
   const [warehouseMovements, setWarehouseMovements] = useState([]);
+  const [shortageEvents, setShortageEvents] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -104,6 +108,7 @@ export default function ProductLedgerPage() {
   useEffect(() => {
     if (!selectedProduct) {
       setWarehouseMovements([]);
+      setShortageEvents([]);
       return;
     }
 
@@ -112,17 +117,29 @@ export default function ProductLedgerPage() {
     const loadLedger = async () => {
       try {
         setLoadingLedger(true);
-        const movementRes = await api.getWarehouseMovements(token, {
-          finished_good_id: selectedProduct,
-          limit: 500,
-        });
+        const [movementResult, shortageResult] = await Promise.allSettled([
+          api.getWarehouseMovements(token, {
+            finished_good_id: selectedProduct,
+            limit: 500,
+          }),
+          api.getOrderShortageHistory({ finished_good_id: selectedProduct }, token),
+        ]);
+
+        if (movementResult.status === "rejected") throw movementResult.reason;
 
         if (isActive) {
+          const movementRes = movementResult.value;
           setWarehouseMovements(movementRes.data || movementRes || []);
+          setShortageEvents(
+            shortageResult.status === "fulfilled"
+              ? shortageResult.value?.data || []
+              : []
+          );
         }
       } catch (error) {
         if (isActive) {
           setWarehouseMovements([]);
+          setShortageEvents([]);
           showToast({
             tone: "error",
             title: "Ledger failed to load",
@@ -153,7 +170,7 @@ export default function ProductLedgerPage() {
   const ledgerEntries = useMemo(() => {
     if (!selectedProduct || !selectedFG) return [];
 
-    const rows = warehouseMovements
+    const movementRows = warehouseMovements
       .filter((movement) => TOTAL_STOCK_MOVEMENTS.has(String(movement.movement_type || "").toUpperCase()))
       .map((movement) => {
         const qty = Number(movement.quantity || 0);
@@ -175,29 +192,43 @@ export default function ProductLedgerPage() {
           qty_out: kind === "OUT" ? qty : 0,
         };
       })
-      .filter((row) => row.raw.toString() !== "Invalid Date" && (row.qty_in > 0 || row.qty_out > 0))
+      .filter((row) => row.raw.toString() !== "Invalid Date" && (row.qty_in > 0 || row.qty_out > 0));
+
+    const shortageRows = shortageEvents.map((event) => {
+      const raw = new Date(event.verified_at || event.closed_at || event.order_placed_at || Date.now());
+      const details = [
+        event.delivery_note_numbers ? `DN ${event.delivery_note_numbers}` : "",
+        event.customer_name ? `Customer: ${event.customer_name}` : "",
+        `Order #${event.order_id}`,
+        `${formatNumber(event.affected_pairs)} pairs — no stock deducted`,
+        event.verification_note || "",
+      ].filter(Boolean);
+
+      return {
+        id: `shortage-${event.allocation_id}`,
+        raw,
+        date: toDateInputValue(raw),
+        kind: "NEUTRAL",
+        movement: event.shortage_status === "OUT_OF_STOCK" ? "Out of stock" : "Not found",
+        productName: event.product_name || selectedFG.name,
+        warehouse: event.warehouse_name || "-",
+        reference: details.join(" · "),
+        deliveryNoteNumber: event.delivery_note_numbers || "",
+        customerName: event.customer_name || "",
+        qty_in: 0,
+        qty_out: 0,
+      };
+    }).filter((row) => row.raw.toString() !== "Invalid Date");
+
+    const rows = [...movementRows, ...shortageRows]
       .sort((a, b) => {
         const dateDiff = a.raw - b.raw;
         if (dateDiff !== 0) return dateDiff;
-        return Number(a.id || 0) - Number(b.id || 0);
+        return String(a.id || "").localeCompare(String(b.id || ""), undefined, { numeric: true });
       });
 
-    const currentStock = Number(selectedFG.quantity || 0);
-    const netMovement = rows.reduce((sum, row) => sum + row.qty_in - row.qty_out, 0);
-    let runningBalance = currentStock - netMovement;
-
-    return rows.map((row) => {
-      runningBalance += row.qty_in - row.qty_out;
-      return { ...row, balance: runningBalance };
-    });
-  }, [selectedProduct, selectedFG, warehouseMovements]);
-
-  const openingBalance = useMemo(() => {
-    if (!ledgerEntries.length || !selectedFG) return Number(selectedFG?.quantity || 0);
-    const currentStock = Number(selectedFG.quantity || 0);
-    const netMovement = ledgerEntries.reduce((sum, row) => sum + row.qty_in - row.qty_out, 0);
-    return currentStock - netMovement;
-  }, [ledgerEntries, selectedFG]);
+    return rows;
+  }, [selectedProduct, selectedFG, shortageEvents, warehouseMovements]);
 
   const filteredEntries = useMemo(() => {
     let rows = ledgerEntries;
@@ -224,28 +255,21 @@ export default function ProductLedgerPage() {
     return rows;
   }, [ledgerEntries, fromDate, toDate, search]);
 
-  const rangeOpeningBalance = useMemo(() => {
-    if (!fromDate) return openingBalance;
-    const before = ledgerEntries.filter((row) => row.date < fromDate);
-    return before.length ? before[before.length - 1].balance : openingBalance;
-  }, [ledgerEntries, fromDate, openingBalance]);
-
   const stats = useMemo(() => {
     const totalAdded = filteredEntries.reduce((sum, row) => sum + row.qty_in, 0);
     const totalRemoved = filteredEntries.reduce((sum, row) => sum + row.qty_out, 0);
     const currentStock = Number(selectedFG?.quantity || 0);
-    const closingBalance = filteredEntries.length
-      ? filteredEntries[filteredEntries.length - 1].balance
-      : rangeOpeningBalance;
+    const allAdded = ledgerEntries.reduce((sum, row) => sum + row.qty_in, 0);
+    const allRemoved = ledgerEntries.reduce((sum, row) => sum + row.qty_out, 0);
+    const unrecordedDifference = currentStock - (allAdded - allRemoved);
 
     return {
       totalAdded,
       totalRemoved,
       currentStock,
-      closingBalance,
-      openingBalance: rangeOpeningBalance,
+      unrecordedDifference,
     };
-  }, [filteredEntries, rangeOpeningBalance, selectedFG]);
+  }, [filteredEntries, ledgerEntries, selectedFG]);
 
   const clearFilters = () => {
     setFromDate("");
@@ -257,18 +281,6 @@ export default function ProductLedgerPage() {
     if (!selectedFG) return;
 
     const rows = [
-      {
-        Date: fromDate || "Opening",
-        Movement: "Opening / previous balance",
-        Product: selectedFG.name,
-        Warehouse: "",
-        "Delivery No": "",
-        Customer: "",
-        Reference: "",
-        Added: "",
-        "Sold / Removed": "",
-        Remaining: stats.openingBalance,
-      },
       ...filteredEntries.map((entry) => ({
         Date: entry.date,
         Movement: entry.movement,
@@ -279,12 +291,11 @@ export default function ProductLedgerPage() {
         Reference: entry.reference,
         Added: entry.qty_in || "",
         "Sold / Removed": entry.qty_out || "",
-        Remaining: entry.balance,
       })),
       {},
       { Date: "Total Added", Added: stats.totalAdded },
       { Date: "Total Sold / Removed", "Sold / Removed": stats.totalRemoved },
-      { Date: "Current Stock", Remaining: stats.currentStock },
+      { Date: "Current Physical Stock", Added: stats.currentStock },
     ];
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
@@ -340,16 +351,16 @@ export default function ProductLedgerPage() {
           icon="arrowDown"
         />
         <StatCard
-          label="Remaining"
-          value={formatNumber(stats.closingBalance)}
-          tone={stats.closingBalance > 0 ? "success" : stats.closingBalance === 0 ? "calm" : "alert"}
+          label="Net Recorded Movement"
+          value={formatNumber(stats.totalAdded - stats.totalRemoved)}
+          tone="calm"
           icon="check"
         />
       </div>
 
       <SectionCard
         title="Product Ledger"
-        subtitle="Actual product movement from warehouse records: added, sold or removed, and remaining stock."
+        subtitle="Only actual recorded events are shown. No opening balance is invented."
         icon="ledger"
       >
         <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-end md:flex-wrap">
@@ -478,10 +489,10 @@ export default function ProductLedgerPage() {
               </div>
             ) : null}
 
-            {stats.openingBalance !== 0 ? (
+            {stats.unrecordedDifference !== 0 ? (
               <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                Opening / previous balance is {formatNumber(stats.openingBalance)} {selectedFG?.unit || "pairs"}.
-                This keeps the final remaining balance equal to the actual current stock.
+                The recorded movement history is incomplete by {formatNumber(Math.abs(stats.unrecordedDifference))} {selectedFG?.unit || "pairs"}.
+                No assumed opening stock has been added. Current physical stock remains the authoritative quantity.
               </div>
             ) : null}
 
@@ -501,22 +512,9 @@ export default function ProductLedgerPage() {
                       <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Reference</th>
                       <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-emerald-500">Added</th>
                       <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-rose-400">Sold / Removed</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-indigo-500">Remaining</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {fromDate ? (
-                      <tr className="bg-amber-50/60">
-                        <td className="px-4 py-3 text-xs font-mono text-slate-500">{fromDate}</td>
-                        <td className="px-4 py-3 font-semibold text-amber-700" colSpan={5}>
-                          Opening / previous balance
-                        </td>
-                        <td className="px-4 py-3 text-right font-bold text-amber-700">
-                          {formatNumber(stats.openingBalance)}
-                        </td>
-                      </tr>
-                    ) : null}
-
                     {filteredEntries.map((entry) => (
                       <tr key={entry.id} className="transition-colors hover:bg-slate-50">
                         <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-500">{entry.date}</td>
@@ -525,9 +523,11 @@ export default function ProductLedgerPage() {
                             <span className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
                               entry.kind === "IN"
                                 ? "bg-emerald-100 text-emerald-600"
+                                : entry.kind === "NEUTRAL"
+                                  ? "bg-amber-100 text-amber-700"
                                 : "bg-rose-100 text-rose-500"
                             }`}>
-                              {entry.kind === "IN" ? "↑" : "↓"}
+                              {entry.kind === "IN" ? "↑" : entry.kind === "NEUTRAL" ? "!" : "↓"}
                             </span>
                             <span className="font-medium text-slate-800">{entry.movement}</span>
                           </div>
@@ -548,9 +548,6 @@ export default function ProductLedgerPage() {
                             <span className="text-slate-300">-</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-right font-bold text-indigo-600">
-                          {formatNumber(entry.balance)}
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -563,11 +560,7 @@ export default function ProductLedgerPage() {
                 <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-indigo-400">
                   Summary
                 </p>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <div className="rounded-xl border border-amber-200 bg-white px-3 py-2.5">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-400">Opening</p>
-                    <p className="font-bold text-amber-600">{formatNumber(stats.openingBalance)}</p>
-                  </div>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                   <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2.5">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Added</p>
                     <p className="font-bold text-emerald-600">{formatNumber(stats.totalAdded)}</p>
@@ -577,8 +570,8 @@ export default function ProductLedgerPage() {
                     <p className="font-bold text-rose-500">{formatNumber(stats.totalRemoved)}</p>
                   </div>
                   <div className="rounded-xl bg-indigo-500 px-3 py-2.5">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-indigo-200">Remaining</p>
-                    <p className="font-bold text-white">{formatNumber(stats.closingBalance)}</p>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-indigo-200">Current physical stock</p>
+                    <p className="font-bold text-white">{formatNumber(stats.currentStock)}</p>
                   </div>
                 </div>
               </div>

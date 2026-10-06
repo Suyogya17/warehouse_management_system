@@ -205,7 +205,15 @@ const getPartyOrderReport = async (req, res, next) => {
       const orderedPairs = number(row.qty_ordered);
       const cancelled = text(row.order_status).toUpperCase() === 'CANCELLED';
       const deliveredPairs = cancelled ? 0 : Math.min(orderedPairs, number(row.delivered_pairs));
-      const remainingPairs = cancelled ? 0 : Math.max(0, orderedPairs - deliveredPairs);
+      const outOfStockPairs = cancelled
+        ? 0
+        : Math.min(
+            Math.max(0, orderedPairs - deliveredPairs),
+            Math.max(0, number(row.out_of_stock_pairs))
+          );
+      const remainingPairs = cancelled
+        ? 0
+        : Math.max(0, orderedPairs - deliveredPairs - outOfStockPairs);
       const reservedPairs = cancelled || !ACTIVE_STATUSES.has(text(row.order_status).toUpperCase())
         ? 0
         : remainingPairs;
@@ -272,7 +280,7 @@ const getPartyOrderReport = async (req, res, next) => {
       group.reserved_pairs += reservedPairs;
       group.warehouse_planned_pairs += warehousePlannedPairs;
       group.cancelled_pairs += cancelledPairs;
-      group.out_of_stock_pairs += number(row.out_of_stock_pairs);
+      group.out_of_stock_pairs += outOfStockPairs;
       group.order_ids.add(Number(row.order_id));
       group.orders.push({
         order_id: Number(row.order_id),
@@ -287,7 +295,7 @@ const getPartyOrderReport = async (req, res, next) => {
         reserved_pairs: reservedPairs,
         warehouse_planned_pairs: warehousePlannedPairs,
         cancelled_pairs: cancelledPairs,
-        out_of_stock_pairs: number(row.out_of_stock_pairs),
+        out_of_stock_pairs: outOfStockPairs,
         delivery_note_numbers: row.delivery_note_numbers || row.master_delivery_note_number || '',
         cancel_reason: row.cancel_reason || '',
       });
@@ -385,7 +393,7 @@ const getPartyOrderReport = async (req, res, next) => {
       definitions: {
         ordered: 'Quantity on non-cancelled orders.',
         delivered: 'Quantity already deducted through warehouse delivery.',
-        remaining: 'Ordered quantity that has not yet been delivered.',
+        remaining: 'Ordered quantity that has not yet been delivered or closed as out of stock.',
         reserved: 'Undelivered quantity held by active Pending, Confirmed, or Packed orders.',
         warehouse_planned: 'Reserved quantity currently assigned to an active warehouse DN.',
         cancelled: 'Quantity from cancelled orders; excluded from ordered and reserved totals.',
