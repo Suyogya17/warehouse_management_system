@@ -49,7 +49,9 @@ export default function StockPage() {
 
   const load = useCallback(async () => {
     const [availabilityResult, warehouseStockResult] = await Promise.all([
-      api.getAvailability(token, { includeHidden: true }),
+      // The availability endpoint accepts include_hidden for ADMIN and CO_ADMIN
+      // so hidden products remain visible on the internal stock page.
+      api.getAvailability(token, { include_hidden: 1 }),
       api.getWarehouseStock(token),
     ]);
 

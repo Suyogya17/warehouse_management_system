@@ -1790,7 +1790,6 @@ export default function OrdersPage() {
         return `
           <section class="print-page${pageIndex === pages.length - 1 ? " last" : ""}">
             <div class="page-indicator">Page ${pageIndex + 1} of ${pages.length}</div>
-            <div class="header">DELIVERY NOTE${printOptions.existingOnly ? ' <span class="reprint-label">REPRINT</span>' : ''}</div>
             <div class="warehouse-title">
               ${escapeHtml(page.warehouseSlipNumber)} · ${escapeHtml(page.name)} · Overall Total: ${formatPrintNumber(overallCartons)} CTN
             </div>
@@ -1874,7 +1873,6 @@ export default function OrdersPage() {
             .print-page.last { page-break-after: auto; break-after: auto; }
             .page-indicator { position: absolute; top: 3px; right: 0; font-size: 14px; font-weight: 700; }
             .header { text-align: center; font-size: 26px; font-weight: 800; letter-spacing: .08em; }
-            .reprint-label { margin-left: 10px; border: 2px solid #111; padding: 2px 7px; font-size: 12px; letter-spacing: .06em; vertical-align: middle; }
             .warehouse-title { margin: 5px 0 7px; border: 2px solid #111; padding: 6px 10px; text-align: center; font-size: 18px; font-weight: 800; }
             table { width: 100%; border-collapse: collapse; }
             .top-grid { margin-bottom: 6px; }
@@ -2684,19 +2682,6 @@ export default function OrdersPage() {
                             >
                               🖨️ DN
                             </Button>
-                            {(row.warehouse_fulfillments || []).length > 0 ? (
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm"
-                                title="Reprint saved delivered and pending warehouse DNs without allocating stock again"
-                                onClick={() =>
-                                  printDeliveryNote(row, { existingOnly: true })
-                                }
-                              >
-                                Reprint existing DNs
-                              </Button>
-                            ) : null}
                             <Button
                               size="sm"
                               variant="secondary"

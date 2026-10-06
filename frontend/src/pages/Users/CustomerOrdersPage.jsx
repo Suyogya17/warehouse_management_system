@@ -102,7 +102,6 @@ export default function UserOrderPage() {
       if (savedCart) {
         const parsedCart = JSON.parse(savedCart);
         const updatedCart = parsedCart.map((item) => {
-          const cartonsPerBox = Number(item.product?.inner_boxes_per_outer_box || 0);
           return {
             ...item,
             orderBy: item.orderBy || (cartonsPerBox > 0 ? "cartons" : "pairs"),
@@ -125,12 +124,26 @@ export default function UserOrderPage() {
 
   // ─── TOGGLE ORDER TYPE ────────────────────────────
 
-  const toggleOrderBy = (id) => {
+  const setOrderBy = (id, orderBy) => {
+    const item = cart.find((cartItem) => cartItem.finished_good_id === id);
+    const pairsPerCarton = Number(item?.product?.inner_boxes_per_outer_box || 0);
+
+    if (
+      orderBy === "pairs" &&
+      item?.orderBy !== "pairs" &&
+      pairsPerCarton > 0 &&
+      !window.confirm(
+        `This product is normally packed in cartons of ${pairsPerCarton} pairs. Do you want to order individual pairs instead?`
+      )
+    ) {
+      return;
+    }
+
     setCart((prev) =>
       prev.map((item) =>
         item.finished_good_id !== id
           ? item
-          : { ...item, orderBy: item.orderBy === "cartons" ? "pairs" : "cartons", qty_ordered: 1 }
+          : { ...item, orderBy, qty_ordered: 1 }
       )
     );
   };
@@ -556,7 +569,26 @@ export default function UserOrderPage() {
                           </button>
                         </div>
 
-                       
+                        {hasCartons && (
+                          <div className="flex overflow-hidden rounded-lg border border-slate-300 text-xs font-semibold">
+                            <button
+                              type="button"
+                              onClick={() => setOrderBy(item.finished_good_id, "pairs")}
+                              className={`px-2.5 py-1.5 ${item.orderBy === "pairs" ? "bg-indigo-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                            >
+                              Pairs (less than full carton)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setOrderBy(item.finished_good_id, "cartons")}
+                              disabled={available < cartonsPerBox}
+                              className={`border-l border-slate-300 px-2.5 py-1.5 disabled:cursor-not-allowed disabled:opacity-50 ${item.orderBy === "cartons" ? "bg-indigo-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                            >
+                              Cartons ({cartonsPerBox})
+                            </button>
+                          </div>
+                        )}
+
                         {hasCartons && item.orderBy === "cartons" && (
                           <div className="text-sm text-slate-600">
                             = <span className="font-bold text-indigo-600">{formatNumber(actualPairs)}</span> pairs

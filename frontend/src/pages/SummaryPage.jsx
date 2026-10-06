@@ -122,6 +122,7 @@ export default function SummaryPage() {
   const { showToast } = useToast();
 
   const [orders, setOrders]   = useState([]);
+  const [deliveryReport, setDeliveryReport] = useState({ data: [], summary: {} });
   const [loading, setLoading] = useState(true);
   const [search, setSearch]   = useState("");
   const [selectedStatus, setSelectedStatus] = useState("");
@@ -134,8 +135,12 @@ export default function SummaryPage() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const result = await api.getOrders(token, { limit: 500 });
-      setOrders(result.data || []);
+      const [ordersResult, deliveriesResult] = await Promise.all([
+        api.getOrders(token, { limit: 500 }),
+        api.getDeliveryReport(today, token),
+      ]);
+      setOrders(ordersResult.data || []);
+      setDeliveryReport(deliveriesResult || { data: [], summary: {} });
     } catch (error) {
       showToast({
         tone: "error",
@@ -146,6 +151,18 @@ export default function SummaryPage() {
       setLoading(false);
     }
   }, [showToast, token]);
+
+  const deliveryColumns = useMemo(() => [
+    { key: "delivered_at", label: "Delivered at", render: (row) => formatDate(row.delivered_at) },
+    { key: "delivery_note_number", label: "Warehouse DN", render: (row) => row.delivery_note_number || "-" },
+    { key: "warehouse_name", label: "Warehouse" },
+    { key: "order_id", label: "Order", render: (row) => `#${row.order_id}` },
+    { key: "customer_name", label: "Party / customer" },
+    { key: "product_name", label: "Product", render: (row) => `${row.finished_good_id} · ${row.article_code || row.product_name}${row.color ? ` · ${row.color}` : ""}${row.size ? ` · ${row.size}` : ""}` },
+    { key: "delivered_pairs", label: "Delivered pairs", render: (row) => `${formatNumber(row.delivered_pairs)} ${row.unit || "pairs"}` },
+    { key: "delivered_cartons", label: "Cartons", render: (row) => formatNumber(row.delivered_cartons) },
+    { key: "delivered_by_name", label: "Delivered by", render: (row) => row.delivered_by_name || "-" },
+  ], []);
 
   useEffect(() => { load(); }, [load]);
 
@@ -613,6 +630,30 @@ export default function SummaryPage() {
   // ─────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
+
+      <SectionCard
+        title="Today's deliveries"
+        subtitle={`Actual warehouse deliveries completed on ${today}. This report uses the delivery time, not the order-creation date.`}
+        icon="check"
+      >
+        <div className="grid gap-3 px-5 pt-5 sm:grid-cols-4">
+          <StatCard label="Delivered pairs" value={formatNumber(deliveryReport.summary?.delivered_pairs)} tone="calm" icon="check" />
+          <StatCard label="Delivered cartons" value={formatNumber(deliveryReport.summary?.delivered_cartons)} icon="stock" />
+          <StatCard label="Orders delivered" value={formatNumber(deliveryReport.summary?.order_count)} icon="orders" />
+          <StatCard label="Warehouses used" value={formatNumber(deliveryReport.summary?.warehouse_count)} icon="warehouse" />
+        </div>
+        <div className="p-5">
+          <DataTable
+            columns={deliveryColumns}
+            rows={deliveryReport.data || []}
+            exportFilename={`todays-deliveries-${today}`}
+            emptyTitle="No deliveries completed today"
+            emptyDescription="Warehouse deliveries completed today will appear here."
+            responsiveScroll
+            minTableWidth={1200}
+          />
+        </div>
+      </SectionCard>
 
       {/* ── STAT CARDS ── */}
       <div className="grid gap-4 md:grid-cols-5">

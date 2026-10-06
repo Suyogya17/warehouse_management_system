@@ -709,6 +709,8 @@ export default function FinishedGoodsUserPage() {
     const cartItem = {
       finished_good_id: productId,
       qty_ordered: 1,
+      // Products with carton packaging begin in carton mode. Customers can
+      // explicitly switch to pairs from the cart after acknowledging a warning.
       orderBy: Number(product.inner_boxes_per_outer_box) > 0 ? "cartons" : "pairs",
 
       product: {

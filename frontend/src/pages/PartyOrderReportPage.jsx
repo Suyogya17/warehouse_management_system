@@ -295,6 +295,60 @@ export default function PartyOrderReportPage() {
     { label: "Delivered", value: (row) => row.delivered_ctn, suffix: "CTN", secondaryValue: (row) => row.delivered_pairs, secondarySuffix: "pairs" },
     { label: "Left to deliver", value: (row) => row.remaining_ctn, suffix: "CTN", secondaryValue: (row) => row.remaining_pairs, secondarySuffix: "pairs" },
   ], []);
+
+  const exportPartyOrderReport = async () => {
+    const XLSX = await import("xlsx");
+    const rows = (report.data || []).map((row) => ({
+      Party: row.party_name || "",
+      Phone: row.customer_phone || "",
+      Address: row.customer_address || "",
+      Dealer: row.dealer_names?.join(", ") || "",
+      "Dealer email": row.dealer_emails?.join(", ") || "",
+      "Order count": Number(row.order_count || 0),
+      "FG ID": Number(row.finished_good_id || 0),
+      Article: row.article_code || "",
+      Product: row.product_name || "",
+      Series: row.series || "",
+      Color: row.color || "",
+      Size: row.size || "",
+      "Pairs per carton": Number(row.pairs_per_carton || 0),
+      "Total placed (pairs)": Number(row.placed_pairs || 0),
+      "Active order (pairs)": Number(row.ordered_pairs || 0),
+      "Delivered (pairs)": Number(row.delivered_pairs || 0),
+      "Still left (pairs)": Number(row.remaining_pairs || 0),
+      "Reserved now (pairs)": Number(row.reserved_pairs || 0),
+      "On warehouse DN (pairs)": Number(row.warehouse_planned_pairs || 0),
+      "Cancelled (pairs)": Number(row.cancelled_pairs || 0),
+      "Out of stock (pairs)": Number(row.out_of_stock_pairs || 0),
+      "Physical stock now (pairs)": Number(row.physical_stock_pairs || 0),
+      "Active order (CTN)": Number(row.ordered_ctn || 0),
+      "Delivered (CTN)": Number(row.delivered_ctn || 0),
+      "Still left (CTN)": Number(row.remaining_ctn || 0),
+      "Reserved now (CTN)": Number(row.reserved_ctn || 0),
+    }));
+    const guideRows = [
+      { Column: "Total placed", Meaning: "All quantities originally placed, including later-cancelled orders." },
+      { Column: "Active order", Meaning: "Non-cancelled ordered quantity." },
+      { Column: "Delivered", Meaning: "Quantity already delivered and deducted from warehouse stock." },
+      { Column: "Still left", Meaning: "Active order minus delivered quantity." },
+      { Column: "Reserved now", Meaning: "Still-left quantity held for Pending, Confirmed, or Packed orders." },
+      { Column: "On warehouse DN", Meaning: "Reserved quantity already assigned to a warehouse delivery note." },
+      { Column: "Cancelled", Meaning: "Quantity from cancelled orders. It is not included in Active order or Reserved now." },
+      { Column: "Out of stock", Meaning: "Quantity marked unavailable on a warehouse delivery note." },
+      { Column: "CTN", Meaning: "Cartons, calculated from pairs divided by the product's Pairs per carton value." },
+    ];
+    const workbook = XLSX.utils.book_new();
+    const reportSheet = XLSX.utils.json_to_sheet(rows);
+    const guideSheet = XLSX.utils.json_to_sheet(guideRows);
+    reportSheet["!cols"] = [
+      { wch: 24 }, { wch: 16 }, { wch: 28 }, { wch: 22 }, { wch: 28 },
+      ...Array(21).fill({ wch: 18 }),
+    ];
+    guideSheet["!cols"] = [{ wch: 24 }, { wch: 85 }];
+    XLSX.utils.book_append_sheet(workbook, reportSheet, "Party Orders");
+    XLSX.utils.book_append_sheet(workbook, guideSheet, "How to read this report");
+    XLSX.writeFile(workbook, `party-order-report-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
   const reset = () => { setDraft(emptyFilters); setApplied(emptyFilters); };
 
   return (
@@ -360,7 +414,7 @@ export default function PartyOrderReportPage() {
       {error ? <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-700"><p>{error}</p><Button className="mt-3" variant="secondary" onClick={load}>Retry</Button></div> : null}
       {loading ? <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">Loading party and article details…</div> : !error ? (
         <>
-          <DataTable columns={columns} rows={report.data || []} summaryColumns={tableTotals} exportFilename="party-order-report" emptyTitle="No party orders found" emptyDescription="Try clearing some report filters." wrapCells responsiveScroll minTableWidth={1400} density="comfortable" />
+          <DataTable columns={columns} rows={report.data || []} summaryColumns={tableTotals} exportFilename="party-order-report" onExport={exportPartyOrderReport} emptyTitle="No party orders found" emptyDescription="Try clearing some report filters." wrapCells responsiveScroll minTableWidth={1400} density="comfortable" />
           <SectionCard className="mt-5" title="Dealer Allocation Summary" subtitle="Allocation belongs to the dealer account, not to a customer party. Each dealer-product allocation is counted only once; order totals follow the filters above." icon="users">
             <DataTable columns={dealerColumns} rows={dealerSummary} summaryColumns={dealerTotals} exportFilename="dealer-allocation-summary" emptyTitle="No dealer allocation found" emptyDescription="No dealer allocation matches the current report." wrapCells responsiveScroll minTableWidth={1400} density="comfortable" />
           </SectionCard>

@@ -754,6 +754,11 @@ export const api = {
     return apiRequest(`/orders/offer-vs-regular-report${query ? `?${query}` : ""}`, {}, token);
   },
 
+  getDeliveryReport: (date, token) => {
+    const query = buildQueryString({ date });
+    return apiRequest(`/analytics/delivery-report${query ? `?${query}` : ""}`, {}, token);
+  },
+
   createOrder: (payload, token) =>
     apiRequest(
       "/orders",
