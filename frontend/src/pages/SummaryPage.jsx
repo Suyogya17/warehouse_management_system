@@ -11,6 +11,7 @@ import { api } from "../services/api";
 import { formatDate, formatNumber } from "../utils/format";
 
 const TRACKED_STATUSES = ["PENDING","CONFIRMED", "PACKED", "DELIVERED", "CANCELLED"];
+const inputClass = "h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100";
 
 const statusTone = {
   PENDING: "calm",
@@ -63,6 +64,13 @@ const formatWarehouseTotals = (warehouseTotals = [], unit = "pairs") =>
     : "-";
 
 const uniqueNames = (values = []) => [...new Set(values.filter(Boolean))];
+const normalizedCustomerName = (value) => String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+const getCustomerDiscount = (dealerId, customerName) => {
+  const normalizedName = normalizedCustomerName(customerName);
+  if (!dealerId || !normalizedName) return 0;
+  const value = Number(window.localStorage.getItem(`warehouse-billing-discount:${dealerId}:${normalizedName}`));
+  return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0;
+};
 
 function StatusDetailsModal({ status, totals, details, onClose }) {
   if (!status) return null;
@@ -130,6 +138,12 @@ export default function SummaryPage() {
   const today = toDateInputValue();
   const [fromDate, setFromDate] = useState(today);
   const [toDate,   setToDate]   = useState(today);
+  const [deliveryFromDate, setDeliveryFromDate] = useState(today);
+  const [deliveryToDate, setDeliveryToDate] = useState(today);
+  const [deliveryFromTime, setDeliveryFromTime] = useState("");
+  const [deliveryToTime, setDeliveryToTime] = useState("");
+  const [deliveryPerson, setDeliveryPerson] = useState("");
+  const [deliveryUser, setDeliveryUser] = useState("");
 
   // ── load ──────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -137,7 +151,7 @@ export default function SummaryPage() {
       setLoading(true);
       const [ordersResult, deliveriesResult] = await Promise.all([
         api.getOrders(token, { limit: 500 }),
-        api.getDeliveryReport(today, token),
+        api.getDeliveryReport({ from_date: deliveryFromDate, to_date: deliveryToDate }, token),
       ]);
       setOrders(ordersResult.data || []);
       setDeliveryReport(deliveriesResult || { data: [], summary: {} });
@@ -150,13 +164,14 @@ export default function SummaryPage() {
     } finally {
       setLoading(false);
     }
-  }, [showToast, token]);
+  }, [deliveryFromDate, deliveryToDate, showToast, token]);
 
   const deliveryColumns = useMemo(() => [
     { key: "delivered_at", label: "Delivered at", render: (row) => formatDate(row.delivered_at) },
     { key: "delivery_note_number", label: "Warehouse DN", render: (row) => row.delivery_note_number || "-" },
     { key: "warehouse_name", label: "Warehouse" },
     { key: "order_id", label: "Order", render: (row) => `#${row.order_id}` },
+    { key: "created_by_name", label: "Order user", render: (row) => row.created_by_name || "-" },
     { key: "customer_name", label: "Party / customer" },
     { key: "product_name", label: "Product", render: (row) => `${row.finished_good_id} · ${row.article_code || row.product_name}${row.color ? ` · ${row.color}` : ""}${row.size ? ` · ${row.size}` : ""}` },
     { key: "delivered_pairs", label: "Delivered pairs", render: (row) => `${formatNumber(row.delivered_pairs)} ${row.unit || "pairs"}` },
@@ -165,6 +180,186 @@ export default function SummaryPage() {
   ], []);
 
   useEffect(() => { load(); }, [load]);
+
+  const deliveryPeople = useMemo(() => uniqueNames(
+    (deliveryReport.data || []).map((row) => row.delivered_by_name)
+  ).sort((a, b) => a.localeCompare(b)), [deliveryReport.data]);
+
+  const deliveryUsers = useMemo(() => uniqueNames(
+    (deliveryReport.data || []).map((row) => row.created_by_name)
+  ).sort((a, b) => a.localeCompare(b)), [deliveryReport.data]);
+
+  const filteredDeliveryRows = useMemo(() => (deliveryReport.data || []).filter((row) => {
+    if (deliveryPerson && row.delivered_by_name !== deliveryPerson) return false;
+    if (deliveryUser && row.created_by_name !== deliveryUser) return false;
+    if (deliveryFromTime || deliveryToTime) {
+      const deliveredDate = new Date(row.delivered_at);
+      const deliveredTime = `${String(deliveredDate.getHours()).padStart(2, "0")}:${String(deliveredDate.getMinutes()).padStart(2, "0")}`;
+      if (deliveryFromTime && deliveredTime < deliveryFromTime) return false;
+      if (deliveryToTime && deliveredTime > deliveryToTime) return false;
+    }
+    return true;
+  }), [deliveryFromTime, deliveryPerson, deliveryReport.data, deliveryToTime, deliveryUser]);
+
+  const filteredDeliverySummary = useMemo(() => {
+    const orderIds = new Set();
+    const warehouseIds = new Set();
+    const totals = filteredDeliveryRows.reduce((summary, row) => {
+      orderIds.add(row.order_id);
+      warehouseIds.add(row.warehouse_id);
+      summary.delivered_pairs += Number(row.delivered_pairs || 0);
+      summary.delivered_cartons += Number(row.delivered_cartons || 0);
+      return summary;
+    }, { delivered_pairs: 0, delivered_cartons: 0 });
+    return {
+      ...totals,
+      delivered_cartons: Math.round(totals.delivered_cartons * 100) / 100,
+      order_count: orderIds.size,
+      warehouse_count: warehouseIds.size,
+    };
+  }, [filteredDeliveryRows]);
+
+  const exportDeliveryBillingExcel = async () => {
+    if (!filteredDeliveryRows.length) {
+      showToast({ tone: "error", title: "Nothing to export", message: "No warehouse deliveries match the selected filters." });
+      return;
+    }
+
+    const StyledXLSX = await import("xlsx-js-style");
+    const workbook = StyledXLSX.utils.book_new();
+    const groups = new Map();
+    filteredDeliveryRows.forEach((row) => {
+      const deliveredDate = toDateInputValue(new Date(row.delivered_at));
+      const key = `${deliveredDate}::${row.created_by || row.created_by_name || "unknown"}`;
+      if (!groups.has(key)) groups.set(key, { deliveredDate, dealer: row.created_by_name || "Unknown dealer", rows: [] });
+      groups.get(key).rows.push(row);
+    });
+
+    const borderSide = { style: "thin", color: { rgb: "D7DEE8" } };
+    const border = { top: borderSide, bottom: borderSide, left: borderSide, right: borderSide };
+    const applyStyle = (sheet, range, style) => {
+      const decoded = StyledXLSX.utils.decode_range(range);
+      for (let rowIndex = decoded.s.r; rowIndex <= decoded.e.r; rowIndex += 1) {
+        for (let columnIndex = decoded.s.c; columnIndex <= decoded.e.c; columnIndex += 1) {
+          const address = StyledXLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+          if (!sheet[address]) sheet[address] = { t: "s", v: "" };
+          sheet[address].s = { ...(sheet[address].s || {}), ...style };
+        }
+      }
+    };
+    const cleanSheetName = (value) => String(value || "Dealer")
+      .replace(/[\\/?*:[\]]/g, "-")
+      .trim()
+      .slice(0, 31) || "Dealer";
+    const usedNames = new Set();
+    const uniqueSheetName = (base) => {
+      let name = cleanSheetName(base);
+      let suffix = 2;
+      while (usedNames.has(name)) {
+        const suffixText = ` ${suffix}`;
+        name = `${cleanSheetName(base).slice(0, 31 - suffixText.length)}${suffixText}`;
+        suffix += 1;
+      }
+      usedNames.add(name);
+      return name;
+    };
+
+    const summaryRows = [["DELIVERY BILLING SUMMARY"], ["From", new Date(`${deliveryFromDate}T00:00:00`), "To", new Date(`${deliveryToDate}T00:00:00`)], [], ["Delivery date", "Dealer", "CTN", "Pairs", "Total billing"]];
+
+    Array.from(groups.values())
+      .sort((a, b) => a.deliveredDate.localeCompare(b.deliveredDate) || a.dealer.localeCompare(b.dealer))
+      .forEach((group) => {
+        const sheetRows = [
+          ["WAREHOUSE DELIVERY BILL"],
+          ["Delivery date", new Date(`${group.deliveredDate}T00:00:00`), "Dealer", group.dealer],
+          ["Report basis", "Actual delivery time", "Generated", new Date()],
+          [],
+          ["S.No", "Time", "Warehouse DN", "Warehouse", "Order", "Customer", "Product type", "Product", "CTN", "Qty", "Rate", "Discount %", "Amount"],
+          ...group.rows.map((row, index) => {
+            const deliveredAt = new Date(row.delivered_at);
+            const discountPercent = row.is_commission ? getCustomerDiscount(row.created_by, row.customer_name) : 0;
+            return [
+              index + 1,
+              deliveredAt,
+              row.delivery_note_number || "-",
+              row.warehouse_name || "-",
+              Number(row.order_id),
+              row.customer_name || "-",
+              row.is_commission ? "Percentage" : "Non commission",
+              `${row.article_code || row.product_name}${row.color ? ` · ${row.color}` : ""}${row.size ? ` · ${row.size}` : ""}`,
+              Number(row.delivered_cartons || 0),
+              Number(row.delivered_pairs || 0),
+              Number(row.unit_price_snapshot || 0),
+              discountPercent / 100,
+              null,
+            ];
+          }),
+        ];
+        const firstItemRow = 6;
+        const lastItemRow = firstItemRow + group.rows.length - 1;
+        const totalRow = lastItemRow + 2;
+        sheetRows.push([], ["", "", "", "", "", "", "", "TOTAL", null, null, "", "", null]);
+        const sheet = StyledXLSX.utils.aoa_to_sheet(sheetRows);
+        group.rows.forEach((_, index) => {
+          const rowNumber = firstItemRow + index;
+          sheet[`M${rowNumber}`] = { t: "n", f: `J${rowNumber}*K${rowNumber}*(1-L${rowNumber})` };
+        });
+        sheet[`I${totalRow}`] = { t: "n", f: `SUM(I${firstItemRow}:I${lastItemRow})` };
+        sheet[`J${totalRow}`] = { t: "n", f: `SUM(J${firstItemRow}:J${lastItemRow})` };
+        sheet[`M${totalRow}`] = { t: "n", f: `SUM(M${firstItemRow}:M${lastItemRow})` };
+        sheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 12 } }];
+        sheet["!cols"] = [6, 11, 18, 16, 10, 22, 18, 38, 10, 10, 13, 13, 16].map((wch) => ({ wch }));
+        sheet["!rows"] = [{ hpt: 28 }, { hpt: 22 }, { hpt: 20 }, { hpt: 8 }, { hpt: 28 }];
+        sheet["!freeze"] = { xSplit: 0, ySplit: 5 };
+        sheet["!autofilter"] = { ref: `A5:M${lastItemRow}` };
+        sheet["!margins"] = { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.15, footer: 0.15 };
+        sheet["!pageSetup"] = { orientation: "landscape", fitToWidth: 1, fitToHeight: 1, paperSize: 9 };
+        applyStyle(sheet, `A1:M1`, { fill: { fgColor: { rgb: "312E81" } }, font: { name: "Arial", sz: 16, bold: true, color: { rgb: "FFFFFF" } }, alignment: { horizontal: "center", vertical: "center" } });
+        applyStyle(sheet, `A2:M3`, { font: { name: "Arial", sz: 10 }, alignment: { vertical: "center" } });
+        applyStyle(sheet, `A5:M5`, { fill: { fgColor: { rgb: "4338CA" } }, font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFF" } }, alignment: { horizontal: "center", vertical: "center", wrapText: true }, border });
+        applyStyle(sheet, `A${firstItemRow}:M${lastItemRow}`, { font: { name: "Arial", sz: 10, color: { rgb: "172033" } }, alignment: { vertical: "center" }, border });
+        applyStyle(sheet, `H${totalRow}:M${totalRow}`, { fill: { fgColor: { rgb: "E0E7FF" } }, font: { name: "Arial", sz: 11, bold: true, color: { rgb: "1E1B4B" } }, border });
+        sheet["B2"].z = "dd-mmm-yyyy";
+        sheet["D3"].z = "dd-mmm-yyyy hh:mm";
+        for (let rowNumber = firstItemRow; rowNumber <= lastItemRow; rowNumber += 1) {
+          sheet[`B${rowNumber}`].z = "hh:mm";
+          sheet[`I${rowNumber}`].z = "#,##0.00";
+          sheet[`J${rowNumber}`].z = "#,##0";
+          sheet[`K${rowNumber}`].z = "#,##0.00";
+          sheet[`L${rowNumber}`].z = "0.00%";
+          sheet[`M${rowNumber}`].z = "#,##0.00";
+        }
+        sheet[`I${totalRow}`].z = "#,##0.00";
+        sheet[`J${totalRow}`].z = "#,##0";
+        sheet[`M${totalRow}`].z = "#,##0.00";
+        StyledXLSX.utils.book_append_sheet(workbook, sheet, uniqueSheetName(`${group.deliveredDate.slice(5)} ${group.dealer}`));
+
+        const totalCartons = group.rows.reduce((sum, row) => sum + Number(row.delivered_cartons || 0), 0);
+        const totalPairs = group.rows.reduce((sum, row) => sum + Number(row.delivered_pairs || 0), 0);
+        const totalBilling = group.rows.reduce((sum, row) => {
+          const discount = row.is_commission ? getCustomerDiscount(row.created_by, row.customer_name) / 100 : 0;
+          return sum + Number(row.delivered_pairs || 0) * Number(row.unit_price_snapshot || 0) * (1 - discount);
+        }, 0);
+        summaryRows.push([new Date(`${group.deliveredDate}T00:00:00`), group.dealer, totalCartons, totalPairs, totalBilling]);
+      });
+
+    const summarySheet = StyledXLSX.utils.aoa_to_sheet(summaryRows);
+    summarySheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }];
+    summarySheet["!cols"] = [{ wch: 18 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 20 }];
+    summarySheet["!freeze"] = { xSplit: 0, ySplit: 4 };
+    applyStyle(summarySheet, "A1:E1", { fill: { fgColor: { rgb: "312E81" } }, font: { name: "Arial", sz: 16, bold: true, color: { rgb: "FFFFFF" } }, alignment: { horizontal: "center", vertical: "center" } });
+    applyStyle(summarySheet, "A4:E4", { fill: { fgColor: { rgb: "4338CA" } }, font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFF" } }, alignment: { horizontal: "center" }, border });
+    if (summaryRows.length > 4) applyStyle(summarySheet, `A5:E${summaryRows.length}`, { font: { name: "Arial", sz: 10 }, border });
+    for (let rowNumber = 5; rowNumber <= summaryRows.length; rowNumber += 1) {
+      summarySheet[`A${rowNumber}`].z = "dd-mmm-yyyy";
+      summarySheet[`C${rowNumber}`].z = "#,##0.00";
+      summarySheet[`D${rowNumber}`].z = "#,##0";
+      summarySheet[`E${rowNumber}`].z = "#,##0.00";
+    }
+    workbook.SheetNames.unshift("Summary");
+    workbook.Sheets.Summary = summarySheet;
+    StyledXLSX.writeFile(workbook, `warehouse-delivery-billing-${deliveryFromDate}-to-${deliveryToDate}.xlsx`, { cellStyles: true });
+  };
 
   // ── summary rows ──────────────────────────────────────────
   const summaryRows = useMemo(() => {
@@ -632,25 +827,35 @@ export default function SummaryPage() {
     <div className="space-y-6">
 
       <SectionCard
-        title="Today's deliveries"
-        subtitle={`Actual warehouse deliveries completed on ${today}. This report uses the delivery time, not the order-creation date.`}
+        title="Warehouse delivery report"
+        subtitle="Filter actual warehouse deliveries by date, time, delivered-by person, or the user who placed the order."
         icon="check"
       >
+        <div className="grid gap-3 border-b border-slate-200 p-5 sm:grid-cols-2 lg:grid-cols-6">
+          <label className="text-xs font-semibold text-slate-600">From date<input type="date" className={`mt-1 ${inputClass}`} value={deliveryFromDate} max={deliveryToDate || undefined} onChange={(event) => setDeliveryFromDate(event.target.value)} /></label>
+          <label className="text-xs font-semibold text-slate-600">To date<input type="date" className={`mt-1 ${inputClass}`} value={deliveryToDate} min={deliveryFromDate || undefined} onChange={(event) => setDeliveryToDate(event.target.value)} /></label>
+          <label className="text-xs font-semibold text-slate-600">From time<input type="time" className={`mt-1 ${inputClass}`} value={deliveryFromTime} onChange={(event) => setDeliveryFromTime(event.target.value)} /></label>
+          <label className="text-xs font-semibold text-slate-600">To time<input type="time" className={`mt-1 ${inputClass}`} value={deliveryToTime} onChange={(event) => setDeliveryToTime(event.target.value)} /></label>
+          <label className="text-xs font-semibold text-slate-600">Delivered by<select className={`mt-1 ${inputClass}`} value={deliveryPerson} onChange={(event) => setDeliveryPerson(event.target.value)}><option value="">All people</option>{deliveryPeople.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+          <label className="text-xs font-semibold text-slate-600">Order user / dealer<select className={`mt-1 ${inputClass}`} value={deliveryUser} onChange={(event) => setDeliveryUser(event.target.value)}><option value="">All users</option>{deliveryUsers.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+          <div className="sm:col-span-2 lg:col-span-6"><Button variant="secondary" onClick={() => { setDeliveryFromDate(today); setDeliveryToDate(today); setDeliveryFromTime(""); setDeliveryToTime(""); setDeliveryPerson(""); setDeliveryUser(""); }}>Reset to today</Button></div>
+        </div>
         <div className="grid gap-3 px-5 pt-5 sm:grid-cols-4">
-          <StatCard label="Delivered pairs" value={formatNumber(deliveryReport.summary?.delivered_pairs)} tone="calm" icon="check" />
-          <StatCard label="Delivered cartons" value={formatNumber(deliveryReport.summary?.delivered_cartons)} icon="stock" />
-          <StatCard label="Orders delivered" value={formatNumber(deliveryReport.summary?.order_count)} icon="orders" />
-          <StatCard label="Warehouses used" value={formatNumber(deliveryReport.summary?.warehouse_count)} icon="warehouse" />
+          <StatCard label="Delivered pairs" value={formatNumber(filteredDeliverySummary.delivered_pairs)} tone="calm" icon="check" />
+          <StatCard label="CTN delivered" value={formatNumber(filteredDeliverySummary.delivered_cartons)} icon="stock" />
+          <StatCard label="Orders delivered" value={formatNumber(filteredDeliverySummary.order_count)} icon="orders" />
+          <StatCard label="Warehouses used" value={formatNumber(filteredDeliverySummary.warehouse_count)} icon="warehouse" />
         </div>
         <div className="p-5">
           <DataTable
             columns={deliveryColumns}
-            rows={deliveryReport.data || []}
-            exportFilename={`todays-deliveries-${today}`}
-            emptyTitle="No deliveries completed today"
-            emptyDescription="Warehouse deliveries completed today will appear here."
+            rows={filteredDeliveryRows}
+            exportFilename={`warehouse-deliveries-${deliveryFromDate}-${deliveryToDate}`}
+            onExport={exportDeliveryBillingExcel}
+            emptyTitle="No matching deliveries"
+            emptyDescription="No warehouse deliveries match the selected filters."
             responsiveScroll
-            minTableWidth={1200}
+            minTableWidth={1350}
           />
         </div>
       </SectionCard>

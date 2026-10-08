@@ -170,6 +170,24 @@ export default function App() {
         />
 
         <Route
+          path="take-order"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              {withSuspense(<FinishedGoodsUserPage />)}
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="take-order/review"
+          element={
+            <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>
+              {withSuspense(<CustomerOrdersPage />)}
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
           path="analytics"
           element={
             <ProtectedRoute roles={["ADMIN", "CO_ADMIN"]}>

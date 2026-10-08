@@ -14,6 +14,22 @@
   html {
     font-size: 80%;
   }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+}
+
+.app-sidebar-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.app-sidebar-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 .nepcha-api-progress {

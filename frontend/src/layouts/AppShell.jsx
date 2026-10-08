@@ -29,6 +29,7 @@ const navByRole = {
     { to: "/formulas", label: "Formulas", icon: "formulas" },
     { to: "/production", label: "Production", icon: "production" },
     { to: "/orders", label: "Orders", icon: "orders" },
+    { to: "/take-order", label: "Take Customer Order", icon: "cart" },
     { to: "/party-order-report", label: "Party Order Report", icon: "ledger" },
     { to: "/order-shortage-history", label: "Shortage History", icon: "hidden" },
     { to: "/warehouse-billing", label: "Warehouse Billing", icon: "ledger" },
@@ -60,6 +61,7 @@ const navByRole = {
     { to: "/formulas", label: "Formulas", icon: "formulas" },
     { to: "/production", label: "Production", icon: "production" },
     { to: "/orders", label: "Orders", icon: "orders" },
+    { to: "/take-order", label: "Take Customer Order", icon: "cart" },
     { to: "/party-order-report", label: "Party Order Report", icon: "ledger" },
     { to: "/order-shortage-history", label: "Shortage History", icon: "hidden" },
     { to: "/warehouse-billing", label: "Warehouse Billing", icon: "ledger" },
@@ -208,7 +210,6 @@ export default function AppShell() {
       "Dashboard"
     );
   }, [location.pathname, navItems, role]);
-  const usesNaturalPageScroll = location.pathname === "/product-display";
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname]);
@@ -547,9 +548,7 @@ export default function AppShell() {
 
   return (
     <div
-      className={`min-h-screen overflow-x-hidden bg-transparent text-slate-900 ${
-        usesNaturalPageScroll ? "" : "lg:h-screen lg:overflow-hidden"
-      }`}
+      className="min-h-screen overflow-x-hidden bg-transparent text-slate-900 lg:h-screen lg:overflow-hidden"
       onWheelCapture={preventNumberWheelChange}
     >
       <NotificationWatcher user={user} token={token} onNotify={addNotification} />
@@ -557,11 +556,7 @@ export default function AppShell() {
         <ChatWidget user={user} token={token} unreadCount={chatUnreadCount} />
       ) : null}
       <div
-        className={`mx-auto flex min-h-screen w-full max-w-none gap-3 px-2 py-3 sm:px-3 lg:gap-4 lg:px-3 lg:py-4 min-[2200px]:max-w-[2100px] ${
-          usesNaturalPageScroll
-            ? "lg:items-start"
-            : "lg:h-screen lg:min-h-0 lg:items-stretch"
-        }`}
+        className="mx-auto flex min-h-screen w-full max-w-none gap-3 px-2 py-3 sm:px-3 lg:h-screen lg:min-h-0 lg:items-stretch lg:gap-4 lg:px-3 lg:py-4 min-[2200px]:max-w-[2100px]"
       >
 
         {/* MOBILE OVERLAY */}
@@ -600,7 +595,7 @@ export default function AppShell() {
             <UserCard />
 
             {/* NAV */}
-            <nav className="mt-4 flex-1 space-y-2 overflow-y-auto">
+            <nav className="app-sidebar-scroll mt-4 flex-1 space-y-2 overflow-y-auto">
               <NavList />
             </nav>
 
@@ -618,18 +613,14 @@ export default function AppShell() {
 
         {/* DESKTOP SIDEBAR */}
         <aside
-          className={`hidden w-72 shrink-0 lg:block ${
-            usesNaturalPageScroll
-              ? "lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] lg:min-h-0"
-              : "lg:h-full lg:min-h-0"
-          }`}
+          className="hidden w-72 shrink-0 lg:block lg:h-full lg:min-h-0"
         >
           <div className="flex h-full min-h-0 flex-col space-y-4 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
             {/* USER CARD */}
             <UserCard />
 
             {/* NAV */}
-            <nav className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+            <nav className="app-sidebar-scroll min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
               <NavList />
             </nav>
 
@@ -647,9 +638,7 @@ export default function AppShell() {
 
         {/* MAIN */}
         <main
-          className={`min-w-0 flex-1 space-y-4 py-1 lg:pr-1 ${
-            usesNaturalPageScroll ? "" : "lg:h-full lg:overflow-y-auto"
-          }`}
+          className="min-w-0 flex-1 space-y-4 py-1 lg:h-full lg:overflow-y-auto lg:pr-1"
         >
 
           {/* TOP BAR */}

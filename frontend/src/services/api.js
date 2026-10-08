@@ -768,8 +768,8 @@ export const api = {
     return apiRequest(`/orders/offer-vs-regular-report${query ? `?${query}` : ""}`, {}, token);
   },
 
-  getDeliveryReport: (date, token) => {
-    const query = buildQueryString({ date });
+  getDeliveryReport: (params, token) => {
+    const query = buildQueryString(typeof params === "string" ? { date: params } : params);
     return apiRequest(`/analytics/delivery-report${query ? `?${query}` : ""}`, {}, token);
   },
 
@@ -943,6 +943,13 @@ deleteStockAdjustment: (id, token) =>
 
     return apiRequest(`/warehouses/movements${query ? `?${query}` : ""}`, {}, token);
   },
+
+  getProductReservations: (token, finishedGoodId) =>
+    apiRequest(
+      `/warehouses/reservations?finished_good_id=${encodeURIComponent(finishedGoodId)}`,
+      {},
+      token
+    ),
 
   getAnalytics: (section, token) => apiRequest(`/analytics/${section}`, {}, token),
   getProductIntelligence: (params, token) => {

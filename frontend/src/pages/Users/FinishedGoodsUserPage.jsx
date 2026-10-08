@@ -517,6 +517,10 @@ function ProductCard({
 export default function FinishedGoodsUserPage() {
   const { token, user } = useAuth();
   const navigate = useNavigate();
+  const isAdminOrderEntry = ["ADMIN", "CO_ADMIN"].includes(
+    String(user?.role || "").toUpperCase()
+  );
+  const reviewOrderPath = isAdminOrderEntry ? "/take-order/review" : "/order-customer";
 
   const [items, setItems] = useState([]);
   const [cart, setCart] = useState([]);
@@ -788,16 +792,20 @@ export default function FinishedGoodsUserPage() {
   return (
     <div className="space-y-6 pb-6">
       <PageHeader
-        eyebrow="Catalog"
-        title="Browse Products"
-        description="Select products and add to cart"
+        eyebrow={isAdminOrderEntry ? "Field sales" : "Catalog"}
+        title={isAdminOrderEntry ? "Take Customer Order" : "Browse Products"}
+        description={
+          isAdminOrderEntry
+            ? "Browse the catalog with your customer, add products, and record their order."
+            : "Select products and add to cart"
+        }
         icon="finishedGoods"
       />
 
       {/* TOP BAR */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <button
-          onClick={() => navigate("/order-customer")} className="bg-indigo-500 flex flex-row w-fit gap-3 py-2 px-3 text-white rounded-xl"
+          onClick={() => navigate(reviewOrderPath)} className="bg-indigo-500 flex flex-row w-fit gap-3 py-2 px-3 text-white rounded-xl"
           
         >
           <ShoppingCart size={18} />

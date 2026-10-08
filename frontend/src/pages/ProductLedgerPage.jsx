@@ -71,6 +71,19 @@ const getMovementReference = (movement) => {
   return parts.join(" · ") || "-";
 };
 
+const getCartons = (pairs, product) => {
+  const quantity = Number(pairs || 0);
+  const pairsPerCarton = Number(product?.inner_boxes_per_outer_box || 0);
+  return pairsPerCarton > 0 ? quantity / pairsPerCarton : null;
+};
+
+const formatCtnPairs = (pairs, product) => {
+  const cartons = getCartons(pairs, product);
+  return cartons === null
+    ? `${formatNumber(pairs)} pairs`
+    : `${formatNumber(cartons)} CTN / ${formatNumber(pairs)} pairs`;
+};
+
 export default function ProductLedgerPage() {
   const { token } = useAuth();
   const { showToast } = useToast();
@@ -78,6 +91,7 @@ export default function ProductLedgerPage() {
   const [finishedGoods, setFinishedGoods] = useState([]);
   const [warehouseMovements, setWarehouseMovements] = useState([]);
   const [shortageEvents, setShortageEvents] = useState([]);
+  const [reservations, setReservations] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -109,6 +123,7 @@ export default function ProductLedgerPage() {
     if (!selectedProduct) {
       setWarehouseMovements([]);
       setShortageEvents([]);
+      setReservations([]);
       return;
     }
 
@@ -117,12 +132,13 @@ export default function ProductLedgerPage() {
     const loadLedger = async () => {
       try {
         setLoadingLedger(true);
-        const [movementResult, shortageResult] = await Promise.allSettled([
+        const [movementResult, shortageResult, reservationResult] = await Promise.allSettled([
           api.getWarehouseMovements(token, {
             finished_good_id: selectedProduct,
             limit: 500,
           }),
           api.getOrderShortageHistory({ finished_good_id: selectedProduct }, token),
+          api.getProductReservations(token, selectedProduct),
         ]);
 
         if (movementResult.status === "rejected") throw movementResult.reason;
@@ -135,11 +151,17 @@ export default function ProductLedgerPage() {
               ? shortageResult.value?.data || []
               : []
           );
+          setReservations(
+            reservationResult.status === "fulfilled"
+              ? reservationResult.value?.data || []
+              : []
+          );
         }
       } catch (error) {
         if (isActive) {
           setWarehouseMovements([]);
           setShortageEvents([]);
+          setReservations([]);
           showToast({
             tone: "error",
             title: "Ledger failed to load",
@@ -259,6 +281,10 @@ export default function ProductLedgerPage() {
     const totalAdded = filteredEntries.reduce((sum, row) => sum + row.qty_in, 0);
     const totalRemoved = filteredEntries.reduce((sum, row) => sum + row.qty_out, 0);
     const currentStock = Number(selectedFG?.quantity || 0);
+    const reservedStock = reservations.reduce(
+      (sum, row) => sum + Number(row.reserved_quantity || 0),
+      0
+    );
     const allAdded = ledgerEntries.reduce((sum, row) => sum + row.qty_in, 0);
     const allRemoved = ledgerEntries.reduce((sum, row) => sum + row.qty_out, 0);
     const unrecordedDifference = currentStock - (allAdded - allRemoved);
@@ -267,9 +293,11 @@ export default function ProductLedgerPage() {
       totalAdded,
       totalRemoved,
       currentStock,
+      reservedStock,
+      availableStock: Math.max(0, currentStock - reservedStock),
       unrecordedDifference,
     };
-  }, [filteredEntries, ledgerEntries, selectedFG]);
+  }, [filteredEntries, ledgerEntries, reservations, selectedFG]);
 
   const clearFilters = () => {
     setFromDate("");
@@ -291,11 +319,15 @@ export default function ProductLedgerPage() {
         Reference: entry.reference,
         Added: entry.qty_in || "",
         "Sold / Removed": entry.qty_out || "",
+        "Added CTN": entry.qty_in ? getCartons(entry.qty_in, selectedFG) : "",
+        "Sold / Removed CTN": entry.qty_out ? getCartons(entry.qty_out, selectedFG) : "",
       })),
       {},
       { Date: "Total Added", Added: stats.totalAdded },
       { Date: "Total Sold / Removed", "Sold / Removed": stats.totalRemoved },
       { Date: "Current Physical Stock", Added: stats.currentStock },
+      { Date: "Reserved in Active Orders", Added: stats.reservedStock },
+      { Date: "Available after Reserve", Added: stats.availableStock },
     ];
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
@@ -316,6 +348,26 @@ export default function ProductLedgerPage() {
     const sheetName = (selectedFG.name || "Ledger").replace(/[:\\/?*\[\]]/g, "-").slice(0, 31);
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
 
+    if (reservations.length > 0) {
+      const reservationSheet = XLSX.utils.json_to_sheet(
+        reservations.map((row) => ({
+          "Order #": row.order_id,
+          Date: row.ordered_at ? toDateInputValue(new Date(row.ordered_at)) : "",
+          Status: row.status,
+          Dealer: row.dealer_name || "-",
+          Customer: row.customer_name || "-",
+          "Delivery No": row.delivery_note_number || "-",
+          "Reserved CTN": getCartons(row.reserved_quantity, selectedFG),
+          "Reserved Pairs": Number(row.reserved_quantity || 0),
+        }))
+      );
+      reservationSheet["!cols"] = [
+        { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 24 },
+        { wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 16 },
+      ];
+      XLSX.utils.book_append_sheet(workbook, reservationSheet, "Active Reservations");
+    }
+
     const today = new Date().toISOString().slice(0, 10);
     const safeName = (selectedFG.name || "product").replace(/[\\/:*?"<>|]/g, "-");
     XLSX.writeFile(workbook, `ledger-${safeName}-${today}.xlsx`);
@@ -331,29 +383,35 @@ export default function ProductLedgerPage() {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <StatCard
           label="Current Stock"
-          value={`${formatNumber(stats.currentStock)} ${selectedFG?.unit || "pairs"}`}
+          value={formatCtnPairs(stats.currentStock, selectedFG)}
           tone="calm"
           icon="stock"
         />
         <StatCard
           label="Added"
-          value={formatNumber(stats.totalAdded)}
+          value={formatCtnPairs(stats.totalAdded, selectedFG)}
           tone="success"
           icon="arrowUp"
         />
         <StatCard
           label="Sold / Removed"
-          value={formatNumber(stats.totalRemoved)}
+          value={formatCtnPairs(stats.totalRemoved, selectedFG)}
           tone="alert"
           icon="arrowDown"
         />
         <StatCard
-          label="Net Recorded Movement"
-          value={formatNumber(stats.totalAdded - stats.totalRemoved)}
-          tone="calm"
+          label="Reserved"
+          value={formatCtnPairs(stats.reservedStock, selectedFG)}
+          tone="alert"
+          icon="ledger"
+        />
+        <StatCard
+          label="Available after Reserve"
+          value={formatCtnPairs(stats.availableStock, selectedFG)}
+          tone="success"
           icon="check"
         />
       </div>
@@ -484,7 +542,10 @@ export default function ProductLedgerPage() {
                   <span className="ml-2">· {filteredEntries.length} entr{filteredEntries.length === 1 ? "y" : "ies"}</span>
                 </p>
                 <StatusBadge tone="info">
-                  Current stock: {formatNumber(stats.currentStock)} {selectedFG.unit || "pairs"}
+                  Physical: {formatCtnPairs(stats.currentStock, selectedFG)}
+                </StatusBadge>
+                <StatusBadge tone="warning">
+                  Reserved: {formatCtnPairs(stats.reservedStock, selectedFG)}
                 </StatusBadge>
               </div>
             ) : null}
@@ -495,6 +556,44 @@ export default function ProductLedgerPage() {
                 No assumed opening stock has been added. Current physical stock remains the authoritative quantity.
               </div>
             ) : null}
+
+            {reservations.length > 0 ? (
+              <div className="overflow-x-auto rounded-2xl border border-amber-200">
+                <div className="border-b border-amber-200 bg-amber-50 px-4 py-3">
+                  <p className="text-sm font-semibold text-amber-900">Active reservations</p>
+                  <p className="text-xs text-amber-700">Pending, confirmed, and packed orders that have not yet been delivered.</p>
+                </div>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-white">
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-400">Order</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-400">Status</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-400">Dealer / Customer</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-amber-600">Reserved</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {reservations.map((row) => (
+                      <tr key={row.order_id}>
+                        <td className="px-4 py-3 font-semibold text-slate-700">#{row.order_id}</td>
+                        <td className="px-4 py-3"><StatusBadge tone="warning">{row.status}</StatusBadge></td>
+                        <td className="px-4 py-3 text-slate-600">
+                          <p className="font-medium">{row.dealer_name || "-"}</p>
+                          <p className="text-xs text-slate-400">{row.customer_name || "No customer name"}</p>
+                        </td>
+                        <td className="px-4 py-3 text-right font-bold text-amber-700">
+                          {formatCtnPairs(row.reserved_quantity, selectedFG)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                This product has no active reserved quantity.
+              </div>
+            )}
 
             {filteredEntries.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 py-12 text-center">
@@ -536,14 +635,14 @@ export default function ProductLedgerPage() {
                         <td className="px-4 py-3 text-xs text-slate-500">{entry.reference}</td>
                         <td className="px-4 py-3 text-right">
                           {entry.qty_in > 0 ? (
-                            <span className="font-semibold text-emerald-600">+{formatNumber(entry.qty_in)}</span>
+                            <span className="font-semibold text-emerald-600">+{formatCtnPairs(entry.qty_in, selectedFG)}</span>
                           ) : (
                             <span className="text-slate-300">-</span>
                           )}
                         </td>
                         <td className="px-4 py-3 text-right">
                           {entry.qty_out > 0 ? (
-                            <span className="font-semibold text-rose-500">-{formatNumber(entry.qty_out)}</span>
+                            <span className="font-semibold text-rose-500">-{formatCtnPairs(entry.qty_out, selectedFG)}</span>
                           ) : (
                             <span className="text-slate-300">-</span>
                           )}
@@ -560,18 +659,26 @@ export default function ProductLedgerPage() {
                 <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-indigo-400">
                   Summary
                 </p>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
                   <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2.5">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Added</p>
-                    <p className="font-bold text-emerald-600">{formatNumber(stats.totalAdded)}</p>
+                    <p className="font-bold text-emerald-600">{formatCtnPairs(stats.totalAdded, selectedFG)}</p>
                   </div>
                   <div className="rounded-xl border border-rose-200 bg-white px-3 py-2.5">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-rose-400">Sold / Removed</p>
-                    <p className="font-bold text-rose-500">{formatNumber(stats.totalRemoved)}</p>
+                    <p className="font-bold text-rose-500">{formatCtnPairs(stats.totalRemoved, selectedFG)}</p>
                   </div>
                   <div className="rounded-xl bg-indigo-500 px-3 py-2.5">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-indigo-200">Current physical stock</p>
-                    <p className="font-bold text-white">{formatNumber(stats.currentStock)}</p>
+                    <p className="font-bold text-white">{formatCtnPairs(stats.currentStock, selectedFG)}</p>
+                  </div>
+                  <div className="rounded-xl border border-amber-200 bg-white px-3 py-2.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-500">Reserved</p>
+                    <p className="font-bold text-amber-700">{formatCtnPairs(stats.reservedStock, selectedFG)}</p>
+                  </div>
+                  <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-500">Available after reserve</p>
+                    <p className="font-bold text-emerald-700">{formatCtnPairs(stats.availableStock, selectedFG)}</p>
                   </div>
                 </div>
               </div>

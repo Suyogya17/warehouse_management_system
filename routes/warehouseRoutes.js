@@ -8,6 +8,7 @@ router.use(authenticate);
 router.get('/', cacheResponse(10000), ctrl.getAll);
 router.get('/stock', cacheResponse(5000), ctrl.getStock);
 router.get('/movements', cacheResponse(10000), ctrl.getMovements);
+router.get('/reservations', cacheResponse(5000), ctrl.getReservations);
 
 router.post('/', authorize('ADMIN', 'CO_ADMIN'), ctrl.create);
 router.put('/:id', authorize('ADMIN', 'CO_ADMIN'), ctrl.update);

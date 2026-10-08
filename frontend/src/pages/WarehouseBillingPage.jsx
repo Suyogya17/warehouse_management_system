@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { useSearchParams } from "react-router-dom";
@@ -12,6 +12,20 @@ import { api } from "../services/api";
 import { formatNumber } from "../utils/format";
 
 const inputClass = "h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100";
+const toLocalDateValue = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+};
+const discountStorageKey = (dealerId, customerName) => {
+  const normalizedName = String(customerName || "").trim().replace(/\s+/g, " ").toLowerCase();
+  return dealerId && normalizedName ? `warehouse-billing-discount:${dealerId}:${normalizedName}` : "";
+};
+const rememberedDiscount = (dealerId, customerName) => {
+  const key = discountStorageKey(dealerId, customerName);
+  const value = key ? Number(window.localStorage.getItem(key)) : 0;
+  return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0;
+};
 
 export default function WarehouseBillingPage() {
   const [searchParams] = useSearchParams();
@@ -27,9 +41,8 @@ export default function WarehouseBillingPage() {
   const videoRef = useRef(null);
   const cameraStreamRef = useRef(null);
   const [discountValue, setDiscountValue] = useState(0);
-  const [rates, setRates] = useState({});
-  const [companyIncreases, setCompanyIncreases] = useState({});
   const [loading, setLoading] = useState(true);
+  const [billFilters, setBillFilters] = useState({ search: "", date: "", warehouse: "", dealer: "", status: "unbilled" });
 
   useEffect(() => {
     api.getOrders(token, { include_items: 1, limit: 500, billing: 1 })
@@ -55,6 +68,29 @@ export default function WarehouseBillingPage() {
       .map((fulfillment) => ({ order, fulfillment, key: `${order.id}:${fulfillment.warehouse_id}` }))
   ), [orders]);
 
+  const warehouseOptions = useMemo(() => [...new Set(choices.map(({ fulfillment }) => fulfillment.name).filter(Boolean))].sort(), [choices]);
+  const dealerOptions = useMemo(() => [...new Set(choices.map(({ order }) => order.created_by_name).filter(Boolean))].sort(), [choices]);
+  const filteredChoices = useMemo(() => {
+    const search = billFilters.search.trim().toLowerCase();
+    return choices.filter(({ order, fulfillment, key }) => {
+      if (key === selection) return true;
+      const deliveredDate = toLocalDateValue(fulfillment.delivered_at);
+      const billed = Number(fulfillment.billing_count || 0) > 0;
+      if (billFilters.date && deliveredDate !== billFilters.date) return false;
+      if (billFilters.warehouse && fulfillment.name !== billFilters.warehouse) return false;
+      if (billFilters.dealer && order.created_by_name !== billFilters.dealer) return false;
+      if (billFilters.status === "unbilled" && billed) return false;
+      if (billFilters.status === "billed" && !billed) return false;
+      if (search) {
+        const searchable = [order.id, order.created_by_name, order.created_by_email, order.customer_name, order.customer_phone, fulfillment.warehouse_slip_number, fulfillment.delivery_note_number, fulfillment.name].join(" ").toLowerCase();
+        if (!searchable.includes(search)) return false;
+      }
+      return true;
+    });
+  }, [billFilters, choices, selection]);
+  const billedCount = choices.filter(({ fulfillment }) => Number(fulfillment.billing_count || 0) > 0).length;
+  const resetBillFilters = () => setBillFilters({ search: "", date: "", warehouse: "", dealer: "", status: "unbilled" });
+
   const selected = choices.find((choice) => choice.key === selection);
   const allItems = useMemo(() => {
     if (!selected) return [];
@@ -70,11 +106,10 @@ export default function WarehouseBillingPage() {
           quantity: Number(allocation.quantity || 0),
           unit: item.unit || "pairs",
           is_commission: Number(item.is_commission || 0) === 1,
-          base_rate: Number(rates[`${item.id}:${allocation.id}`] ?? item.unit_price_snapshot ?? 0),
-          company_increase: Number(companyIncreases[`${item.id}:${allocation.id}`] || 0),
+          rate: Number(item.unit_price_snapshot ?? 0),
         }))
     );
-  }, [companyIncreases, rates, selected]);
+  }, [selected]);
   const percentageItems = useMemo(() => allItems.filter((item) => item.is_commission), [allItems]);
   const nonCommissionItems = useMemo(() => allItems.filter((item) => !item.is_commission), [allItems]);
   const items = allItems;
@@ -89,15 +124,13 @@ export default function WarehouseBillingPage() {
       pan: choice?.order.pan_number || "",
       remarks: "",
     });
-    setRates({});
-    setCompanyIncreases({});
     setShipping({
       invoice_number: "",
       bilty_number: "",
       transport_name: choice?.order.transport_name || "",
     });
     setTransportBillPhoto(null);
-    setDiscountValue(0);
+    setDiscountValue(rememberedDiscount(choice?.order.created_by, choice?.order.customer_name));
   };
 
   useEffect(() => {
@@ -108,14 +141,13 @@ export default function WarehouseBillingPage() {
     if (choices.some((choice) => choice.key === requested)) chooseBill(requested);
   }, [choices, searchParams, selection]);
 
-  const getFinalRate = (item) => item.base_rate + (item.is_commission ? 0 : item.company_increase);
-  const subtotal = items.reduce((sum, item) => sum + item.quantity * getFinalRate(item), 0);
+  const subtotal = items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
   const percentageProductSubtotal = items.reduce(
-    (sum, item) => sum + (item.is_commission ? item.quantity * getFinalRate(item) : 0),
+    (sum, item) => sum + (item.is_commission ? item.quantity * item.rate : 0),
     0
   );
   const nonCommissionSubtotal = nonCommissionItems.reduce(
-    (sum, item) => sum + item.quantity * getFinalRate(item),
+    (sum, item) => sum + item.quantity * item.rate,
     0
   );
   const normalizedDiscountPercent = Math.min(100, Math.max(0, Number(discountValue || 0)));
@@ -206,9 +238,10 @@ export default function WarehouseBillingPage() {
     if (!selected || !items.length) return null;
     const baseBillNumber = selected.fulfillment.warehouse_slip_number || selected.fulfillment.delivery_note_number || `ORDER-${selected.order.id}`;
     const billNumber = baseBillNumber;
+    const deliveredDate = selected.fulfillment.delivered_at ? new Date(selected.fulfillment.delivered_at) : new Date();
     const rows = [
       ["WAREHOUSE SALES BILL - PERCENTAGE AND NON-COMMISSION"],
-      ["Bill Number", billNumber, "Date", new Date()],
+      ["Bill Number", billNumber, "Delivery Date", deliveredDate],
       ["Invoice Number", shipping.invoice_number, "Bilty Number", shipping.bilty_number],
       ["Order", selected.order.id, "Warehouse", selected.fulfillment.name],
       ["Dealer", selected.order.created_by_name || "", "Dealer Email", selected.order.created_by_email || ""],
@@ -217,31 +250,66 @@ export default function WarehouseBillingPage() {
       ["Transport Name", shipping.transport_name, "Transport Bill Photo", transportBillPhoto?.name || "Not attached"],
       ["Remarks", customer.remarks],
       [],
-      ["S.No", "FG.ID", "Particulars", "Product Type", "Qty", "Unit", "Base Rate", "Company Increase", "Final Rate", "Amount"],
-      ...items.map((item, index) => [index + 1, item.finished_good_id, `${item.product_name}${item.size ? ` · ${item.size}` : ""}`, item.is_commission ? "Percentage" : "Non commission", item.quantity, item.unit, item.base_rate, item.is_commission ? 0 : item.company_increase, null, null]),
+      ["S.No", "FG.ID", "Particulars", "Product Type", "Qty", "Unit", "Rate", "Amount"],
+      ...items.map((item, index) => [index + 1, item.finished_good_id, `${item.product_name}${item.size ? ` · ${item.size}` : ""}`, item.is_commission ? "Percentage" : "Non commission", item.quantity, item.unit, item.rate, null]),
       [],
-      ["", "", "", "", "Total Qty", null, "", "", "Subtotal", null],
-      ["", "", "", "", "", "", "", "", "Percentage products", null],
-      ["", "", "", "", "", "", "", "", "Discount %", normalizedDiscountPercent],
-      ["", "", "", "", "", "", "", "", "Discount amount", null],
-      ["", "", "", "", "", "", "", "", "Final total", null],
+      ["", "", "", "", "Total Qty", null, "Subtotal", null],
+      ["", "", "", "", "", "", "Percentage products", null],
+      ["", "", "", "", "", "", "Discount %", normalizedDiscountPercent],
+      ["", "", "", "", "", "", "Discount amount", null],
+      ["", "", "", "", "", "", "Final total", null],
     ];
     const sheet = XLSX.utils.aoa_to_sheet(rows);
     const firstItemRow = 12;
     const lastItemRow = firstItemRow + items.length - 1;
     items.forEach((_, index) => {
       const row = firstItemRow + index;
-      sheet[`I${row}`] = { t: "n", f: `G${row}+H${row}` };
-      sheet[`J${row}`] = { t: "n", f: `E${row}*I${row}` };
+      sheet[`H${row}`] = { t: "n", f: `E${row}*G${row}` };
     });
     const summaryRow = lastItemRow + 2;
     sheet[`F${summaryRow}`] = { t: "n", f: `SUM(E${firstItemRow}:E${lastItemRow})` };
-    sheet[`J${summaryRow}`] = { t: "n", f: `SUM(J${firstItemRow}:J${lastItemRow})` };
-    sheet[`J${summaryRow + 1}`] = { t: "n", f: `SUMIF(D${firstItemRow}:D${lastItemRow},"Percentage",J${firstItemRow}:J${lastItemRow})` };
-    sheet[`J${summaryRow + 3}`] = { t: "n", f: `J${summaryRow + 1}*J${summaryRow + 2}/100` };
-    sheet[`J${summaryRow + 4}`] = { t: "n", f: `MAX(0,J${summaryRow}-J${summaryRow + 3})` };
-    sheet["!cols"] = [{ wch: 7 }, { wch: 10 }, { wch: 32 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 16 }];
-    sheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 9 } }, { s: { r: 8, c: 1 }, e: { r: 8, c: 9 } }];
+    sheet[`H${summaryRow}`] = { t: "n", f: `SUM(H${firstItemRow}:H${lastItemRow})` };
+    sheet[`H${summaryRow + 1}`] = { t: "n", f: `SUMIF(D${firstItemRow}:D${lastItemRow},"Percentage",H${firstItemRow}:H${lastItemRow})` };
+    sheet[`H${summaryRow + 3}`] = { t: "n", f: `H${summaryRow + 1}*H${summaryRow + 2}/100` };
+    sheet[`H${summaryRow + 4}`] = { t: "n", f: `MAX(0,H${summaryRow}-H${summaryRow + 3})` };
+    sheet["!cols"] = [{ wch: 7 }, { wch: 10 }, { wch: 32 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 16 }];
+    sheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }, { s: { r: 8, c: 1 }, e: { r: 8, c: 7 } }];
+    sheet["!rows"] = [{ hpt: 30 }, { hpt: 22 }, { hpt: 20 }, { hpt: 20 }, { hpt: 20 }, { hpt: 20 }, { hpt: 20 }, { hpt: 20 }, { hpt: 28 }, { hpt: 8 }, { hpt: 28 }];
+    sheet["!freeze"] = { xSplit: 0, ySplit: 11 };
+    sheet["!autofilter"] = { ref: `A11:H${lastItemRow}` };
+    sheet["!margins"] = { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.15, footer: 0.15 };
+    sheet["!pageSetup"] = { orientation: "landscape", fitToWidth: 1, fitToHeight: 1, paperSize: 9 };
+    const borderSide = { style: "thin", color: { rgb: "D7DEE8" } };
+    const border = { top: borderSide, bottom: borderSide, left: borderSide, right: borderSide };
+    const styleRange = (range, style) => {
+      const decoded = XLSX.utils.decode_range(range);
+      for (let rowIndex = decoded.s.r; rowIndex <= decoded.e.r; rowIndex += 1) {
+        for (let columnIndex = decoded.s.c; columnIndex <= decoded.e.c; columnIndex += 1) {
+          const address = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+          if (!sheet[address]) sheet[address] = { t: "s", v: "" };
+          sheet[address].s = { ...(sheet[address].s || {}), ...style };
+        }
+      }
+    };
+    styleRange("A1:H1", { fill: { fgColor: { rgb: "312E81" } }, font: { name: "Arial", sz: 16, bold: true, color: { rgb: "FFFFFF" } }, alignment: { horizontal: "center", vertical: "center" } });
+    styleRange("A2:H9", { font: { name: "Arial", sz: 10, color: { rgb: "172033" } }, alignment: { vertical: "center", wrapText: true } });
+    ["A2", "C2", "A3", "C3", "A4", "C4", "A5", "C5", "A6", "C6", "A7", "C7", "A8", "C8", "A9"].forEach((address) => {
+      if (sheet[address]) sheet[address].s = { ...(sheet[address].s || {}), font: { name: "Arial", sz: 10, bold: true, color: { rgb: "475569" } } };
+    });
+    styleRange("A11:H11", { fill: { fgColor: { rgb: "4338CA" } }, font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFF" } }, alignment: { horizontal: "center", vertical: "center", wrapText: true }, border });
+    styleRange(`A${firstItemRow}:H${lastItemRow}`, { font: { name: "Arial", sz: 10, color: { rgb: "172033" } }, alignment: { vertical: "center" }, border });
+    styleRange(`E${summaryRow}:H${summaryRow + 4}`, { fill: { fgColor: { rgb: "EEF2FF" } }, font: { name: "Arial", sz: 10, bold: true, color: { rgb: "1E1B4B" } }, border });
+    sheet["D2"].z = "dd-mmm-yyyy";
+    for (let row = firstItemRow; row <= lastItemRow; row += 1) {
+      sheet[`E${row}`].z = "#,##0";
+      sheet[`G${row}`].z = "#,##0.00";
+      sheet[`H${row}`].z = "#,##0.00";
+    }
+    sheet[`H${summaryRow}`].z = "#,##0.00";
+    sheet[`H${summaryRow + 1}`].z = "#,##0.00";
+    sheet[`H${summaryRow + 2}`].z = "0.00";
+    sheet[`H${summaryRow + 3}`].z = "#,##0.00";
+    sheet[`H${summaryRow + 4}`].z = "#,##0.00";
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, sheet, "Warehouse Bill");
     return { workbook, billNumber };
@@ -250,8 +318,11 @@ export default function WarehouseBillingPage() {
   const recordBillCreation = async (outputType) => {
     const previousCount = Number(selected?.fulfillment?.billing_count || 0);
     if (previousCount > 0 && !window.confirm(`WARNING: A bill has already been created ${previousCount} time${previousCount === 1 ? "" : "s"} for this warehouse DN.\n\nContinue only if you are correcting a human error.`)) return false;
-    await api.logWarehouseBilling(selected.order.id, { warehouse_id:selected.fulfillment.warehouse_id, delivery_note_number:selected.fulfillment.warehouse_slip_number || selected.fulfillment.delivery_note_number, output_type:outputType, invoice_number:shipping.invoice_number, final_total:finalTotal, confirm_rebill:previousCount>0 }, token);
-    selected.fulfillment.billing_count = previousCount + 1;
+    const storageKey = discountStorageKey(selected.order.created_by, customer.name);
+    if (storageKey) window.localStorage.setItem(storageKey, String(normalizedDiscountPercent));
+    api.logWarehouseBilling(selected.order.id, { warehouse_id:selected.fulfillment.warehouse_id, delivery_note_number:selected.fulfillment.warehouse_slip_number || selected.fulfillment.delivery_note_number, output_type:outputType, invoice_number:shipping.invoice_number, final_total:finalTotal, confirm_rebill:previousCount>0 }, token)
+      .then(() => { selected.fulfillment.billing_count = previousCount + 1; })
+      .catch((error) => window.alert(`The file was created, but billing history could not be saved: ${error?.message || "Unknown error"}`));
     return true;
   };
 
@@ -262,10 +333,11 @@ export default function WarehouseBillingPage() {
     XLSX.writeFile(built.workbook, `${built.billNumber}-bill.xlsx`, { cellStyles: true });
   };
 
-  const buildPdf = () => {
+  const buildPdf = async () => {
     if (!selected || !items.length) return null;
     const baseBillNumber = selected.fulfillment.warehouse_slip_number || selected.fulfillment.delivery_note_number || `ORDER-${selected.order.id}`;
     const billNumber = baseBillNumber;
+    const deliveredDate = selected.fulfillment.delivered_at ? new Date(selected.fulfillment.delivered_at) : new Date();
     const document = new jsPDF({
       unit: "mm",
       format: "a4",
@@ -282,56 +354,74 @@ export default function WarehouseBillingPage() {
     });
     document.setFont("helvetica", "bold");
     document.setFontSize(16);
-    document.text("WAREHOUSE SALES BILL", 105, 16, { align: "center" });
+    document.text("SALES BILL", 105, 15, { align: "center" });
     document.setFontSize(10);
-    document.text(`Percentage + Non-Commission | ${billNumber} | Order #${selected.order.id} | ${selected.fulfillment.name}`, 105, 23, { align: "center" });
+    document.text(`${billNumber} | Order #${selected.order.id} | ${selected.fulfillment.name}`, 105, 22, { align: "center" });
     document.setDrawColor(203, 213, 225);
-    document.line(14, 27, 196, 27);
-    document.setFont("helvetica", "normal");
-    const details = [
-      [`Dealer: ${selected.order.created_by_name || "-"}`, `Dealer email: ${selected.order.created_by_email || "-"}`],
-      [`Dealer customer: ${customer.name || "-"}`, `Customer phone: ${customer.phone || "-"}`],
-      [`Customer address: ${customer.address || "-"}`, `Customer PAN: ${customer.pan || "-"}`],
-      [`Invoice number: ${shipping.invoice_number || "-"}`, `Bilty number: ${shipping.bilty_number || "-"}`],
-      [`Transport: ${shipping.transport_name || "-"}`, `Transport bill photo: ${transportBillPhoto ? "Attached" : "Not attached"}`],
-      [`Warehouse: ${selected.fulfillment.name || "-"}`, `Date: ${new Date().toLocaleDateString()}`],
-      [`Remarks: ${customer.remarks || "-"}`, ""],
-    ];
-    let detailY = 34;
-    details.forEach(([left, right]) => {
-      document.text(String(left), 14, detailY, { maxWidth: 112 });
-      if (right) document.text(String(right), 132, detailY, { maxWidth: 64 });
-      detailY += 6;
-    });
+    document.line(14, 32, 196, 32);
     autoTable(document, {
-      startY: detailY + 2,
-      head: [["S.No", "FG.ID", "Particulars", "Type", "Qty", "Base", "+Company", "Rate", "Amount"]],
-      body: items.map((item, index) => [
-        index + 1,
-        item.finished_good_id,
-        `${item.product_name}${item.size ? ` - ${item.size}` : ""}`,
-        item.is_commission ? "Percentage" : "Non commission",
-        formatNumber(item.quantity),
-        Number(item.base_rate).toFixed(2),
-        Number(item.is_commission ? 0 : item.company_increase).toFixed(2),
-        getFinalRate(item).toFixed(2),
-        (item.quantity * getFinalRate(item)).toFixed(2),
-      ]),
-      theme: "grid",
-      styles: { font: "helvetica", fontSize: 8, cellPadding: 2.2, textColor: [15, 23, 42] },
-      headStyles: { fillColor: [49, 46, 129], textColor: 255, fontStyle: "bold" },
+      startY: 36,
+      body: [
+        ["Dealer", selected.order.created_by_name || "-", "Dealer email", selected.order.created_by_email || "-"],
+        ["Dealer customer", customer.name || "-", "Customer phone", customer.phone || "-"],
+        ["Customer address", customer.address || "-", "Customer PAN", customer.pan || "-"],
+        ["Invoice number", shipping.invoice_number || "-", "Bilty number", shipping.bilty_number || "-"],
+        ["Transport", shipping.transport_name || "-", "Transport bill photo", transportBillPhoto ? "Attached" : "Not attached"],
+        ["Warehouse", selected.fulfillment.name || "-", "Delivery date", deliveredDate.toLocaleDateString()],
+        ["Remarks", customer.remarks || "-", "", ""],
+      ],
+      theme: "plain",
+      margin: { left: 14, right: 14 },
+      styles: { font: "helvetica", fontSize: 8.5, cellPadding: 1.4, overflow: "linebreak", valign: "top" },
       columnStyles: {
-        0: { cellWidth: 12, halign: "center" },
-        1: { cellWidth: 15 },
-        2: { cellWidth: 43 },
-        3: { cellWidth: 23 },
-        4: { cellWidth: 14, halign: "right" },
-        5: { cellWidth: 19, halign: "right" },
-        6: { cellWidth: 19, halign: "right" },
-        7: { cellWidth: 19, halign: "right" },
-        8: { cellWidth: 22, halign: "right" },
+        0: { cellWidth: 27, fontStyle: "bold", textColor: [71, 85, 105] },
+        1: { cellWidth: 61 },
+        2: { cellWidth: 31, fontStyle: "bold", textColor: [71, 85, 105] },
+        3: { cellWidth: 63 },
       },
     });
+
+    const addProductSection = (title, productItems, startY, fillColor) => {
+      if (!productItems.length) return startY;
+      if (startY > 265) {
+        document.addPage();
+        startY = 20;
+      }
+      document.setFont("helvetica", "bold");
+      document.setFontSize(10);
+      document.setTextColor(...fillColor);
+      document.text(title, 14, startY);
+      document.setTextColor(15, 23, 42);
+      autoTable(document, {
+        startY: startY + 3,
+        head: [["S.No", "FG.ID", "Particulars", "Qty", "Rate", "Amount"]],
+        body: productItems.map((item, index) => [
+          index + 1,
+          item.finished_good_id,
+          `${item.product_name}${item.size ? ` - ${item.size}` : ""}`,
+          formatNumber(item.quantity),
+          Number(item.rate).toFixed(2),
+          (item.quantity * item.rate).toFixed(2),
+        ]),
+        theme: "grid",
+        margin: { left: 14, right: 14 },
+        styles: { font: "helvetica", fontSize: 8, cellPadding: 2.2, textColor: [15, 23, 42] },
+        headStyles: { fillColor, textColor: 255, fontStyle: "bold" },
+        columnStyles: {
+          0: { cellWidth: 12, halign: "center" },
+          1: { cellWidth: 17 },
+          2: { cellWidth: 83 },
+          3: { cellWidth: 20, halign: "right" },
+          4: { cellWidth: 24, halign: "right" },
+          5: { cellWidth: 26, halign: "right" },
+        },
+      });
+      return document.lastAutoTable.finalY + 8;
+    };
+
+    let nextSectionY = document.lastAutoTable.finalY + 8;
+    nextSectionY = addProductSection("PERCENTAGE PRODUCTS", percentageItems, nextSectionY, [49, 46, 129]);
+    addProductSection("NON-COMMISSION PRODUCTS", nonCommissionItems, nextSectionY, [71, 85, 105]);
     let summaryY = document.lastAutoTable.finalY + 8;
     if (summaryY > 258) {
       document.addPage();
@@ -383,19 +473,25 @@ export default function WarehouseBillingPage() {
   };
 
   const downloadPdf = async () => {
-    const built = buildPdf();
-    if (!built) return;
-    if (!await recordBillCreation("PDF")) return;
-    const url = URL.createObjectURL(built.blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${built.billNumber}-bill.pdf`;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    try {
+      const built = await buildPdf();
+      if (!built || !await recordBillCreation("PDF")) return;
+      const url = URL.createObjectURL(built.blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${built.billNumber}-bill.pdf`;
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      window.alert(`The PDF could not be downloaded: ${error?.message || "Unknown error"}`);
+    }
   };
 
   const shareBill = async () => {
-    const built = buildPdf();
+    const built = await buildPdf();
     if (!built) return;
     const shareData = {
       title: `${built.billNumber} warehouse bill`,
@@ -427,16 +523,30 @@ export default function WarehouseBillingPage() {
   };
 
   const renderProductRows = (productItems) => (
-    <div className="overflow-x-auto"><table className="w-full min-w-[1100px] text-sm"><thead className="bg-slate-50"><tr>{["FG.ID","Product","Type","Qty","Unit","Base rate","Company increase","Final rate","Amount"].map(h=><th key={h} className="px-4 py-3 text-left">{h}</th>)}</tr></thead><tbody>{productItems.map(item=><tr key={item.key} className="border-t"><td className="px-4 py-3">{item.finished_good_id}</td><td className="px-4 py-3 font-medium">{item.product_name}</td><td className="px-4 py-3"><span className={item.is_commission ? "font-semibold text-indigo-700" : "text-slate-500"}>{item.is_commission ? "Percentage" : "Non commission"}</span></td><td className="px-4 py-3">{formatNumber(item.quantity)}</td><td className="px-4 py-3">{item.unit}</td><td className="px-4 py-3"><input type="number" min="0" step="0.01" className={inputClass} value={item.base_rate} onChange={(e)=>setRates(r=>({...r,[item.key]:e.target.value}))}/></td><td className="px-4 py-3">{item.is_commission ? <span className="text-slate-400">Not applicable</span> : <select className={inputClass} value={item.company_increase} onChange={(e)=>setCompanyIncreases(current=>({...current,[item.key]:Number(e.target.value)}))}><option value={0}>Rs 0</option><option value={25}>+Rs 25</option><option value={50}>+Rs 50</option></select>}</td><td className="px-4 py-3 font-semibold">{formatNumber(getFinalRate(item))}</td><td className="px-4 py-3 font-semibold">{formatNumber(item.quantity*getFinalRate(item))}</td></tr>)}</tbody></table></div>
+    <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-sm"><thead className="bg-slate-50"><tr>{["FG.ID","Product","Type","Qty","Unit","Rate","Amount"].map(h=><th key={h} className="px-4 py-3 text-left">{h}</th>)}</tr></thead><tbody>{productItems.map(item=><tr key={item.key} className="border-t"><td className="px-4 py-3">{item.finished_good_id}</td><td className="px-4 py-3 font-medium">{item.product_name}</td><td className="px-4 py-3"><span className={item.is_commission ? "font-semibold text-indigo-700" : "text-slate-500"}>{item.is_commission ? "Percentage" : "Non commission"}</span></td><td className="px-4 py-3">{formatNumber(item.quantity)}</td><td className="px-4 py-3">{item.unit}</td><td className="px-4 py-3 font-semibold">{formatNumber(item.rate)}</td><td className="px-4 py-3 font-semibold">{formatNumber(item.quantity*item.rate)}</td></tr>)}</tbody></table></div>
   );
 
   return <div className="space-y-5">
-    <PageHeader eyebrow="Sales" title="Warehouse Billing" description="Create one bill from each warehouse DN. Billing does not change stock." icon="ledger" />
-    <SectionCard title="Select delivered warehouse DN" icon="orders">
-      <div className="p-5"><select className={inputClass} value={selection} onChange={(event) => chooseBill(event.target.value)} disabled={loading}>
-        <option value="">{loading ? "Loading delivered DNs…" : "Choose order and warehouse DN"}</option>
-        {choices.map(({ key, order, fulfillment }) => <option key={key} value={key}>Order #{order.id} · Dealer: {order.created_by_name || "Unknown"} · Customer: {order.customer_name || "Unknown"} · {fulfillment.warehouse_slip_number} · {fulfillment.name} · {formatNumber(fulfillment.delivered_pairs)} pairs</option>)}
-      </select></div>
+    <PageHeader eyebrow="Sales" title="Sales Billing" description="Create one bill from each warehouse DN. Billing does not change stock." icon="ledger" />
+    <SectionCard title="Find a delivered warehouse DN" subtitle="Start with ready-to-bill deliveries, or use the filters to find an older bill." icon="orders">
+      <div className="grid gap-3 border-b border-slate-200 bg-slate-50 p-5 sm:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 bg-white p-3"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Delivered DNs</p><p className="mt-1 text-2xl font-black text-slate-950">{formatNumber(choices.length)}</p></div>
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3"><p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Ready to bill</p><p className="mt-1 text-2xl font-black text-emerald-900">{formatNumber(choices.length - billedCount)}</p></div>
+        <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3"><p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Already billed</p><p className="mt-1 text-2xl font-black text-indigo-950">{formatNumber(billedCount)}</p></div>
+      </div>
+      <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-5">
+        <label className="text-xs font-semibold text-slate-600 xl:col-span-2">Search order, customer, phone or DN<input type="search" className={`mt-1 ${inputClass}`} value={billFilters.search} placeholder="Example: DN-2871 or Pramod" onChange={(event) => setBillFilters((current) => ({ ...current, search: event.target.value }))} /></label>
+        <label className="text-xs font-semibold text-slate-600">Delivery date<input type="date" className={`mt-1 ${inputClass}`} value={billFilters.date} onChange={(event) => setBillFilters((current) => ({ ...current, date: event.target.value }))} /></label>
+        <label className="text-xs font-semibold text-slate-600">Warehouse<select className={`mt-1 ${inputClass}`} value={billFilters.warehouse} onChange={(event) => setBillFilters((current) => ({ ...current, warehouse: event.target.value }))}><option value="">All warehouses</option>{warehouseOptions.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+        <label className="text-xs font-semibold text-slate-600">Dealer<select className={`mt-1 ${inputClass}`} value={billFilters.dealer} onChange={(event) => setBillFilters((current) => ({ ...current, dealer: event.target.value }))}><option value="">All dealers</option>{dealerOptions.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+        <label className="text-xs font-semibold text-slate-600">Billing status<select className={`mt-1 ${inputClass}`} value={billFilters.status} onChange={(event) => setBillFilters((current) => ({ ...current, status: event.target.value }))}><option value="unbilled">Ready to bill</option><option value="billed">Already billed</option><option value="all">All delivered DNs</option></select></label>
+        <div className="flex items-end"><Button variant="secondary" onClick={resetBillFilters}>Clear filters</Button></div>
+        <div className="flex items-end text-sm text-slate-500 md:col-span-2 xl:col-span-3">Showing <strong className="mx-1 text-slate-900">{filteredChoices.length}</strong> matching DN{filteredChoices.length === 1 ? "" : "s"}</div>
+      </div>
+      <div className="border-t border-slate-200 p-5"><label className="text-xs font-semibold text-slate-600">Delivered warehouse DN<select className={`mt-1 ${inputClass}`} value={selection} onChange={(event) => chooseBill(event.target.value)} disabled={loading}>
+        <option value="">{loading ? "Loading delivered DNs…" : filteredChoices.length ? "Choose a matching warehouse DN" : "No delivered DNs match these filters"}</option>
+        {filteredChoices.map(({ key, order, fulfillment }) => <option key={key} value={key}>{Number(fulfillment.billing_count || 0) > 0 ? "BILLED" : "READY"} · {toLocalDateValue(fulfillment.delivered_at) || "No date"} · {fulfillment.warehouse_slip_number || fulfillment.delivery_note_number || "No DN"} · {fulfillment.name} · Order #{order.id} · {order.created_by_name || "Unknown dealer"} · {order.customer_name || "Unknown customer"} · {formatNumber(fulfillment.delivered_pairs)} pairs</option>)}
+      </select></label></div>
     </SectionCard>
     {selected ? <>
       <SectionCard title="Customer and bill details" subtitle="These edits apply only to this bill." icon="edit">
@@ -470,7 +580,7 @@ export default function WarehouseBillingPage() {
         {percentageItems.length ? renderProductRows(percentageItems) : <p className="p-5 text-sm text-slate-500">No delivered percentage products in this warehouse DN.</p>}
         <div className="grid gap-3 border-t p-5 md:grid-cols-3"><label className="text-xs font-semibold">Discount percentage<input type="number" min="0" max="100" step="0.01" disabled={!percentageItems.length} className={`mt-1 ${inputClass}`} value={discountValue} onChange={e=>setDiscountValue(Math.min(100, Math.max(0, Number(e.target.value))))}/><span className="mt-1 block font-normal text-slate-500">Applied only to Percentage products.</span></label><div className="rounded-xl bg-slate-50 p-3"><p>Percentage subtotal: <b>{formatNumber(percentageProductSubtotal)}</b></p><p>Discount: <b>{formatNumber(discount)}</b></p></div><div className="rounded-xl bg-indigo-50 p-3"><p className="text-lg">Percentage total: <b>{formatNumber(Math.max(0, percentageProductSubtotal-discount))}</b></p></div></div>
       </SectionCard>
-      <SectionCard title={`${selected.fulfillment.name} · Non-Commission Products`} subtitle="No discount. Company increase can be selected separately for each product." icon="box">
+      <SectionCard title={`${selected.fulfillment.name} · Non-Commission Products`} subtitle="No discount. Rate is the price shown to the user when the order was placed." icon="box">
         {nonCommissionItems.length ? renderProductRows(nonCommissionItems) : <p className="p-5 text-sm text-slate-500">No delivered non-commission products in this warehouse DN.</p>}
         <div className="grid gap-3 border-t p-5 md:grid-cols-2"><div className="rounded-xl bg-slate-50 p-3"><p>Non-commission product lines: <b>{nonCommissionItems.length}</b></p><p className="text-sm text-slate-500">Discount is not allowed.</p></div><div className="rounded-xl bg-indigo-50 p-3"><p className="text-lg">Non-commission total: <b>{formatNumber(nonCommissionSubtotal)}</b></p></div></div>
       </SectionCard>

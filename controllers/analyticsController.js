@@ -633,6 +633,7 @@ const getProduction = async (req, res, next) => {
       rawMaterialConsumption,
       productionByUser,
       latestProductProduction,
+      dailyProduction,
     ] = await Promise.all([
       run(
         `SELECT DATE_FORMAT(created_at, '%Y-%m') AS month,
@@ -697,6 +698,22 @@ const getProduction = async (req, res, next) => {
          WHERE fg.is_deleted = 0
          ORDER BY p.created_at DESC, fg.article_code, fg.color`
       ),
+      run(
+        `SELECT DATE_FORMAT(p.created_at, '%Y-%m-%d') AS production_date,
+                COALESCE(SUM(p.qty_produced), 0) AS total_quantity,
+                ROUND(COALESCE(SUM(CASE
+                  WHEN COALESCE(fg.inner_boxes_per_outer_box, 0) > 0
+                  THEN p.qty_produced / fg.inner_boxes_per_outer_box
+                  ELSE 0
+                END), 0), 2) AS total_cartons,
+                COUNT(p.id) AS production_runs,
+                COUNT(DISTINCT p.finished_good_id) AS product_count,
+                COUNT(DISTINCT p.produced_by) AS producer_count
+         FROM production p
+         JOIN finished_goods fg ON fg.id = p.finished_good_id
+         GROUP BY DATE(p.created_at)
+         ORDER BY production_date DESC`
+      ),
     ]);
 
     return res.json({
@@ -716,6 +733,13 @@ const getProduction = async (req, res, next) => {
           "latest_quantity",
           "total_quantity",
           "production_runs",
+        ]),
+        daily_production: mapNumeric(dailyProduction, [
+          "total_quantity",
+          "total_cartons",
+          "production_runs",
+          "product_count",
+          "producer_count",
         ]),
       },
     });

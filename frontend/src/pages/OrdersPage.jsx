@@ -106,6 +106,49 @@ const sortOrderItemsByName = (items = []) =>
     )
   );
 
+const ACTIVE_DN_ALLOCATION_STATUSES = new Set(["", "PLANNED", "DEDUCTED"]);
+const INACTIVE_DN_STATUSES = new Set(["VOID", "REASSIGNED"]);
+
+const isActiveDnItem = (item = {}) =>
+  ACTIVE_DN_ALLOCATION_STATUSES.has(
+    String(item.allocation_status || "").trim().toUpperCase()
+  );
+
+// Verification and partial delivery can leave several allocation records for
+// one product in the same warehouse. Operational views should show one product
+// line; the raw rows remain available from the order audit/history endpoints.
+const getCurrentDnItems = (items = []) => {
+  const consolidated = new Map();
+
+  items.filter(isActiveDnItem).forEach((item) => {
+    const key = String(item.order_item_id || item.finished_good_id || item.allocation_id);
+    const existing = consolidated.get(key);
+    if (existing) {
+      existing.quantity += Number(item.quantity || 0);
+      existing.allocation_ids.push(item.allocation_id);
+      if (existing.allocation_status !== item.allocation_status) {
+        existing.allocation_status = "MIXED";
+      }
+      return;
+    }
+    consolidated.set(key, {
+      ...item,
+      quantity: Number(item.quantity || 0),
+      allocation_ids: [item.allocation_id].filter(Boolean),
+    });
+  });
+
+  return sortOrderItemsByName([...consolidated.values()]);
+};
+
+const getDnStatusLabel = (fulfillment = {}) => {
+  const status = String(fulfillment.status || "PLANNED").toUpperCase();
+  if (status === "REASSIGNED") return "Reassigned — historical DN";
+  if (status === "VOID") return "Void — historical DN";
+  if (status === "DEDUCTED") return "Delivered";
+  return status.replaceAll("_", " ");
+};
+
 const getAdminOrderProductLabel = (product = {}) =>
   `${product.article_code || product.name} · ${
     product.color || "No color"
@@ -1131,6 +1174,11 @@ export default function OrdersPage() {
                 : fulfillmentCartons.toLocaleString(undefined, {
                     maximumFractionDigits: 2,
                   });
+              const currentItems = getCurrentDnItems(fulfillment.items || []);
+              const fulfillmentStatus = String(
+                fulfillment.status || "PLANNED"
+              ).toUpperCase();
+              const isHistorical = INACTIVE_DN_STATUSES.has(fulfillmentStatus);
 
               return (
                 <div
@@ -1138,16 +1186,27 @@ export default function OrdersPage() {
                   className="overflow-hidden rounded-xl border-2 border-slate-400 bg-white"
                 >
                   <div className="border-b-2 border-slate-400 bg-slate-200 px-3 py-2">
-                    <p className="font-black text-slate-950">{dnNumber}</p>
-                    <p className="text-[11px] font-bold text-slate-700">
-                      {fulfillment.name || "Warehouse"}
-                    </p>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="font-black text-slate-950">{dnNumber}</p>
+                        <p className="text-[11px] font-bold text-slate-700">
+                          {fulfillment.name || "Warehouse"}
+                        </p>
+                      </div>
+                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${
+                        isHistorical
+                          ? "bg-slate-700 text-white"
+                          : "bg-white text-slate-700"
+                      }`}>
+                        {getDnStatusLabel(fulfillment)}
+                      </span>
+                    </div>
                   </div>
                   <div className="space-y-1.5 px-3 py-2.5">
-                    {(fulfillment.items || []).length ? (
-                      sortOrderItemsByName(fulfillment.items).map((item) => (
+                    {currentItems.length ? (
+                      currentItems.map((item) => (
                         <div
-                          key={item.allocation_id || `${item.finished_good_id}:${item.quantity}`}
+                          key={item.order_item_id || item.allocation_id || `${item.finished_good_id}:${item.quantity}`}
                           className="text-xs font-semibold leading-5 text-slate-950"
                         >
                           {item.finished_good_id} - {item.article_code || item.product_name}{item.color ? ` - ${item.color}` : ""} - {formatNumber(item.quantity)} {item.unit || "pairs"}
@@ -1155,14 +1214,18 @@ export default function OrdersPage() {
                       ))
                     ) : (
                       <p className="text-xs font-semibold italic text-slate-600">
-                        {fulfillment.status === "REASSIGNED"
-                          ? "Items reassigned to another DN"
+                        {fulfillmentStatus === "REASSIGNED"
+                          ? `No current items. Reassigned to ${
+                              (fulfillment.reassigned_to_delivery_note_numbers || []).join(", ") || "another warehouse DN"
+                            }.`
+                          : fulfillmentStatus === "VOID"
+                            ? "This DN is void and is kept only for history."
                           : "No active items"}
                       </p>
                     )}
                   </div>
                   <div className="border-t-2 border-slate-400 bg-slate-100 px-3 py-2 text-xs font-black text-slate-950">
-                    {fulfillmentCartonLabel} CTN / {formatNumber(fulfillment.pairs || 0)} pairs
+                    {isHistorical ? "Historical DN — excluded from current totals" : `${fulfillmentCartonLabel} CTN / ${formatNumber(fulfillment.pairs || 0)} pairs`}
                   </div>
                 </div>
               );
@@ -1235,9 +1298,20 @@ export default function OrdersPage() {
       setExportingDnOrderId(Number(order.id));
       const prepared = await api.prepareOrderDeliveryNote(order.id, token);
       const preparedOrder = prepared.data || {};
-      const fulfillments = preparedOrder.warehouse_fulfillments || [];
+      const fulfillments = (preparedOrder.warehouse_fulfillments || [])
+        .filter(
+          (fulfillment) =>
+            !INACTIVE_DN_STATUSES.has(
+              String(fulfillment.status || "").toUpperCase()
+            )
+        )
+        .map((fulfillment) => ({
+          ...fulfillment,
+          items: getCurrentDnItems(fulfillment.items || []),
+        }))
+        .filter((fulfillment) => fulfillment.items.length > 0);
       if (!fulfillments.length) {
-        throw new Error("This order has no warehouse delivery notes to export.");
+        throw new Error("This order has no current warehouse delivery notes to export.");
       }
 
       const XLSX = await import("xlsx-js-style");
@@ -1306,7 +1380,7 @@ export default function OrdersPage() {
           fulfillment.delivery_note_number ||
           fulfillment.warehouse_slip_number ||
           `DN ${fulfillmentIndex + 1}`;
-        const sourceItems = sortOrderItemsByName(fulfillment.items || []);
+        const sourceItems = fulfillment.items || [];
         const rowsPerPage = 25;
         const itemPages = [];
         for (let itemIndex = 0; itemIndex < sourceItems.length; itemIndex += rowsPerPage) {
@@ -2010,6 +2084,17 @@ export default function OrdersPage() {
 
   return (
     <div className="space-y-4">
+      <PageHeader
+        eyebrow="Operations"
+        title="Orders"
+        description="Review, confirm, pack, and deliver customer orders."
+        icon="orders"
+        actions={
+          <Button icon="plus" onClick={() => navigate("/take-order")}>
+            Take Customer Order
+          </Button>
+        }
+      />
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard label="Physical Stock" value={formatNumber(totals.physical)} icon="finishedGoods" />
         <StatCard label="Reserved Stock" value={formatNumber(totals.reserved)} tone="alert" icon="orders" />
@@ -2126,7 +2211,7 @@ export default function OrdersPage() {
         </SectionCard>
       ) : null}
 
-      <SectionCard
+      {false ? <SectionCard
         title="Create order"
         subtitle="Enter the customer first, then add products in whole cartons. The system calculates pairs automatically."
         icon="orders"
@@ -2365,7 +2450,7 @@ export default function OrdersPage() {
             </div>
           </div>
         </form>
-      </SectionCard>
+      </SectionCard> : null}
 
       <SectionCard
         title="Orders"

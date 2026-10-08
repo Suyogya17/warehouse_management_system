@@ -26,9 +26,15 @@ import {
   sumRows,
 } from "./analyticsShared";
 
+const dateInputValue = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+const today = new Date();
+const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+
 export default function ProductionAnalytics({ data }) {
   const [productionSearch, setProductionSearch] = useState("");
   const [productionSeries, setProductionSeries] = useState([]);
+  const [dailyFromDate, setDailyFromDate] = useState(dateInputValue(currentMonthStart));
+  const [dailyToDate, setDailyToDate] = useState(dateInputValue(today));
   const latestProductionRows = data?.latest_product_production || [];
   const productionSeriesOptions = useMemo(() => [...new Set(latestProductionRows
     .map((row) => String(row.sole_code || "").replace(/[-_\s]*sole$/i, "").trim())
@@ -82,9 +88,55 @@ export default function ProductionAnalytics({ data }) {
   const totalProductionRuns = sumRows(monthlyProductionRows, "production_runs");
   const topProducedProduct = producedProductRows[0];
   const topProductionUser = productionUserRows[0];
+  const dailyProductionRows = useMemo(() => (data?.daily_production || []).filter((row) => {
+    const date = String(row.production_date || "").slice(0, 10);
+    if (dailyFromDate && date < dailyFromDate) return false;
+    if (dailyToDate && date > dailyToDate) return false;
+    return true;
+  }), [dailyFromDate, dailyToDate, data?.daily_production]);
+  const dailyProductionTotals = useMemo(() => dailyProductionRows.reduce((totals, row) => ({
+    quantity: totals.quantity + Number(row.total_quantity || 0),
+    cartons: totals.cartons + Number(row.total_cartons || 0),
+    runs: totals.runs + Number(row.production_runs || 0),
+  }), { quantity: 0, cartons: 0, runs: 0 }), [dailyProductionRows]);
 
   return (
     <div className="space-y-4">
+      <SectionCard title="Daily Factory Production Report" subtitle="Shows how many production days were worked and how much finished-goods quantity was made in the selected period." icon="production">
+        <div className="grid gap-3 border-b border-slate-200 p-4 sm:grid-cols-2 lg:grid-cols-[220px_220px_1fr]">
+          <label className="text-sm font-semibold text-slate-700">From date<input type="date" value={dailyFromDate} max={dailyToDate || undefined} onChange={(event) => setDailyFromDate(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" /></label>
+          <label className="text-sm font-semibold text-slate-700">To date<input type="date" value={dailyToDate} min={dailyFromDate || undefined} onChange={(event) => setDailyToDate(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" /></label>
+          <div className="flex items-end"><button type="button" onClick={() => { setDailyFromDate(dateInputValue(currentMonthStart)); setDailyToDate(dateInputValue(today)); }} className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">This month</button></div>
+        </div>
+        <ChartSummary
+          items={[
+            { label: "Production Days", value: formatNumber(dailyProductionRows.length) },
+            { label: "Produced Qty", value: formatNumber(dailyProductionTotals.quantity) },
+            { label: "Produced CTN", value: formatNumber(dailyProductionTotals.cartons) },
+            { label: "Production Runs", value: formatNumber(dailyProductionTotals.runs) },
+          ]}
+        />
+        <DataTable
+          rows={dailyProductionRows}
+          exportFilename={`daily-factory-production-${dailyFromDate}-to-${dailyToDate}`}
+          emptyTitle="No production in this period"
+          emptyDescription="Change the date range to see production completed on other days."
+          summaryColumns={[
+            { key: "total_quantity", label: "Produced Qty" },
+            { key: "total_cartons", label: "Produced CTN" },
+            { key: "production_runs", label: "Runs" },
+          ]}
+          columns={[
+            { key: "production_date", label: "Production Date", render: (row) => formatDate(`${String(row.production_date).slice(0, 10)}T00:00:00`) },
+            { key: "total_quantity", label: "Produced Qty", render: (row) => formatNumber(row.total_quantity) },
+            { key: "total_cartons", label: "Produced CTN", render: (row) => formatNumber(row.total_cartons) },
+            { key: "production_runs", label: "Production Runs", render: (row) => formatNumber(row.production_runs) },
+            { key: "product_count", label: "Products Made", render: (row) => formatNumber(row.product_count) },
+            { key: "producer_count", label: "Production Users", render: (row) => formatNumber(row.producer_count) },
+          ]}
+        />
+      </SectionCard>
+
       <SectionCard title="Latest Product Production" subtitle="Search a product and series to see its most recent production date." icon="production">
         <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_240px]">
           <label className="text-sm font-semibold text-slate-700">Product search

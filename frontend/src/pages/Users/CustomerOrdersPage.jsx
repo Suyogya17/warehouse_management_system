@@ -40,9 +40,13 @@ const isUsefulTransport = (value) => {
 };
 
 export default function UserOrderPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
+  const isAdminOrderEntry = ["ADMIN", "CO_ADMIN"].includes(
+    String(user?.role || "").toUpperCase()
+  );
+  const catalogPath = isAdminOrderEntry ? "/take-order" : "/finished-goods";
 
   const [cart, setCart] = useState([]);
   const [cartLoaded, setCartLoaded] = useState(false);
@@ -102,6 +106,7 @@ export default function UserOrderPage() {
       if (savedCart) {
         const parsedCart = JSON.parse(savedCart);
         const updatedCart = parsedCart.map((item) => {
+          const cartonsPerBox = Number(item.product?.inner_boxes_per_outer_box || 0);
           return {
             ...item,
             orderBy: item.orderBy || (cartonsPerBox > 0 ? "cartons" : "pairs"),
@@ -429,20 +434,31 @@ export default function UserOrderPage() {
 
   return (
     <div className="space-y-6 pb-8">
-      <PageHeader title="Review & Place Order" subtitle="Complete your order details" />
+      <PageHeader
+        eyebrow={isAdminOrderEntry ? "Field sales" : undefined}
+        title={isAdminOrderEntry ? "Record Customer Order" : "Review & Place Order"}
+        description={
+          isAdminOrderEntry
+            ? "Confirm the products and enter the customer's delivery details."
+            : "Complete your order details"
+        }
+      />
 
       <button
-        onClick={() => navigate("/finished-goods")}
+        onClick={() => navigate(catalogPath)}
         className="flex items-center gap-2 text-indigo-600 hover:text-indigo-700 font-medium"
       >
         <ArrowLeft size={18} />
-        Continue Shopping
+        {isAdminOrderEntry ? "Back to Products" : "Continue Shopping"}
       </button>
 
       <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 flex gap-3">
         <AlertCircle className="text-indigo-600 flex-shrink-0 mt-0.5" size={20} />
         <div className="text-sm text-indigo-900">
-          <strong>Important:</strong> Your order will be reviewed by an admin before stock is deducted.
+          <strong>Important:</strong>{" "}
+          {isAdminOrderEntry
+            ? "This order will be saved under your admin account for the selected customer."
+            : "Your order will be reviewed by an admin before stock is deducted."}
         </div>
       </div>
 
@@ -474,7 +490,7 @@ export default function UserOrderPage() {
             <p className="text-lg font-semibold">Your cart is empty</p>
             <p className="text-sm mt-1 mb-4">Add products to get started</p>
             <button
-              onClick={() => navigate("/finished-goods")}
+              onClick={() => navigate(catalogPath)}
               className="px-6 py-2.5 bg-indigo-500 text-white rounded-xl font-semibold hover:bg-indigo-600 transition-all"
             >
               Browse Products

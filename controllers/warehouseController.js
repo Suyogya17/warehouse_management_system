@@ -313,6 +313,68 @@ const getMovements = async (req, res, next) => {
   }
 };
 
+const getReservations = async (req, res, next) => {
+  try {
+    const finishedGoodId = Number(req.query.finished_good_id);
+    if (!finishedGoodId) {
+      return res.status(400).json({
+        success: false,
+        message: 'finished_good_id is required',
+      });
+    }
+
+    const [supportsAllocationStatus, supportsDeliveryNoteNumber] = await Promise.all([
+      hasColumn('order_item_warehouse_allocations', 'allocation_status'),
+      hasColumn('orders', 'delivery_note_number'),
+    ]);
+    const reservedExpression = supportsAllocationStatus
+      ? `GREATEST(
+           0,
+           oi.qty_ordered - COALESCE((
+             SELECT SUM(delivered_allocation.quantity)
+             FROM order_item_warehouse_allocations delivered_allocation
+             WHERE delivered_allocation.order_item_id = oi.id
+               AND delivered_allocation.allocation_status = 'DEDUCTED'
+           ), 0)
+         )`
+      : 'oi.qty_ordered';
+
+    const result = await query(
+      `SELECT o.id AS order_id,
+              o.status,
+              o.customer_name,
+              o.created_at AS ordered_at,
+              ${supportsDeliveryNoteNumber ? 'o.delivery_note_number' : 'NULL'} AS delivery_note_number,
+              u.name AS dealer_name,
+              SUM(${reservedExpression}) AS reserved_quantity
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       LEFT JOIN users u ON u.id = o.created_by
+       WHERE oi.finished_good_id = ?
+         AND o.status IN ('PENDING', 'CONFIRMED', 'PACKED')
+       GROUP BY o.id, o.status, o.customer_name, o.created_at,
+                ${supportsDeliveryNoteNumber ? 'o.delivery_note_number' : 'u.id'}, u.name
+       HAVING SUM(${reservedExpression}) > 0
+       ORDER BY o.created_at DESC, o.id DESC`,
+      [finishedGoodId]
+    );
+
+    const totalReserved = result.rows.reduce(
+      (sum, row) => sum + Number(row.reserved_quantity || 0),
+      0
+    );
+
+    return res.json({
+      success: true,
+      count: result.rows.length,
+      total_reserved: totalReserved,
+      data: result.rows,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 const adjust = async (req, res, next) => {
   const client = await getClient();
 
@@ -601,6 +663,7 @@ module.exports = {
   remove,
   getStock,
   getMovements,
+  getReservations,
   adjust,
   transfer,
   MOVEMENT_TYPES,
