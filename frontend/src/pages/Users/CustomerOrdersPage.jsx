@@ -12,6 +12,11 @@ import {
   AlertCircle,
   X,
   ArrowLeft,
+  UserRound,
+  MapPin,
+  Truck,
+  ClipboardCheck,
+  Boxes,
 } from "lucide-react";
 
 // import PageHeader from "../components/PageHeader";
@@ -30,9 +35,10 @@ import {
   TRANSPORT_DIRECTORY,
   transportServesAddress,
 } from "../../data/transportDirectory";
+import { PARTY_DIRECTORY } from "../../data/partyDirectory";
 
 const normalizeCustomerKey = (value) =>
-  String(value || "").trim().toLowerCase().replace(/[\s._-]+/g, "");
+  String(value || "").trim().toLowerCase().replace(/[\s._&()-]+/g, "");
 
 const isUsefulTransport = (value) => {
   const transport = String(value || "").trim();
@@ -65,8 +71,7 @@ export default function UserOrderPage() {
   const [customerHistory, setCustomerHistory] = useState([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
 
-  const [currentPage, setCurrentPage] = useState(1);
-  const ordersPerPage = 10;
+  const [orderStatusFilter, setOrderStatusFilter] = useState("ALL");
 
   const statusTone = {
     PENDING: "warning",
@@ -233,7 +238,14 @@ export default function UserOrderPage() {
   const validateForm = () => {
     const newErrors = {};
     if (!customerName.trim()) newErrors.customerName = "Customer name is required";
+    if (!/^\d{10}$/.test(customerPhone)) {
+      newErrors.customerPhone = "Enter a valid 10 digit phone number";
+    }
     if (!customerAddress.trim()) newErrors.customerAddress = "Customer address is required";
+    if (!/^\d{8,9}$/.test(panNumber)) {
+      newErrors.panNumber = "Enter a valid 8 or 9 digit PAN number";
+    }
+    if (!transportName.trim()) newErrors.transportName = "Transport name is required";
     if (!cart.length) newErrors.cart = "Cart is empty";
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -261,10 +273,10 @@ export default function UserOrderPage() {
 
       const payload = {
         customer_name: customerName.trim(),
-        customer_phone: customerPhone.trim() || "0000000000",
+        customer_phone: customerPhone.trim(),
         customer_address: customerAddress.trim(),
-        pan_number: panNumber.trim() || "000000000",
-        transport_name: transportName.trim() || "N/A",
+        pan_number: panNumber.trim(),
+        transport_name: transportName.trim(),
         notes: notes.trim(),
         items,
       };
@@ -334,15 +346,45 @@ export default function UserOrderPage() {
   const totalCartonsInCart = getTotalCartons(cart);
 
   const knownCustomers = useMemo(() => {
-    if (customerHistory.length) {
-      return customerHistory.map((customer) => ({
-        ...customer,
-        id: `${customer.dealer_id}:${customer.key}`,
-        customer_name: customer.name,
-        created_at: customer.latest_order_at,
-      }));
-    }
     const customers = new Map();
+
+    PARTY_DIRECTORY.forEach((party) => {
+      const key = normalizeCustomerKey(party.name);
+      if (!key) return;
+      customers.set(key, {
+        id: `directory:${key}`,
+        customer_name: party.name,
+        customer_phone: party.phone,
+        customer_address: party.address,
+        pan_number: party.pan,
+        contact_person: party.contact,
+        source_labels: ["Party directory"],
+      });
+    });
+
+    customerHistory.forEach((customer) => {
+      const key = normalizeCustomerKey(customer.name);
+      if (!key) return;
+      const directoryCustomer = customers.get(key) || {};
+      customers.set(key, {
+        ...directoryCustomer,
+        ...customer,
+        id: `${customer.dealer_id}:${customer.key || key}`,
+        customer_name: customer.name || directoryCustomer.customer_name,
+        customer_phone:
+          customer.customer_phone || directoryCustomer.customer_phone || "",
+        customer_address:
+          customer.customer_address || directoryCustomer.customer_address || "",
+        pan_number: customer.pan_number || directoryCustomer.pan_number || "",
+        contact_person: directoryCustomer.contact_person || "",
+        created_at: customer.latest_order_at,
+        source_labels: [
+          ...(directoryCustomer.source_labels || []),
+          "Previous order",
+        ],
+      });
+    });
+
     [...orders]
       .sort((left, right) => {
         const dateDifference = new Date(right.created_at || 0) - new Date(left.created_at || 0);
@@ -350,27 +392,70 @@ export default function UserOrderPage() {
       })
       .forEach((order) => {
         const key = normalizeCustomerKey(order.customer_name);
-        if (key && !customers.has(key)) customers.set(key, order);
+        if (!key || customers.has(key)) return;
+        customers.set(key, {
+          ...order,
+          source_labels: ["Previous order"],
+        });
       });
     return [...customers.values()];
   }, [customerHistory, orders]);
 
-  const applyCustomerHistory = () => {
-    const matchingCustomer = knownCustomers.find(
-      (order) => normalizeCustomerKey(order.customer_name) === normalizeCustomerKey(customerName)
-    );
-    const previousTransport = isUsefulTransport(matchingCustomer?.transport_name)
-      ? String(matchingCustomer.transport_name).trim()
+  const matchingCustomer = useMemo(
+    () =>
+      knownCustomers.find(
+        (customer) =>
+          normalizeCustomerKey(customer.customer_name) ===
+          normalizeCustomerKey(customerName)
+      ) || null,
+    [customerName, knownCustomers]
+  );
+
+  const applyCustomerDetails = (customer, overwrite = false) => {
+    if (!customer) return;
+    const suggestedPhone = String(customer.customer_phone || "")
+      .replace(/\D/g, "")
+      .slice(-10);
+    const suggestedPan = String(customer.pan_number || "")
+      .replace(/\D/g, "")
+      .slice(0, 9);
+    const suggestedAddress = String(customer.customer_address || "").trim();
+    const previousTransport = isUsefulTransport(customer.transport_name)
+      ? String(customer.transport_name).trim()
       : "";
 
+    setCustomerName(customer.customer_name || customerName);
+    setCustomerPhone((current) =>
+      overwrite && suggestedPhone ? suggestedPhone : current || suggestedPhone
+    );
+    setCustomerAddress((current) =>
+      overwrite && suggestedAddress ? suggestedAddress : current || suggestedAddress
+    );
+    setPanNumber((current) =>
+      overwrite && suggestedPan ? suggestedPan : current || suggestedPan
+    );
+    setTransportName((current) =>
+      overwrite && previousTransport ? previousTransport : current || previousTransport
+    );
     setSuggestedTransportName(previousTransport);
-    if (!matchingCustomer) return;
+  };
 
-    setCustomerName(matchingCustomer.customer_name || customerName);
-    setCustomerPhone((current) => current || String(matchingCustomer.customer_phone || ""));
-    setCustomerAddress((current) => current || String(matchingCustomer.customer_address || ""));
-    setPanNumber((current) => current || String(matchingCustomer.pan_number || ""));
-    setTransportName((current) => current || previousTransport);
+  const applyCustomerHistory = () => {
+    applyCustomerDetails(matchingCustomer, false);
+  };
+
+  const handleCustomerNameChange = (value) => {
+    setCustomerName(value);
+    setErrors((current) => ({ ...current, customerName: "" }));
+
+    const exactMatch = knownCustomers.find(
+      (customer) =>
+        normalizeCustomerKey(customer.customer_name) ===
+        normalizeCustomerKey(value)
+    );
+    if (exactMatch) {
+      applyCustomerDetails(exactMatch, true);
+    }
   };
 
   const transportOptions = useMemo(() => {
@@ -417,14 +502,49 @@ export default function UserOrderPage() {
       ) || { value: currentName, label: currentName, phone: "", destinations: [] }
     );
   }, [transportName, transportOptions]);
-  const totalPages = Math.ceil(orders.length / ordersPerPage);
-  const paginatedOrders = orders.slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage);
+  const orderStatuses = useMemo(
+    () => ["ALL", ...new Set(orders.map((order) => order.status).filter(Boolean))],
+    [orders]
+  );
+  const filteredOrders = useMemo(
+    () =>
+      orderStatusFilter === "ALL"
+        ? orders
+        : orders.filter((order) => order.status === orderStatusFilter),
+    [orderStatusFilter, orders]
+  );
+
+  const getOrderQuantityTotals = (order = {}) =>
+    (order.items || []).reduce(
+      (totals, item) => {
+        const pairs = Number(item.qty_ordered || 0);
+        const pairsPerCarton = Number(item.inner_boxes_per_outer_box || 0);
+        totals.pairs += pairs;
+        if (pairsPerCarton > 0) totals.cartons += pairs / pairsPerCarton;
+        return totals;
+      },
+      { cartons: 0, pairs: 0 }
+    );
+
+  const missingCustomerDetails = [
+    !customerName.trim() ? "customer name" : null,
+    !/^\d{10}$/.test(customerPhone) ? "10 digit phone" : null,
+    !/^\d{8,9}$/.test(panNumber) ? "PAN number" : null,
+    !customerAddress.trim() ? "delivery address" : null,
+    !transportName.trim() ? "transport" : null,
+  ].filter(Boolean);
+  const customerDetailProgress = 5 - missingCustomerDetails.length;
 
   const renderOrderItems = (order) => (
     <div className="space-y-1 text-xs">
       {order.items?.length
         ? order.items.map((item) => (
-            <p key={item.id}>{item.product_name} — {formatNumber(item.qty_ordered)} {item.unit || ""}</p>
+            <p key={item.id}>
+              {item.product_name} — {formatNumber(item.qty_ordered)} pairs
+              {Number(item.inner_boxes_per_outer_box || 0) > 0
+                ? ` / ${formatNumber(Number(item.qty_ordered || 0) / Number(item.inner_boxes_per_outer_box))} CTN`
+                : ""}
+            </p>
           ))
         : <span>—</span>}
     </div>
@@ -443,6 +563,36 @@ export default function UserOrderPage() {
             : "Complete your order details"
         }
       />
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-600 to-violet-600 p-4 text-white shadow-sm">
+          <div className="flex items-center justify-between">
+            <span className="rounded-xl bg-white/15 p-2"><Boxes size={20} /></span>
+            <span className="text-xs font-bold uppercase tracking-wider text-indigo-100">Step 1</span>
+          </div>
+          <p className="mt-4 text-sm font-medium text-indigo-100">Products in cart</p>
+          <p className="mt-1 text-2xl font-black">{cart.length} {cart.length === 1 ? "item" : "items"}</p>
+          <p className="mt-1 text-xs font-semibold text-indigo-100">{formatNumber(totalCartonsInCart)} CTN · {formatNumber(totalPairsInCart)} pairs</p>
+        </div>
+        <div className={`rounded-2xl border p-4 shadow-sm ${missingCustomerDetails.length ? "border-amber-200 bg-amber-50 text-amber-950" : "border-emerald-200 bg-emerald-50 text-emerald-950"}`}>
+          <div className="flex items-center justify-between">
+            <span className={`rounded-xl p-2 ${missingCustomerDetails.length ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}><UserRound size={20} /></span>
+            <span className="text-xs font-bold uppercase tracking-wider opacity-70">Step 2</span>
+          </div>
+          <p className="mt-4 text-sm font-medium opacity-70">Customer details</p>
+          <p className="mt-1 text-2xl font-black">{customerDetailProgress} / 5 complete</p>
+          <p className="mt-1 text-xs font-semibold opacity-70">{missingCustomerDetails.length ? `Still need ${missingCustomerDetails.length} field${missingCustomerDetails.length === 1 ? "" : "s"}` : "Ready to submit"}</p>
+        </div>
+        <div className={`rounded-2xl border p-4 shadow-sm ${cart.length && !missingCustomerDetails.length ? "border-emerald-200 bg-emerald-50 text-emerald-950" : "border-slate-200 bg-white text-slate-700"}`}>
+          <div className="flex items-center justify-between">
+            <span className={`rounded-xl p-2 ${cart.length && !missingCustomerDetails.length ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}><ClipboardCheck size={20} /></span>
+            <span className="text-xs font-bold uppercase tracking-wider opacity-70">Step 3</span>
+          </div>
+          <p className="mt-4 text-sm font-medium opacity-70">Place order</p>
+          <p className="mt-1 text-2xl font-black">{cart.length && !missingCustomerDetails.length ? "Ready" : "Review"}</p>
+          <p className="mt-1 text-xs font-semibold opacity-70">{cart.length ? "Confirm quantities and delivery details" : "Add products to begin"}</p>
+        </div>
+      </div>
 
       <button
         onClick={() => navigate(catalogPath)}
@@ -464,18 +614,8 @@ export default function UserOrderPage() {
 
       {/* CART */}
       <SectionCard
-      title={
-  <div className="flex items-center justify-between w-full">
-    
-    {/* LEFT */}
-    <div className="flex gap-2">
-      <ShoppingCart size={20} />
-      <span className="text-sm sm:text-base font-medium">
-        Cart Summary
-      </span>
-    </div>
-  </div>
-}
+        title={<span className="flex items-center gap-2"><ShoppingCart size={19} /> Cart Summary</span>}
+        subtitle="Choose cartons for full-case orders, or pairs when a customer needs a smaller quantity."
       >
         {errors.cart && (
           <div className="mb-4 bg-red-50 border border-red-200 rounded-xl p-4 flex gap-2">
@@ -510,17 +650,20 @@ export default function UserOrderPage() {
                 : Number(item.qty_ordered);
 
               return (
-                <div key={item.finished_good_id} className="border rounded-2xl p-4 bg-white shadow-sm hover:shadow-md transition-all">
-                   <div className="flex justify-end">
-                          <button
-                          className="w-9 h-9 rounded-lg border border-red-300 hover:bg-red-50 text-red-600 flex items-center justify-center transition"
-                          onClick={() => removeFromCart(item.finished_good_id)}
-                        >
-                          <X size={16} />
-                        </button>
-                          </div>
+                <div key={item.finished_good_id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md">
+                  <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-2.5">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Order item</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${item.product.article_code || item.product.name}`}
+                      className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-bold text-red-600 transition hover:bg-red-50"
+                      onClick={() => removeFromCart(item.finished_good_id)}
+                    >
+                      <X size={15} /> Remove
+                    </button>
+                  </div>
 
-                  <div className="flex gap-4 ">
+                  <div className="flex gap-4 p-4">
 
                     
                     <div className="w-20 h-20 bg-slate-100 rounded-lg overflow-hidden flex-shrink-0">
@@ -540,7 +683,7 @@ export default function UserOrderPage() {
                     </div>
                     
 
-                    <div className="flex-1 flex-col justify-between">
+                    <div className="flex flex-1 flex-col justify-between gap-3">
                       
                       <h3 className="font-bold text-slate-900">
                         {item.product.article_code || item.product.name}
@@ -553,15 +696,15 @@ export default function UserOrderPage() {
                             Size: {item.product.size}
                           </span>
                         )}
-                        <div className="flex gap-4 text-xs text-slate-500">
-                          
-                          <span className="rounded px-2 py-1 bg-slate-100 bg-green-100 text-green-800">
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <span className="rounded-full bg-emerald-100 px-2.5 py-1 font-bold text-emerald-800">
                             Available: {formatNumber(available)} pairs
                           </span>
-                          </div>
+                          {hasCartons ? <span className="rounded-full bg-indigo-100 px-2.5 py-1 font-bold text-indigo-800">{formatNumber(Math.floor(available / cartonsPerBox))} full CTN available</span> : null}
+                        </div>
                       
 
-                      <div className="flex items-center justify-between pt-2">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
                         <div className="flex items-center gap-3">
                           
                           <button
@@ -571,9 +714,9 @@ export default function UserOrderPage() {
                             <Minus size={16} />
                           </button>
 
-                          <div className="text-center">
-                            <div className="font-bold text-lg">{item.qty_ordered}</div>
-                            <div className="text-[10px] text-slate-500">{item.orderBy}</div>
+                          <div className="min-w-14 rounded-lg bg-slate-100 px-2 py-1 text-center">
+                            <div className="text-lg font-black text-slate-900">{item.qty_ordered}</div>
+                            <div className="text-[10px] font-bold uppercase text-slate-500">{item.orderBy}</div>
                           </div>
 
                           <button
@@ -610,6 +753,10 @@ export default function UserOrderPage() {
                             = <span className="font-bold text-indigo-600">{formatNumber(actualPairs)}</span> pairs
                           </div>
                         )}
+                        <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-800">
+                          <span className="text-indigo-500">This item</span><br />
+                          <span className="text-sm font-black text-indigo-950">{formatNumber(hasCartons ? actualPairs / cartonsPerBox : 0)} CTN</span> / {formatNumber(actualPairs)} pairs
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -631,18 +778,36 @@ export default function UserOrderPage() {
 
       {/* CUSTOMER DETAILS */}
       {cart.length > 0 && (
-        <SectionCard title="Customer Details">
+        <SectionCard
+          title={<span className="flex items-center gap-2"><UserRound size={19} /> Customer Details</span>}
+          subtitle="Saved details are suggestions. Review and edit every field before placing the order."
+        >
+          {missingCustomerDetails.length ? (
+            <div className="mb-5 flex gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
+              <AlertCircle className="mt-0.5 shrink-0 text-amber-600" size={20} />
+              <div>
+                <p className="font-bold">Complete the customer details</p>
+                <p className="mt-1 text-sm">
+                  Still needed: {missingCustomerDetails.join(", ")}. These fields can be edited even when they were filled from saved information.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="mb-5 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">
+              <CheckCircle2 size={18} /> Customer details are complete and ready for review.
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="w-full md:col-span-2">
               <label className="block text-sm font-medium text-slate-700 mb-2">
-                Customer Name <span className="text-red-500">*</span>
+                <span className="flex items-center gap-1.5"><UserRound size={15} className="text-indigo-600" /> Customer Name <span className="text-red-500">*</span></span>
               </label>
               <input
                 list="user-order-customers"
                 className={`w-full border rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${errors.customerName ? "border-red-500" : "border-slate-300"}`}
                 placeholder="Enter customer name"
                 value={customerName}
-                onChange={(e) => { setCustomerName(e.target.value); setErrors((p) => ({ ...p, customerName: "" })); }}
+                onChange={(event) => handleCustomerNameChange(event.target.value)}
                 onBlur={applyCustomerHistory}
               />
               <datalist id="user-order-customers">
@@ -651,33 +816,62 @@ export default function UserOrderPage() {
                 ))}
               </datalist>
               {errors.customerName && <p className="text-red-500 text-sm mt-1">{errors.customerName}</p>}
+              {matchingCustomer ? (
+                <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-950">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="font-bold">Suggested customer details</p>
+                      <p className="mt-1 text-xs text-indigo-700">
+                        {(matchingCustomer.source_labels || ["Saved details"]).join(" + ")}. Review these details before placing the order; every field remains editable.
+                      </p>
+                      <div className="mt-2 grid gap-x-5 gap-y-1 text-xs sm:grid-cols-2">
+                        <span><strong>Phone:</strong> {matchingCustomer.customer_phone || "Not available"}</span>
+                        <span><strong>PAN:</strong> {matchingCustomer.pan_number || "Not available"}</span>
+                        <span className="sm:col-span-2"><strong>Address:</strong> {matchingCustomer.customer_address || "Not available"}</span>
+                        {matchingCustomer.contact_person ? (
+                          <span className="sm:col-span-2"><strong>Contact person:</strong> {matchingCustomer.contact_person}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => applyCustomerDetails(matchingCustomer, true)}
+                      className="shrink-0 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white hover:bg-indigo-700"
+                    >
+                      Reload saved details
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">Phone Number</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Phone Number <span className="text-red-500">*</span></label>
               <input
                 type="tel" maxLength={10}
-                className="w-full border border-slate-300 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className={`w-full rounded-xl border px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-indigo-500 ${errors.customerPhone ? "border-red-500" : "border-slate-300"}`}
                 placeholder="Enter 10 digit phone number"
                 value={customerPhone}
-                onChange={(e) => setCustomerPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                onChange={(e) => { setCustomerPhone(e.target.value.replace(/\D/g, "").slice(0, 10)); setErrors((current) => ({ ...current, customerPhone: "" })); }}
               />
+              {errors.customerPhone ? <p className="mt-1 text-sm text-red-500">{errors.customerPhone}</p> : null}
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">PAN Number</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">PAN Number <span className="text-red-500">*</span></label>
               <input
                 type="text" maxLength={9}
-                className="w-full border border-slate-300 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                placeholder="Enter 9 digit PAN number"
+                className={`w-full rounded-xl border px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-indigo-500 ${errors.panNumber ? "border-red-500" : "border-slate-300"}`}
+                placeholder="Enter 8 or 9 digit PAN number"
                 value={panNumber}
-                onChange={(e) => setPanNumber(e.target.value.replace(/\D/g, "").slice(0, 9))}
+                onChange={(e) => { setPanNumber(e.target.value.replace(/\D/g, "").slice(0, 9)); setErrors((current) => ({ ...current, panNumber: "" })); }}
               />
+              {errors.panNumber ? <p className="mt-1 text-sm text-red-500">{errors.panNumber}</p> : null}
             </div>
 
             <div className="md:col-span-2">
               <label className="block text-sm font-medium text-slate-700 mb-2">
-                Delivery Address <span className="text-red-500">*</span>
+                <span className="flex items-center gap-1.5"><MapPin size={15} className="text-indigo-600" /> Delivery Address <span className="text-red-500">*</span></span>
               </label>
               <input
                 type="text"
@@ -690,7 +884,7 @@ export default function UserOrderPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">Transport Name</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2"><span className="flex items-center gap-1.5"><Truck size={15} className="text-indigo-600" /> Transport Name <span className="text-red-500">*</span></span></label>
               <CreatableSelect
                 isClearable
                 options={transportOptions}
@@ -698,7 +892,7 @@ export default function UserOrderPage() {
                 placeholder="Select or type a transport company..."
                 formatCreateLabel={(value) => `Use new transport: ${value}`}
                 noOptionsMessage={() => "Type a new transport name"}
-                onChange={(option) => setTransportName(option?.value || "")}
+                onChange={(option) => { setTransportName(option?.value || ""); setErrors((current) => ({ ...current, transportName: "" })); }}
                 formatOptionLabel={(option, meta) =>
                   meta.context === "value" ? (
                     option.label
@@ -738,6 +932,7 @@ export default function UserOrderPage() {
                   menu: (base) => ({ ...base, zIndex: 50 }),
                 }}
               />
+              {errors.transportName ? <p className="mt-1.5 text-sm text-red-500">{errors.transportName}</p> : null}
               {suggestedTransportName ? (
                 <p className="mt-1.5 text-xs text-indigo-700">
                   Previously used for this customer: {suggestedTransportName}
@@ -784,17 +979,61 @@ export default function UserOrderPage() {
       )}
 
       {/* ORDERS TABLE */}
-      <SectionCard title="My Orders">
+      <SectionCard title="My Orders" subtitle="Search any detail below, or filter quickly by order status.">
         {loadingOrders ? (
           <div className="py-10 text-center text-slate-500">Loading orders...</div>
         ) : (
           <>
+            <div className="flex flex-wrap gap-2 px-4 py-4">
+              {orderStatuses.map((status) => {
+                const count =
+                  status === "ALL"
+                    ? orders.length
+                    : orders.filter((order) => order.status === status).length;
+                return (
+                  <button
+                    key={status}
+                    type="button"
+                    onClick={() => setOrderStatusFilter(status)}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${
+                      orderStatusFilter === status
+                        ? "border-indigo-600 bg-indigo-600 text-white"
+                        : "border-slate-200 bg-white text-slate-600 hover:border-indigo-300 hover:text-indigo-700"
+                    }`}
+                  >
+                    {status === "ALL" ? "All orders" : status.replaceAll("_", " ")} ({count})
+                  </button>
+                );
+              })}
+            </div>
             <DataTable
               columns={[
-                { key: "id", label: "S.No" },
+                { key: "id", label: "Order ID", render: (row) => `#${row.id}` },
                 { key: "customer_name", label: "Customer" },
-                { key: "customer_phone", label: "Contact" },
-                { key: "customer_address", label: "Address" },
+                {
+                  key: "customer_details",
+                  label: "Customer Details",
+                  searchValue: (row) => [row.customer_phone, row.pan_number, row.customer_address].filter(Boolean).join(" "),
+                  render: (row) => {
+                    const missing = [
+                      !/^\d{10}$/.test(String(row.customer_phone || "")) ? "Phone" : null,
+                      !/^\d{8,9}$/.test(String(row.pan_number || "")) ? "PAN" : null,
+                      !String(row.customer_address || "").trim() ? "Address" : null,
+                    ].filter(Boolean);
+                    return (
+                      <div className="min-w-[190px] space-y-1 text-xs">
+                        <p><strong>Phone:</strong> {row.customer_phone || "—"}</p>
+                        <p><strong>PAN:</strong> {row.pan_number || "—"}</p>
+                        <p className="whitespace-normal"><strong>Address:</strong> {row.customer_address || "—"}</p>
+                        {missing.length ? (
+                          <p className="mt-1 inline-flex rounded-full bg-amber-100 px-2 py-1 font-bold text-amber-800">
+                            Missing: {missing.join(", ")}
+                          </p>
+                        ) : null}
+                      </div>
+                    );
+                  },
+                },
                 { key: "transport_name", label: "Transport" },
                 {
   key: "notes",
@@ -828,6 +1067,24 @@ export default function UserOrderPage() {
                   },
                 },
                 { key: "items", label: "Items", render: renderOrderItems },
+                {
+                  key: "quantity_summary",
+                  label: "Quantity",
+                  searchable: false,
+                  render: (row) => {
+                    const totals = getOrderQuantityTotals(row);
+                    return (
+                      <div className="min-w-[110px] rounded-lg bg-indigo-50 px-2.5 py-2 text-xs">
+                        <p className="font-bold text-indigo-900">{formatNumber(totals.cartons)} CTN</p>
+                        <p className="text-indigo-700">{formatNumber(totals.pairs)} pairs</p>
+                      </div>
+                    );
+                  },
+                  exportValue: (row) => {
+                    const totals = getOrderQuantityTotals(row);
+                    return `${formatNumber(totals.cartons)} CTN / ${formatNumber(totals.pairs)} pairs`;
+                  },
+                },
                  {
               key: "created_at",
               label: "Created",
@@ -867,27 +1124,12 @@ export default function UserOrderPage() {
 }
 
               ]}
-              rows={paginatedOrders}
+              rows={filteredOrders}
+              exportFilename="my-orders"
+              wrapCells
+              responsiveScroll
+              minTableWidth={1200}
             />
-
-            {totalPages > 1 && (
-              <div className="flex justify-center gap-2 mt-4">
-                <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm disabled:opacity-50">
-                  Previous
-                </button>
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                  <button
-                    key={page} onClick={() => setCurrentPage(page)}
-                    className={`px-3 py-1.5 rounded-lg text-sm border ${page === currentPage ? "bg-indigo-500 text-white border-indigo-500" : "border-slate-300 hover:bg-slate-50"}`}
-                  >
-                    {page}
-                  </button>
-                ))}
-                <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm disabled:opacity-50">
-                  Next
-                </button>
-              </div>
-            )}
           </>
         )}
       </SectionCard>
