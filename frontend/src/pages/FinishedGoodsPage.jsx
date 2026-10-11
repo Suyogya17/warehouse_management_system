@@ -320,21 +320,21 @@ export default function FinishedGoodsPage() {
       await api.setFinishedGoodVisibility(item.id, { is_visible: !item.is_visible }, token);
       showToast({
         tone: "success",
-        title: item.is_visible ? "Product hidden" : "Product displayed",
+        title: item.is_visible ? "Product placed on hold" : "Product released from hold",
         message: "The finished goods list was refreshed.",
       });
       setNextStep({
         description: item.is_visible
-          ? "This product is now hidden from normal users."
-          : "This product is now visible to normal users.",
+          ? "This product is on hold for customers and dealers, but remains visible to admins."
+          : "This product is now available to normal users.",
         steps: item.is_visible
           ? [
-              "Users can now see this product in their catalog.",
-              "If needed, run production again later to replenish stock.",
+              "Admins can continue to see it in Production House Calculation and Product Display.",
+              "Release the hold later when it is ready for customers and dealers.",
             ]
           : [
-              "Users will no longer see this product in their catalog.",
-              "You can display it again later when stock is ready.",
+              "Customers and dealers can see this product in their catalog.",
+              "Place it on hold again later if it should not be ordered.",
             ],
       });
       await loadItems();
@@ -951,10 +951,10 @@ export default function FinishedGoodsPage() {
             ...(canViewHidden
               ? [{
                   key: "is_visible",
-                  label: "Visibility",
+                  label: "Availability",
                   render: (row) => (
-                    <StatusBadge tone={row.is_visible ? "success" : "neutral"}>
-                      {row.is_visible ? "Displayed" : "Hidden"}
+                    <StatusBadge tone={row.is_visible ? "success" : "warning"}>
+                      {row.is_visible ? "Available" : "On hold"}
                     </StatusBadge>
                   ),
                 }]
@@ -966,7 +966,9 @@ export default function FinishedGoodsPage() {
                   render: (row) => (
                     <div className="flex flex-wrap justify-end gap-2">
                       {canToggleVisibility ? (
-                        <Button type="button" variant={row.is_visible ? "ghost" : "primary"} size="sm" icon={row.is_visible ? "eye" : "eyeOff"} onClick={() => toggleVisibility(row)} />
+                        <Button type="button" variant={row.is_visible ? "ghost" : "primary"} size="sm" icon={row.is_visible ? "eyeOff" : "eye"} onClick={() => toggleVisibility(row)}>
+                          {row.is_visible ? "Hold" : "Release"}
+                        </Button>
                       ) : null}
                       <Button type="button" variant="secondary" size="sm" icon="edit" onClick={() => startEdit(row)}>
                         Edit

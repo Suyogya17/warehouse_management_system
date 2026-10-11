@@ -23,6 +23,7 @@
     const [warehouses, setWarehouses] = useState([]);
     const [checkResult, setCheckResult] = useState(null);
     const [nextStep, setNextStep] = useState(null);
+    const [visibilityDecision, setVisibilityDecision] = useState("");
     const [form, setForm] = useState({ formula_id: "", qty_to_produce: "", notes: "" });  
     const [warehouseAllocations, setWarehouseAllocations] = useState([{ warehouse_id: "", quantity: "" }]);
     const [editingHistory, setEditingHistory] = useState(null);
@@ -74,6 +75,9 @@
       Number(checkResult?.qty_to_produce) === Number(form.qty_to_produce) &&
       String(form.formula_id) === String(checkResult?.formula_id || form.formula_id) &&
       hasValidWarehouseAllocation;
+    const requiresVisibilityDecision = Boolean(checkResult?.visibility_prompt?.required);
+    const canSubmitWithVisibility =
+      canSubmitProduction && (!requiresVisibilityDecision || ["SHOW", "HIDE"].includes(visibilityDecision));
 
     const updateWarehouseAllocation = (index, key, value) => {
       setWarehouseAllocations((current) =>
@@ -115,6 +119,7 @@
           token
         );
         setCheckResult({ ...result, formula_id: Number(form.formula_id) });
+        setVisibilityDecision("");
         showToast({
           tone: result.can_produce ? "success" : "error",
           title: result.can_produce ? "Stock is sufficient" : "Stock is short",
@@ -161,6 +166,15 @@
         return;
       }
 
+      if (requiresVisibilityDecision && !["SHOW", "HIDE"].includes(visibilityDecision)) {
+        showToast({
+          tone: "error",
+          title: "Visibility decision needed",
+          message: "Choose whether this restocked product should be visible to all users or remain hidden.",
+        });
+        return;
+      }
+
       try {
         const result = await api.runProduction(
           {
@@ -168,11 +182,13 @@
             qty_to_produce: Number(form.qty_to_produce),
             notes: form.notes,
             warehouse_allocations: normalizedWarehouseAllocations,
+            visibility_decision: requiresVisibilityDecision ? visibilityDecision : undefined,
           },
           token
         );
         showToast({ tone: "success", title: "Production complete", message: result.message });
         setCheckResult(null);
+        setVisibilityDecision("");
         setNextStep({
           description: "Production is complete and stock has been updated.",
           steps: [
@@ -313,6 +329,7 @@ const filteredHistory = history.filter((row) => {
       formula_id: value,
     }));
     setCheckResult(null);
+    setVisibilityDecision("");
   }}
 
   placeholder="Search formula..."
@@ -345,6 +362,7 @@ const filteredHistory = history.filter((row) => {
                   onChange={(event) => {
                     setForm((current) => ({ ...current, qty_to_produce: event.target.value }));
                     setCheckResult(null);
+                    setVisibilityDecision("");
                   }}
                   required
                 />
@@ -433,11 +451,38 @@ const filteredHistory = history.filter((row) => {
                 <Button type="button" variant="secondary" icon="stock" onClick={checkStock} disabled={!hasValidProductionInput}>
                   Check stock
                 </Button>
-                <Button type="submit" icon="check" disabled={!canSubmitProduction}>
+                <Button type="submit" icon="check" disabled={!canSubmitWithVisibility}>
                   Run production
                 </Button>
               </div>
             </form>
+
+            {requiresVisibilityDecision ? (
+              <div className="mt-5 rounded-2xl border border-amber-300 bg-amber-50 p-5">
+                <p className="text-base font-black text-amber-950">This product is back in stock</p>
+                <p className="mt-1 text-sm leading-6 text-amber-900">
+                  {checkResult.visibility_prompt.finished_good_name} was produced before, but its current stock is zero. Choose its visibility before running production.
+                </p>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setVisibilityDecision("SHOW")}
+                    className={`rounded-xl border-2 p-4 text-left transition ${visibilityDecision === "SHOW" ? "border-emerald-600 bg-emerald-600 text-white shadow-md" : "border-emerald-200 bg-white text-emerald-950 hover:border-emerald-400"}`}
+                  >
+                    <span className="block font-black">Show to all users</span>
+                    <span className="mt-1 block text-sm opacity-80">Customers and dealers can see and order this product after production.</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVisibilityDecision("HIDE")}
+                    className={`rounded-xl border-2 p-4 text-left transition ${visibilityDecision === "HIDE" ? "border-slate-700 bg-slate-800 text-white shadow-md" : "border-slate-300 bg-white text-slate-900 hover:border-slate-500"}`}
+                  >
+                    <span className="block font-black">Keep hidden for now</span>
+                    <span className="mt-1 block text-sm opacity-80">Production will be recorded, but only an admin can display it later.</span>
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             {selectedFormula ? (
               <div className="mt-5">

@@ -880,7 +880,7 @@ const setVisibility = async (req, res, next) => {
     clearCache();
 
     const product = productRows.rows[0];
-    const actionType = is_visible ? 'SHOW' : 'HIDE';
+    const actionType = is_visible ? 'RELEASE_HOLD' : 'PLACE_ON_HOLD';
     await auditLog({
       ...getActor(req),
       actionType,
@@ -888,7 +888,7 @@ const setVisibility = async (req, res, next) => {
       entity_type: 'finished_good',
       entity_id: req.params.id,
       entityName: getProductName(product),
-      description: `${is_visible ? 'Showed' : 'Hid'} product ${getProductName(product)}`,
+      description: `${is_visible ? 'Released hold for' : 'Placed on hold'} product ${getProductName(product)}`,
       metadata: {
         product,
         previous_visibility: Number(product.is_visible || 0),

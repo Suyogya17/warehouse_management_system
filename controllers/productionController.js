@@ -148,7 +148,9 @@ const checkStock = async (req, res, next) => {
 
     // Load formula
     const formulaRes = await query(
-      `SELECT f.*, fg.id AS fg_id, fg.name AS fg_name, ${packagingSelect(supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox)}
+      `SELECT f.*, fg.id AS fg_id, fg.name AS fg_name,
+              fg.quantity AS fg_quantity, fg.is_visible AS fg_is_visible,
+              ${packagingSelect(supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox)}
        FROM formulas f
        JOIN finished_goods fg ON fg.id = f.finished_good_id
        WHERE f.id=?`,
@@ -159,6 +161,12 @@ const checkStock = async (req, res, next) => {
     }
     const formula = formulaRes.rows[0];
     const packaging = getPackagingSummary(formula, qty_to_produce);
+    const previousProduction = await query(
+      'SELECT id FROM production WHERE finished_good_id = ? LIMIT 1',
+      [formula.fg_id]
+    );
+    const visibilityDecisionRequired =
+      previousProduction.rows.length > 0 && Number(formula.fg_quantity || 0) <= 0;
 
     // Load formula inputs
     const inputsRes = await query(
@@ -197,6 +205,12 @@ const checkStock = async (req, res, next) => {
       formula_name: formula.name,
       qty_to_produce,
       packaging,
+      visibility_prompt: {
+        required: visibilityDecisionRequired,
+        finished_good_id: Number(formula.fg_id),
+        finished_good_name: formula.fg_name,
+        current_visibility: Number(formula.fg_is_visible || 0) === 1,
+      },
       stock_check: report,
     });
   } catch (err) {
@@ -226,6 +240,7 @@ const runProduction = async (req, res, next) => {
     await client.query('BEGIN');
 
     const { formula_id, qty_to_produce, notes } = req.body;
+    const visibilityDecision = String(req.body.visibility_decision || '').toUpperCase();
     const warehouseAllocations = normalizeWarehouseAllocations(req.body.warehouse_allocations);
     const supportsConsumptionBasis = await hasColumn('formula_inputs', 'consumption_basis');
     const supportsInnerBoxPerPair = await hasColumn('finished_goods', 'inner_box_per_pair');
@@ -239,6 +254,7 @@ const runProduction = async (req, res, next) => {
     // ── Load formula ──────────────────────────────────────────────────────────
     const formulaRes = await client.query(
       `SELECT f.*, fg.id AS fg_id, fg.name AS fg_name, fg.color AS fg_color,
+              fg.quantity AS fg_quantity, fg.is_visible AS fg_is_visible,
               ${packagingSelect(supportsInnerBoxPerPair, supportsInnerBoxesPerOuterBox)}
        FROM formulas f
        JOIN finished_goods fg ON fg.id = f.finished_good_id
@@ -251,6 +267,30 @@ const runProduction = async (req, res, next) => {
     }
     const formula = formulaRes.rows[0];
     const packaging = getPackagingSummary(formula, qty_to_produce);
+
+    const previousProduction = await client.query(
+      'SELECT id FROM production WHERE finished_good_id = ? LIMIT 1',
+      [formula.fg_id]
+    );
+    const visibilityDecisionRequired =
+      previousProduction.rows.length > 0 && Number(formula.fg_quantity || 0) <= 0;
+    if (
+      visibilityDecisionRequired &&
+      !['SHOW', 'HIDE'].includes(visibilityDecision)
+    ) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        code: 'VISIBILITY_DECISION_REQUIRED',
+        message: 'Choose whether this restocked product should be visible to all users or remain hidden.',
+        visibility_prompt: {
+          required: true,
+          finished_good_id: Number(formula.fg_id),
+          finished_good_name: formula.fg_name,
+          current_visibility: Number(formula.fg_is_visible || 0) === 1,
+        },
+      });
+    }
 
     await validateWarehouseAllocations(client, warehouseAllocations, qty_to_produce);
 
@@ -378,8 +418,12 @@ const runProduction = async (req, res, next) => {
     const fgNewQty  = fgPrevQty + parseFloat(qty_to_produce);
 
     await client.query(
-      'UPDATE finished_goods SET quantity=? WHERE id=?',
-      [fgNewQty, formula.fg_id]
+      visibilityDecisionRequired
+        ? 'UPDATE finished_goods SET quantity=?, is_visible=? WHERE id=?'
+        : 'UPDATE finished_goods SET quantity=? WHERE id=?',
+      visibilityDecisionRequired
+        ? [fgNewQty, visibilityDecision === 'SHOW' ? 1 : 0, formula.fg_id]
+        : [fgNewQty, formula.fg_id]
     );
 
     if (warehouseAllocations.length) {
@@ -412,6 +456,9 @@ const runProduction = async (req, res, next) => {
         name:     formula.fg_name,
         qty_before: fgPrevQty,
         qty_after:  fgNewQty,
+        is_visible: visibilityDecisionRequired
+          ? visibilityDecision === 'SHOW'
+          : Number(formula.fg_is_visible || 0) === 1,
       },
       materials_consumed: consumptionSummary,
       packaging,

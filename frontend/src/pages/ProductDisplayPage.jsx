@@ -5,6 +5,8 @@ import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import StatusBadge from "../components/StatusBadge";
 import ProductTypeBadges from "../components/ProductTypeBadges";
+import MultiSeriesFilter from "../components/MultiSeriesFilter";
+import NClassificationFilter from "../components/NClassificationFilter";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { announceDataRefresh, useDataRefresh } from "../hooks/useDataRefresh";
@@ -42,6 +44,9 @@ const getCartons = (item) => {
 
 const getArticleKey = (item) =>
   item.article_code || item.name?.split("_")?.[0] || `product-${item.id}`;
+
+const getSeriesName = (soleCode = "") =>
+  String(soleCode).replace(/[-_\s]*sole$/i, "").trim();
 
 const buildArticleGroups = (products = []) => {
   const groups = new Map();
@@ -96,6 +101,11 @@ export default function ProductDisplayPage() {
   const [savingCustomCarouselSlide, setSavingCustomCarouselSlide] = useState(false);
   const [savingOrder, setSavingOrder] = useState(false);
   const [search, setSearch] = useState("");
+  const [selectedSeries, setSelectedSeries] = useState([]);
+  const [visibilityFilter, setVisibilityFilter] = useState("all");
+  const [stockFilter, setStockFilter] = useState("all");
+  const [commissionFilter, setCommissionFilter] = useState("all");
+  const [nClassificationFilter, setNClassificationFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
   const rowsPerPage = 15;
   const userProductsPerPage = 10;
@@ -177,20 +187,50 @@ export default function ProductDisplayPage() {
 
   const articleGroups = useMemo(() => buildArticleGroups(items), [items]);
 
+  const seriesOptions = useMemo(
+    () =>
+      [...new Set(items.map((item) => getSeriesName(item.sole_code)).filter(Boolean))].sort(
+        (left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" })
+      ),
+    [items]
+  );
+
   const filteredGroups = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return articleGroups;
-
-    return articleGroups.filter((group) =>
-      group.items.some((item) =>
+    const filteredItems = items.filter((item) => {
+      const matchesSearch =
+        !query ||
         [item.id, item.name, item.article_code, item.sole_code, item.color, item.size]
           .filter(Boolean)
-          .some((value) => String(value).toLowerCase().includes(query))
-      )
-    );
-  }, [articleGroups, search]);
+          .some((value) => String(value).toLowerCase().includes(query));
+      const matchesSeries =
+        !selectedSeries.length || selectedSeries.includes(getSeriesName(item.sole_code));
+      const matchesVisibility =
+        visibilityFilter === "all" ||
+        (visibilityFilter === "shown" && Number(item.is_visible) === 1) ||
+        (visibilityFilter === "held" && Number(item.is_visible) !== 1);
+      const pairs = getPairs(item);
+      const matchesStock =
+        stockFilter === "all" ||
+        (stockFilter === "in_stock" && pairs > 0) ||
+        (stockFilter === "out_of_stock" && pairs <= 0) ||
+        (stockFilter === "low_stock" && pairs > 0 && pairs < 10);
+      const matchesCommission =
+        commissionFilter === "all" ||
+        (commissionFilter === "commission" && Number(item.is_commission) === 1) ||
+        (commissionFilter === "non_commission" && Number(item.is_commission) !== 1);
+      const nClass = String(item.n_classification || "").toUpperCase();
+      const matchesNClass =
+        nClassificationFilter === "all" ||
+        (nClassificationFilter === "unclassified" && !nClass) ||
+        nClass === nClassificationFilter;
 
-  const visibleCount = items.filter((item) => item.is_visible).length;
+      return matchesSearch && matchesSeries && matchesVisibility && matchesStock && matchesCommission && matchesNClass;
+    });
+    return buildArticleGroups(filteredItems);
+  }, [commissionFilter, items, nClassificationFilter, search, selectedSeries, stockFilter, visibilityFilter]);
+
+  const visibleCount = items.filter((item) => Number(item.is_visible) === 1).length;
   const itemById = useMemo(
     () => new Map(items.map((item) => [Number(item.id), item])),
     [items]
@@ -350,7 +390,7 @@ export default function ProductDisplayPage() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [search]);
+  }, [commissionFilter, nClassificationFilter, search, selectedSeries, stockFilter, visibilityFilter]);
 
   useEffect(() => {
     setSelectedUserProductPage(1);
@@ -515,10 +555,10 @@ export default function ProductDisplayPage() {
       announceDataRefresh("finished-goods");
       showToast({
         tone: "success",
-        title: item.is_visible ? "Product hidden" : "Product displayed",
+        title: item.is_visible ? "Product placed on hold" : "Product released from hold",
         message: item.is_visible
-          ? "Users will not see this product."
-          : "Users can now see this product.",
+          ? "Admins can still see it, but customers and dealers cannot order it."
+          : "Customers and dealers can now see and order this product.",
       });
     } catch (error) {
       showToast({ tone: "error", title: "Visibility update failed", message: error.message });
@@ -565,13 +605,13 @@ export default function ProductDisplayPage() {
 
       showToast({
         tone: "success",
-        title: shouldShow ? "Product shown" : "Product hidden",
-        message: `${label} is now ${shouldShow ? "shown to" : "hidden from"} ${userLabel}.`,
+        title: shouldShow ? "Product available" : "Product removed for this user",
+        message: `${label} is now ${shouldShow ? "available to" : "not available to"} ${userLabel}.`,
       });
     } catch (error) {
       showToast({
         tone: "error",
-        title: shouldShow ? "Show failed" : "Hide failed",
+        title: shouldShow ? "Make available failed" : "Remove access failed",
         message: error.message || "Could not update this user's product access.",
       });
     } finally {
@@ -650,7 +690,7 @@ export default function ProductDisplayPage() {
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge tone={globallyVisible ? "success" : "neutral"}>
-                      {globallyVisible ? "Displayed" : "Global hidden"}
+                      {globallyVisible ? "Available" : "On hold"}
                     </StatusBadge>
                   </td>
                   <td className="px-4 py-3 text-right">
@@ -662,7 +702,7 @@ export default function ProductDisplayPage() {
                       disabled={saving}
                       onClick={() => setProductForSelectedUser(product, actionIsShow)}
                     >
-                      {saving ? "Saving" : actionIsShow ? "Show" : "Hide"}
+                      {saving ? "Saving" : actionIsShow ? "Make available" : "Remove access"}
                     </Button>
                   </td>
                 </tr>
@@ -771,7 +811,7 @@ export default function ProductDisplayPage() {
       <div className="p-8 text-center">
         <h2 className="text-lg font-semibold text-slate-900">Access denied</h2>
         <p className="mt-2 text-sm text-slate-500">
-          You do not have permission to manage product show/hide.
+          You do not have permission to manage product availability and holds.
         </p>
       </div>
     );
@@ -782,17 +822,17 @@ export default function ProductDisplayPage() {
       <PageHeader
         eyebrow="Catalog control"
         title="Product Display"
-        description="Control each product's price, visible stock, visibility, and display order."
+        description="Manage the customer catalog without losing admin access. Held products remain visible to admins for production and planning."
         icon="eye"
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 xl:gap-4">
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-sm font-medium text-slate-500">Shown to users</p>
+          <p className="text-sm font-medium text-slate-500">Available to users</p>
           <p className="mt-1 text-2xl font-semibold text-slate-900">{visibleCount}</p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-sm font-medium text-slate-500">Hidden from users</p>
+          <p className="text-sm font-medium text-slate-500">On hold</p>
           <p className="mt-1 text-2xl font-semibold text-slate-900">{items.length - visibleCount}</p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -976,7 +1016,7 @@ export default function ProductDisplayPage() {
       <div className="order-2">
         <SectionCard
           title="User Product Display"
-          subtitle="Select one user to see which products are shown or hidden for that account."
+          subtitle="Select one user to see which products are available or unavailable for that account."
           icon="users"
         >
         <div className="min-w-0 rounded-xl border border-slate-200 bg-slate-50/70 p-3 sm:p-4">
@@ -1016,11 +1056,11 @@ export default function ProductDisplayPage() {
 
             <div className="grid grid-cols-2 gap-2 lg:w-56">
               <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2">
-                <p className="text-xs text-slate-500">Shown</p>
+                <p className="text-xs text-slate-500">Available</p>
                 <p className="text-lg font-semibold text-emerald-700">{selectedUserProducts.shown.length}</p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                <p className="text-xs text-slate-500">Hidden</p>
+                <p className="text-xs text-slate-500">Unavailable</p>
                 <p className="text-lg font-semibold text-slate-800">{selectedUserProducts.hidden.length}</p>
               </div>
             </div>
@@ -1040,8 +1080,8 @@ export default function ProductDisplayPage() {
 
           <div className="mt-4 inline-flex rounded-lg border border-slate-200 bg-white p-1">
             {[
-              { key: "shown", label: "Shown", count: selectedUserProducts.shown.length, icon: "eye" },
-              { key: "hidden", label: "Hidden", count: selectedUserProducts.hidden.length, icon: "eyeOff" },
+              { key: "shown", label: "Available", count: selectedUserProducts.shown.length, icon: "eye" },
+              { key: "hidden", label: "Unavailable", count: selectedUserProducts.hidden.length, icon: "eyeOff" },
             ].map((option) => (
               <button
                 key={option.key}
@@ -1070,7 +1110,7 @@ export default function ProductDisplayPage() {
         <div className="mt-5">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-slate-900">
-              {selectedUserProductMode === "shown" ? "Shown products" : "Hidden products"}
+              {selectedUserProductMode === "shown" ? "Available products" : "Unavailable products"}
             </h3>
             <StatusBadge tone={selectedUserProductMode === "shown" ? "success" : "neutral"}>
               {selectedUserProductList.length} products
@@ -1117,10 +1157,10 @@ export default function ProductDisplayPage() {
         </SectionCard>
       </div>
 
-      <div className="order-1">
+      <div className="order-first">
         <SectionCard
           title="Customer Catalog Controls"
-          subtitle="Visible pairs is the maximum stock number customers can see and order for that exact variant."
+          subtitle="Place products on hold without removing them from admin pages. Visible pairs is the maximum stock customers can see and order."
           icon="finishedGoods"
         >
         <div className="grid gap-3 border-b border-slate-100 px-3 py-4 sm:px-5 lg:grid-cols-3">
@@ -1133,26 +1173,75 @@ export default function ProductDisplayPage() {
             <p className="mt-1 text-sm text-indigo-900">Maximum pairs shown to customers.</p>
           </div>
           <div className="rounded-lg bg-emerald-50 px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Show / hide</p>
-            <p className="mt-1 text-sm text-emerald-900">Controls whether customers see the variant.</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Available / hold</p>
+            <p className="mt-1 text-sm text-emerald-900">Held products stay visible to admins but are unavailable to users.</p>
           </div>
         </div>
 
-        <div className="flex min-w-0 flex-col gap-3 px-3 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
-          <input
-            type="text"
-            placeholder="Search products..."
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100 sm:max-w-sm"
-          />
-          <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500">
-            <span>{filteredGroups.length} article codes shown</span>
-            {savingOrder ? (
-              <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-100">
-                Saving order...
-              </span>
-            ) : null}
+        <div className="border-b border-slate-100 bg-slate-50/70 px-3 py-4 sm:px-5">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="relative xl:col-span-2">
+              <Icon name="search" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                placeholder="Search FG.ID, article, series, color, or size..."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3.5 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+              />
+            </div>
+            <MultiSeriesFilter
+              label="Series"
+              options={seriesOptions}
+              values={selectedSeries}
+              onChange={setSelectedSeries}
+            />
+            <select
+              value={visibilityFilter}
+              onChange={(event) => setVisibilityFilter(event.target.value)}
+              className="h-11 self-end rounded-xl border border-slate-200 bg-white px-3.5 text-sm font-semibold text-slate-700 shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+            >
+              <option value="all">All availability</option>
+              <option value="shown">Available to users</option>
+              <option value="held">On hold</option>
+            </select>
+            <select
+              value={stockFilter}
+              onChange={(event) => setStockFilter(event.target.value)}
+              className="h-11 rounded-xl border border-slate-200 bg-white px-3.5 text-sm font-semibold text-slate-700 shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+            >
+              <option value="all">All stock levels</option>
+              <option value="in_stock">In stock</option>
+              <option value="low_stock">Low stock (under 10)</option>
+              <option value="out_of_stock">Out of stock</option>
+            </select>
+            <select
+              value={commissionFilter}
+              onChange={(event) => setCommissionFilter(event.target.value)}
+              className="h-11 rounded-xl border border-slate-200 bg-white px-3.5 text-sm font-semibold text-slate-700 shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+            >
+              <option value="all">All product types</option>
+              <option value="commission">Commission products</option>
+              <option value="non_commission">Non-commission products</option>
+            </select>
+            <NClassificationFilter value={nClassificationFilter} onChange={setNClassificationFilter} />
+            <div className="flex items-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch("");
+                  setSelectedSeries([]);
+                  setVisibilityFilter("all");
+                  setStockFilter("all");
+                  setCommissionFilter("all");
+                  setNClassificationFilter("all");
+                }}
+                className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 transition hover:border-indigo-300 hover:text-indigo-700"
+              >
+                Clear filters
+              </button>
+              <span className="pb-3 text-sm text-slate-500">{filteredGroups.length} articles</span>
+            </div>
           </div>
         </div>
 
@@ -1232,8 +1321,8 @@ export default function ProductDisplayPage() {
                               <p className="mt-1 truncate text-sm font-semibold text-slate-900">
                                 {item.color || "No color"} / {item.size || "No size"}
                               </p>
-                              <StatusBadge tone={item.is_visible ? "success" : "neutral"}>
-                                {item.is_visible ? "Shown to users" : "Hidden from users"}
+                              <StatusBadge tone={item.is_visible ? "success" : "warning"}>
+                                {item.is_visible ? "Available to users" : "On hold — admin only"}
                               </StatusBadge>
                               <ProductTypeBadges product={item} className="mt-2" />
                             </div>
@@ -1348,7 +1437,7 @@ export default function ProductDisplayPage() {
                                     Visible to {visibleUsers.length} {visibleUsers.length === 1 ? "user" : "users"}
                                   </p>
                                   {!item.is_visible ? (
-                                    <p className="mt-2 text-sm text-amber-300">This product is hidden from everyone.</p>
+                                    <p className="mt-2 text-sm text-amber-300">This product is on hold. Admins can still see it; users cannot.</p>
                                   ) : visibleUsers.length ? (
                                     <ul className="mt-2 max-h-48 space-y-2 overflow-y-auto overscroll-contain pr-1">
                                       {visibleUsers.map((visibleUser) => (
@@ -1371,11 +1460,11 @@ export default function ProductDisplayPage() {
                                 size="sm"
                                 icon={item.is_visible ? "eyeOff" : "eye"}
                                 iconOnly
-                                aria-label={item.is_visible ? "Hide product" : "Show product"}
-                                title={item.is_visible ? "Hide product" : "Show product"}
+                                aria-label={item.is_visible ? "Place product on hold" : "Release product from hold"}
+                                title={item.is_visible ? "Place on hold" : "Release hold"}
                                 onClick={() => toggleVisibility(item)}
                               >
-                                {item.is_visible ? "Hide product" : "Show product"}
+                                {item.is_visible ? "Place on hold" : "Release hold"}
                               </Button>
                             </div>
                           </div>
@@ -1384,8 +1473,8 @@ export default function ProductDisplayPage() {
                     </div>
                   </td>
                   <td className="px-4 py-5">
-                    <StatusBadge tone={group.visibleCount ? "success" : "neutral"}>
-                      {group.visibleCount}/{group.items.length} shown
+                    <StatusBadge tone={group.visibleCount ? "success" : "warning"}>
+                      {group.visibleCount}/{group.items.length} available
                     </StatusBadge>
                   </td>
                   <td className="px-4 py-5">
