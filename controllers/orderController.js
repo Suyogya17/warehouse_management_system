@@ -86,14 +86,21 @@ const ORDER_CORRECTION_CO_ADMIN_EMAILS = new Set([
   'kingarna@nepcha.com',
 ]);
 
-const canCorrectOrders = (user = {}) =>
-  String(user.role || '').toUpperCase() === 'CO_ADMIN' &&
-  (ORDER_CORRECTION_CO_ADMINS.has(
-    String(user.name || '').trim().replace(/\s+/g, ' ').toLowerCase()
-  ) ||
-    ORDER_CORRECTION_CO_ADMIN_EMAILS.has(
-      String(user.email || '').trim().toLowerCase()
-    ));
+const canCorrectOrders = (user = {}) => {
+  const role = String(user.role || '').toUpperCase();
+
+  if (role === 'ADMIN') return true;
+
+  return (
+    role === 'CO_ADMIN' &&
+    (ORDER_CORRECTION_CO_ADMINS.has(
+      String(user.name || '').trim().replace(/\s+/g, ' ').toLowerCase()
+    ) ||
+      ORDER_CORRECTION_CO_ADMIN_EMAILS.has(
+        String(user.email || '').trim().toLowerCase()
+      ))
+  );
+};
 
 const canCorrectWarehouseSource = (user = {}) =>
   String(user.role || '').toUpperCase() === 'ADMIN' || canCorrectOrders(user);
@@ -472,7 +479,7 @@ const getReservedByProduct = async (executor, productIds = []) => {
                       SELECT SUM(delivered_allocation.quantity)
                       FROM order_item_warehouse_allocations delivered_allocation
                       WHERE delivered_allocation.order_item_id = oi.id
-                        AND delivered_allocation.allocation_status = 'DEDUCTED'
+                        AND delivered_allocation.allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK')
                     ), 0)
                   )`
                 : 'oi.qty_ordered'
@@ -765,9 +772,14 @@ const buildWarehouseFulfillments = (
       fulfillment.status === 'PARTIALLY DELIVERED' ||
       Number(fulfillment.delivered_pairs || 0) > 0
   );
+  const hasCompletedShortage = fulfillments.some((fulfillment) =>
+    ['DELIVERED WITH SHORTAGE', 'OUT OF STOCK'].includes(fulfillment.status)
+  );
   const fulfillmentStatus =
     activeFulfillments.length > 0 && completedCount === activeFulfillments.length
-      ? 'DELIVERED'
+      ? hasCompletedShortage
+        ? 'COMPLETED WITH SHORTAGE'
+        : 'DELIVERED'
       : completedCount > 0 || hasPartialDelivery
         ? 'PARTIALLY DELIVERED'
         : String(order.status || '').toUpperCase();
@@ -1114,10 +1126,11 @@ const ensurePlannedWarehouseAllocations = async (client, orderId, userId) => {
   const existingResult = await client.query(
     `SELECT order_item_id,
             COALESCE(SUM(CASE WHEN allocation_status = 'PLANNED' THEN quantity ELSE 0 END), 0) AS planned_quantity,
-            COALESCE(SUM(CASE WHEN allocation_status = 'DEDUCTED' THEN quantity ELSE 0 END), 0) AS delivered_quantity
+            COALESCE(SUM(CASE WHEN allocation_status = 'DEDUCTED' THEN quantity ELSE 0 END), 0) AS delivered_quantity,
+            COALESCE(SUM(CASE WHEN allocation_status = 'OUT_OF_STOCK' THEN quantity ELSE 0 END), 0) AS out_of_stock_quantity
      FROM order_item_warehouse_allocations
      WHERE order_item_id IN ${itemClause}
-       AND allocation_status IN ('PLANNED', 'DEDUCTED')
+       AND allocation_status IN ('PLANNED', 'DEDUCTED', 'OUT_OF_STOCK')
      GROUP BY order_item_id`,
     itemParams
   );
@@ -1127,6 +1140,7 @@ const ensurePlannedWarehouseAllocations = async (client, orderId, userId) => {
       {
         planned: Number(row.planned_quantity || 0),
         delivered: Number(row.delivered_quantity || 0),
+        outOfStock: Number(row.out_of_stock_quantity || 0),
       },
     ])
   );
@@ -1135,7 +1149,8 @@ const ensurePlannedWarehouseAllocations = async (client, orderId, userId) => {
       Math.abs(
         Number(item.qty_ordered || 0) -
           (Number(existingByItem.get(Number(item.id))?.planned || 0) +
-            Number(existingByItem.get(Number(item.id))?.delivered || 0))
+            Number(existingByItem.get(Number(item.id))?.delivered || 0) +
+            Number(existingByItem.get(Number(item.id))?.outOfStock || 0))
       ) < 0.001
   );
 
@@ -1152,9 +1167,12 @@ const ensurePlannedWarehouseAllocations = async (client, orderId, userId) => {
     const deliveredQuantity = Number(
       existingByItem.get(Number(item.id))?.delivered || 0
     );
+    const outOfStockQuantity = Number(
+      existingByItem.get(Number(item.id))?.outOfStock || 0
+    );
     let remaining = Math.max(
       0,
-      Number(item.qty_ordered || 0) - deliveredQuantity
+      Number(item.qty_ordered || 0) - deliveredQuantity - outOfStockQuantity
     );
     if (remaining <= 0.001) continue;
 
@@ -1284,7 +1302,7 @@ const ensureWarehouseDeliveryNotes = async (client, order, userId) => {
      FROM order_item_warehouse_allocations allocation
      JOIN order_items item ON item.id = allocation.order_item_id
      WHERE item.order_id = ?
-       AND allocation.allocation_status IN ('PLANNED', 'DEDUCTED')
+       AND allocation.allocation_status IN ('PLANNED', 'DEDUCTED', 'OUT_OF_STOCK')
      GROUP BY allocation.warehouse_id
      ORDER BY allocation.warehouse_id`,
     [order.id]
@@ -1322,7 +1340,7 @@ const ensureWarehouseDeliveryNotes = async (client, order, userId) => {
       if (
         existingStatus === 'VOID' ||
         existingStatus === 'REASSIGNED' ||
-        (existingStatus === 'DELIVERED' && plannedCount > 0)
+        (['DELIVERED', 'SHORTAGE'].includes(existingStatus) && plannedCount > 0)
       ) {
         await client.query(
           `UPDATE order_warehouse_delivery_notes
@@ -2133,7 +2151,10 @@ const getOverview = async (req, res, next) => {
     const deliveredQuantityExpr = supportsWarehouseDelivery
       ? 'COALESCE(delivered_allocation.delivered_quantity, 0)'
       : '0';
-    const remainingQuantityExpr = `GREATEST(0, oi.qty_ordered - ${deliveredQuantityExpr})`;
+    const resolvedQuantityExpr = supportsWarehouseDelivery
+      ? 'COALESCE(delivered_allocation.resolved_quantity, 0)'
+      : '0';
+    const remainingQuantityExpr = `GREATEST(0, oi.qty_ordered - ${resolvedQuantityExpr})`;
     const statusRows = await query(
       `SELECT UPPER(o.status) AS status,
               COUNT(DISTINCT o.id) AS order_count,
@@ -2141,6 +2162,8 @@ const getOverview = async (req, res, next) => {
                 CASE
                   WHEN UPPER(o.status) IN ('PENDING', 'CONFIRMED', 'PACKED')
                     THEN ${remainingQuantityExpr}
+                  WHEN UPPER(o.status) = 'DELIVERED'
+                    THEN ${deliveredQuantityExpr}
                   ELSE oi.qty_ordered
                 END
               ), 0) AS pairs,
@@ -2151,6 +2174,8 @@ const getOverview = async (req, res, next) => {
                       CASE
                         WHEN UPPER(o.status) IN ('PENDING', 'CONFIRMED', 'PACKED')
                           THEN ${remainingQuantityExpr}
+                        WHEN UPPER(o.status) = 'DELIVERED'
+                          THEN ${deliveredQuantityExpr}
                         ELSE oi.qty_ordered
                       END
                     ) / fg.inner_boxes_per_outer_box
@@ -2179,9 +2204,11 @@ const getOverview = async (req, res, next) => {
        ${
          supportsWarehouseDelivery
            ? `LEFT JOIN (
-                SELECT order_item_id, SUM(quantity) AS delivered_quantity
+                SELECT order_item_id,
+                       SUM(CASE WHEN allocation_status = 'DEDUCTED' THEN quantity ELSE 0 END) AS delivered_quantity,
+                       SUM(CASE WHEN allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK') THEN quantity ELSE 0 END) AS resolved_quantity
                 FROM order_item_warehouse_allocations
-                WHERE allocation_status = 'DEDUCTED'
+                WHERE allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK')
                 GROUP BY order_item_id
               ) delivered_allocation ON delivered_allocation.order_item_id = oi.id`
            : ''
@@ -4120,6 +4147,18 @@ const updateStatus = async (req, res, next) => {
     }
 
     const currentStatus = String(order.status || '').toUpperCase();
+    if (
+      status === 'DELIVERED' &&
+      supportsPerWarehouseDeliveryNotes &&
+      !order.delivery_note_number
+    ) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message:
+          'Complete this order from its individual warehouse DNs. Direct delivery is disabled so product verification and warehouse stock cannot be bypassed.',
+      });
+    }
     const allowedTransitions = {
       PENDING: ['CONFIRMED', 'CANCELLED'],
       CONFIRMED: ['PACKED', 'CANCELLED'],
@@ -4141,16 +4180,19 @@ const updateStatus = async (req, res, next) => {
       supportsWarehouseAllocationStatus &&
       ['CANCELLED', 'DELIVERED'].includes(status)
     ) {
-      const deliveredAllocationResult = await client.query(
-        `SELECT COUNT(*) AS delivered_allocations
+      const finalizedAllocationResult = await client.query(
+        `SELECT SUM(allocation.allocation_status = 'DEDUCTED') AS delivered_allocations,
+                SUM(allocation.allocation_status = 'OUT_OF_STOCK') AS shortage_allocations
          FROM order_item_warehouse_allocations allocation
          JOIN order_items item ON item.id = allocation.order_item_id
          WHERE item.order_id = ?
-           AND allocation.allocation_status = 'DEDUCTED'`,
+           AND allocation.allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK')`,
         [order.id]
       );
       const hasPartialDelivery =
-        Number(deliveredAllocationResult.rows[0]?.delivered_allocations || 0) > 0;
+        Number(finalizedAllocationResult.rows[0]?.delivered_allocations || 0) > 0;
+      const hasClosedShortage =
+        Number(finalizedAllocationResult.rows[0]?.shortage_allocations || 0) > 0;
 
       if (hasPartialDelivery && status === 'CANCELLED') {
         await client.query('ROLLBACK');
@@ -4166,6 +4208,14 @@ const updateStatus = async (req, res, next) => {
           success: false,
           message:
             'This order is partially delivered. Use the Deliver button on each remaining warehouse slip.',
+        });
+      }
+      if (hasClosedShortage && status === 'CANCELLED') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message:
+            'A warehouse DN has already been closed with a shortage. Undo that DN before cancelling the master order.',
         });
       }
     }
@@ -4789,20 +4839,25 @@ const reopenPacking = async (req, res, next) => {
     }
 
     if (await hasColumn('order_item_warehouse_allocations', 'allocation_status')) {
-      const deliveredAllocationResult = await client.query(
-        `SELECT COUNT(*) AS delivered_allocations
+      const finalizedAllocationResult = await client.query(
+        `SELECT SUM(allocation.allocation_status = 'DEDUCTED') AS delivered_allocations,
+                SUM(allocation.allocation_status = 'OUT_OF_STOCK') AS shortage_allocations
          FROM order_item_warehouse_allocations allocation
          JOIN order_items item ON item.id = allocation.order_item_id
          WHERE item.order_id = ?
-           AND allocation.allocation_status = 'DEDUCTED'`,
+           AND allocation.allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK')`,
         [order.id]
       );
-      if (Number(deliveredAllocationResult.rows[0]?.delivered_allocations || 0) > 0) {
+      const hasFinalizedWarehouseQuantity =
+        Number(finalizedAllocationResult.rows[0]?.delivered_allocations || 0) > 0 ||
+        Number(finalizedAllocationResult.rows[0]?.shortage_allocations || 0) > 0;
+
+      if (hasFinalizedWarehouseQuantity) {
         await client.query('ROLLBACK');
         return res.status(409).json({
           success: false,
           message:
-            'Packing cannot be reopened after any warehouse slip has been delivered.',
+            'Packing cannot be reopened after a warehouse DN has finalized delivered or shortage quantities. Undo the affected DN first.',
         });
       }
     }
@@ -4848,6 +4903,312 @@ const reopenPacking = async (req, res, next) => {
         status: 'CONFIRMED',
         delivery_note_number: order.delivery_note_number,
       },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+// Correct only the still-pending products on one packed warehouse DN. This
+// preserves deliveries and shortages already finalized by other warehouses.
+const correctPackedWarehouseItems = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    if (!canCorrectOrders(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to correct packed warehouse DNs.',
+      });
+    }
+
+    await client.query('START TRANSACTION');
+
+    const orderId = Number(req.params.id);
+    const warehouseId = Number(req.params.warehouseId);
+    const reason = String(req.body.reason || '').trim();
+    const requestedRows = Array.isArray(req.body.items) ? req.body.items : [];
+
+    if (!orderId || !warehouseId || !reason || !requestedRows.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: !reason
+          ? 'Correction reason is required.'
+          : 'At least one pending warehouse product is required.',
+      });
+    }
+
+    const orderResult = await client.query(
+      'SELECT * FROM orders WHERE id = ? FOR UPDATE',
+      [orderId]
+    );
+    const order = orderResult.rows[0];
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+    if (String(order.status || '').toUpperCase() !== 'PACKED') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Only a packed order can have a pending warehouse DN corrected.',
+      });
+    }
+
+    const capabilities = await getWarehouseAllocationCapabilities();
+    if (!capabilities.supportsPlanning) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'This older order does not support warehouse-DN item correction.',
+      });
+    }
+
+    const allocationResult = await client.query(
+      `SELECT allocation.id AS allocation_id,
+              allocation.order_item_id,
+              allocation.finished_good_id,
+              allocation.quantity,
+              goods.name AS product_name,
+              goods.article_code,
+              goods.color,
+              goods.inner_boxes_per_outer_box,
+              COALESCE(stock.quantity, 0) AS warehouse_stock
+       FROM order_item_warehouse_allocations allocation
+       JOIN order_items item ON item.id = allocation.order_item_id
+       JOIN finished_goods goods ON goods.id = allocation.finished_good_id
+       LEFT JOIN finished_good_warehouse_stock stock
+         ON stock.finished_good_id = allocation.finished_good_id
+        AND stock.warehouse_id = allocation.warehouse_id
+       WHERE item.order_id = ?
+         AND allocation.warehouse_id = ?
+         AND allocation.allocation_status = 'PLANNED'
+       ORDER BY allocation.id
+       FOR UPDATE`,
+      [orderId, warehouseId]
+    );
+
+    if (!allocationResult.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'This warehouse DN has no pending products to correct.',
+      });
+    }
+
+    const requestedByAllocationId = new Map();
+    for (const row of requestedRows) {
+      const allocationId = Number(row.allocation_id);
+      if (!allocationId || requestedByAllocationId.has(allocationId)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Each pending product must appear exactly once.',
+        });
+      }
+      requestedByAllocationId.set(allocationId, row);
+    }
+
+    const currentAllocationIds = allocationResult.rows.map((row) =>
+      Number(row.allocation_id)
+    );
+    if (
+      requestedByAllocationId.size !== currentAllocationIds.length ||
+      currentAllocationIds.some((id) => !requestedByAllocationId.has(id))
+    ) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message:
+          'The pending products changed while this window was open. Close it and check the warehouse DN again.',
+      });
+    }
+
+    const { clause: allocationClause, params: allocationParams } =
+      buildInClause(currentAllocationIds);
+    const otherReservationsResult = await client.query(
+      `SELECT allocation.finished_good_id,
+              COALESCE(SUM(allocation.quantity), 0) AS reserved_quantity
+       FROM order_item_warehouse_allocations allocation
+       WHERE allocation.warehouse_id = ?
+         AND allocation.allocation_status = 'PLANNED'
+         AND allocation.id NOT IN ${allocationClause}
+       GROUP BY allocation.finished_good_id`,
+      [warehouseId, ...allocationParams]
+    );
+    const reservedByOtherOrders = new Map(
+      otherReservationsResult.rows.map((row) => [
+        Number(row.finished_good_id),
+        Number(row.reserved_quantity || 0),
+      ])
+    );
+
+    const correctedRows = [];
+    for (const allocation of allocationResult.rows) {
+      const requested = requestedByAllocationId.get(
+        Number(allocation.allocation_id)
+      );
+      const cartons = Number(requested.carton_qty);
+      const requestedPairQuantity = Number(requested.pair_quantity);
+      const pairsPerCarton = Number(allocation.inner_boxes_per_outer_box || 0);
+      if (pairsPerCarton <= 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `${allocation.product_name} does not have pairs per carton configured.`,
+        });
+      }
+
+      const correctedQuantity = Number.isFinite(requestedPairQuantity)
+        ? requestedPairQuantity
+        : cartons * pairsPerCarton;
+      if (!Number.isInteger(correctedQuantity) || correctedQuantity < 1) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `${allocation.product_name} pair quantity must be a whole number greater than zero.`,
+        });
+      }
+      correctedRows.push({
+        ...allocation,
+        carton_qty: correctedQuantity / pairsPerCarton,
+        old_quantity: Number(allocation.quantity || 0),
+        corrected_quantity: correctedQuantity,
+      });
+    }
+
+    const correctedByProduct = new Map();
+    for (const row of correctedRows) {
+      const productId = Number(row.finished_good_id);
+      const summary = correctedByProduct.get(productId) || {
+        requested: 0,
+        warehouseStock: Number(row.warehouse_stock || 0),
+        productName: row.product_name,
+      };
+      summary.requested += row.corrected_quantity;
+      correctedByProduct.set(productId, summary);
+    }
+    for (const [productId, summary] of correctedByProduct.entries()) {
+      const availableQuantity = Math.max(
+        0,
+        summary.warehouseStock -
+          Number(reservedByOtherOrders.get(productId) || 0)
+      );
+      if (summary.requested > availableQuantity + 0.001) {
+        await client.query('ROLLBACK');
+        return res.status(422).json({
+          success: false,
+          message: `Insufficient unreserved stock in this warehouse for ${summary.productName}. Requested ${summary.requested} pairs; ${availableQuantity} pairs are available.`,
+        });
+      }
+    }
+
+    const itemQuantityDeltas = new Map();
+    for (const row of correctedRows) {
+      const updateFields = ['quantity = ?'];
+      const updateParams = [row.corrected_quantity];
+      if (capabilities.supportsPackedQuantity) {
+        updateFields.push('packed_quantity = ?');
+        updateParams.push(row.corrected_quantity);
+      }
+      if (capabilities.supportsVerification) {
+        updateFields.push(
+          'verified_quantity = NULL',
+          'verification_status = NULL',
+          'verification_note = NULL',
+          'verified_by = NULL',
+          'verified_at = NULL'
+        );
+      }
+      updateParams.push(row.allocation_id);
+      await client.query(
+        `UPDATE order_item_warehouse_allocations
+         SET ${updateFields.join(', ')}
+         WHERE id = ? AND allocation_status = 'PLANNED'`,
+        updateParams
+      );
+
+      itemQuantityDeltas.set(
+        Number(row.order_item_id),
+        Number(itemQuantityDeltas.get(Number(row.order_item_id)) || 0) +
+          row.corrected_quantity -
+          row.old_quantity
+      );
+    }
+
+    for (const [orderItemId, delta] of itemQuantityDeltas.entries()) {
+      if (Math.abs(delta) < 0.001) continue;
+      await client.query(
+        `UPDATE order_items
+         SET qty_ordered = qty_ordered + ?
+         WHERE id = ? AND order_id = ?`,
+        [delta, orderItemId, orderId]
+      );
+    }
+
+    let warehouseDeliveryNote = null;
+    if (await hasTable('order_warehouse_delivery_notes')) {
+      const noteResult = await client.query(
+        `SELECT delivery_note_number
+         FROM order_warehouse_delivery_notes
+         WHERE order_id = ? AND warehouse_id = ?
+         LIMIT 1`,
+        [orderId, warehouseId]
+      );
+      warehouseDeliveryNote = noteResult.rows[0]?.delivery_note_number || null;
+      await client.query(
+        `UPDATE order_warehouse_delivery_notes
+         SET status = 'ACTIVE', updated_at = NOW()
+         WHERE order_id = ? AND warehouse_id = ?
+           AND status NOT IN ('VOID', 'REASSIGNED')`,
+        [orderId, warehouseId]
+      );
+    }
+
+    await client.query('UPDATE orders SET updated_at = NOW() WHERE id = ?', [
+      orderId,
+    ]);
+    await client.query('COMMIT');
+    clearCache();
+
+    const before = correctedRows.map((row) => ({
+      allocation_id: Number(row.allocation_id),
+      finished_good_id: Number(row.finished_good_id),
+      product_name: row.product_name,
+      quantity: row.old_quantity,
+    }));
+    const after = correctedRows.map((row) => ({
+      allocation_id: Number(row.allocation_id),
+      finished_good_id: Number(row.finished_good_id),
+      product_name: row.product_name,
+      carton_qty: row.carton_qty,
+      quantity: row.corrected_quantity,
+    }));
+    await auditLog({
+      ...getActor(req),
+      actionType: 'UPDATE',
+      module: 'orders',
+      entity_type: 'order',
+      entity_id: orderId,
+      entityName: getOrderEntityName(order),
+      description: `Corrected pending products on ${warehouseDeliveryNote || `warehouse ${warehouseId}`}: ${reason}`,
+      metadata: {
+        reason,
+        warehouse_id: warehouseId,
+        warehouse_delivery_note_number: warehouseDeliveryNote,
+        before,
+        after,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: `${warehouseDeliveryNote || 'Warehouse DN'} corrected. Reprint it before checking and delivering the products.`,
+      data: { id: orderId, warehouse_id: warehouseId, before, after },
     });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -5930,11 +6291,13 @@ const deliverWarehouseFulfillment = async (req, res, next) => {
     }
 
     const remainingResult = await client.query(
-      `SELECT COUNT(*) AS remaining_allocations
+      `SELECT SUM(allocation.allocation_status = 'PLANNED') AS remaining_allocations,
+              SUM(allocation.allocation_status = 'DEDUCTED') AS delivered_allocations,
+              SUM(allocation.allocation_status = 'OUT_OF_STOCK') AS out_of_stock_allocations
        FROM order_item_warehouse_allocations allocation
        JOIN order_items item ON item.id = allocation.order_item_id
        WHERE item.order_id = ?
-         AND allocation.allocation_status = 'PLANNED'`,
+         AND allocation.allocation_status <> 'RELEASED'`,
       [orderId]
     );
     if (await hasTable('order_warehouse_delivery_notes')) {
@@ -5968,6 +6331,11 @@ const deliverWarehouseFulfillment = async (req, res, next) => {
     }
     const fullyDelivered =
       Number(remainingResult.rows[0]?.remaining_allocations || 0) === 0;
+    const completedWithShortage =
+      fullyDelivered &&
+      Number(remainingResult.rows[0]?.out_of_stock_allocations || 0) > 0;
+    const hasStockDeduction =
+      Number(remainingResult.rows[0]?.delivered_allocations || 0) > 0;
 
     if (fullyDelivered) {
       await client.query(
@@ -5975,10 +6343,10 @@ const deliverWarehouseFulfillment = async (req, res, next) => {
          SET status = 'DELIVERED',
              delivered_by = ?,
              delivered_at = NOW(),
-             stock_deducted = 1,
+             stock_deducted = ?,
              updated_at = NOW()
          WHERE id = ?`,
-        [req.user.id, orderId]
+        [req.user.id, hasStockDeduction ? 1 : 0, orderId]
       );
     } else {
       await client.query(
@@ -6024,9 +6392,15 @@ const deliverWarehouseFulfillment = async (req, res, next) => {
           warehouse_slip_number: deliveredFulfillment?.warehouse_slip_number,
           delivered_pairs: deliveredPairs,
           out_of_stock_pairs: closedOutOfStockPairs,
-          master_order_status: fullyDelivered ? 'DELIVERED' : 'PACKED',
+          master_order_status: fullyDelivered
+            ? completedWithShortage
+              ? 'COMPLETED WITH SHORTAGE'
+              : 'DELIVERED'
+            : 'PACKED',
           fulfillment_status: fullyDelivered
-            ? 'DELIVERED'
+            ? completedWithShortage
+              ? 'COMPLETED WITH SHORTAGE'
+              : 'DELIVERED'
             : deliveredPairs > 0
               ? 'PARTIALLY DELIVERED'
               : 'PACKED',
@@ -6095,7 +6469,15 @@ const undoWarehouseFulfillmentDelivery = async (req, res, next) => {
   let auditPayload = null;
 
   try {
-    const capabilities = await getWarehouseAllocationCapabilities();
+    const [
+      capabilities,
+      supportsWarehouseDeliveryNotes,
+      supportsWarehouseBillingHistory,
+    ] = await Promise.all([
+      getWarehouseAllocationCapabilities(),
+      hasTable('order_warehouse_delivery_notes'),
+      hasTable('warehouse_billing_history'),
+    ]);
     if (
       !capabilities.supportsPlanning ||
       !capabilities.supportsDeliveredBy ||
@@ -6128,9 +6510,55 @@ const undoWarehouseFulfillmentDelivery = async (req, res, next) => {
       });
     }
 
+    let warehouseDeliveryNoteNumber = order.delivery_note_number || null;
+    if (supportsWarehouseDeliveryNotes) {
+      const deliveryNoteResult = await client.query(
+        `SELECT id, delivery_note_number, status
+         FROM order_warehouse_delivery_notes
+         WHERE order_id = ? AND warehouse_id = ?
+         FOR UPDATE`,
+        [orderId, warehouseId]
+      );
+      const deliveryNote = deliveryNoteResult.rows[0];
+      if (deliveryNote) {
+        const deliveryNoteStatus = String(
+          deliveryNote.status || 'ACTIVE'
+        ).toUpperCase();
+        if (['VOID', 'REASSIGNED'].includes(deliveryNoteStatus)) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({
+            success: false,
+            message: `This warehouse DN is ${deliveryNoteStatus.toLowerCase()} and cannot be reversed.`,
+          });
+        }
+        warehouseDeliveryNoteNumber = deliveryNote.delivery_note_number;
+      }
+    }
+
+    if (supportsWarehouseBillingHistory) {
+      const billingResult = await client.query(
+        `SELECT id, delivery_note_number
+         FROM warehouse_billing_history
+         WHERE order_id = ? AND warehouse_id = ?
+         ORDER BY id DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [orderId, warehouseId]
+      );
+      if (billingResult.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message:
+            'A warehouse bill has already been created for this DN. Cancel or correct that bill before reversing the delivery.',
+        });
+      }
+    }
+
     const allocationResult = await client.query(
       `SELECT allocation.id AS allocation_id,
               allocation.quantity,
+              allocation.allocation_status,
               allocation.finished_good_id,
               item.id AS order_item_id,
               product.name AS product_name,
@@ -6141,7 +6569,7 @@ const undoWarehouseFulfillmentDelivery = async (req, res, next) => {
        JOIN warehouses warehouse ON warehouse.id = allocation.warehouse_id
        WHERE item.order_id = ?
          AND allocation.warehouse_id = ?
-         AND allocation.allocation_status = 'DEDUCTED'
+         AND allocation.allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK')
        ORDER BY allocation.id
        FOR UPDATE`,
       [orderId, warehouseId]
@@ -6151,13 +6579,18 @@ const undoWarehouseFulfillmentDelivery = async (req, res, next) => {
       await client.query('ROLLBACK');
       return res.status(409).json({
         success: false,
-        message: 'This warehouse slip is not delivered or has already been reversed.',
+        message:
+          'This warehouse DN has no delivered or shortage quantities to reverse, or it has already been reversed.',
       });
     }
 
     let restoredPairs = 0;
+    let reopenedShortagePairs = 0;
     for (const allocation of allocationResult.rows) {
       const quantity = Number(allocation.quantity || 0);
+      const allocationStatus = String(
+        allocation.allocation_status || ''
+      ).toUpperCase();
       if (!Number.isFinite(quantity) || quantity <= 0) {
         const error = new Error(
           `Invalid delivered quantity found for ${allocation.product_name}.`
@@ -6166,27 +6599,29 @@ const undoWarehouseFulfillmentDelivery = async (req, res, next) => {
         throw error;
       }
 
-      await client.query(
-        `INSERT INTO finished_good_warehouse_stock
-          (finished_good_id, warehouse_id, quantity, created_by, updated_by)
-         VALUES (?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           quantity = quantity + VALUES(quantity),
-           updated_by = VALUES(updated_by)`,
-        [
-          allocation.finished_good_id,
-          warehouseId,
-          quantity,
-          req.user.id,
-          req.user.id,
-        ]
-      );
-      await client.query(
-        `UPDATE finished_goods
-         SET quantity = quantity + ?
-         WHERE id = ?`,
-        [quantity, allocation.finished_good_id]
-      );
+      if (allocationStatus === 'DEDUCTED') {
+        await client.query(
+          `INSERT INTO finished_good_warehouse_stock
+            (finished_good_id, warehouse_id, quantity, created_by, updated_by)
+           VALUES (?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             quantity = quantity + VALUES(quantity),
+             updated_by = VALUES(updated_by)`,
+          [
+            allocation.finished_good_id,
+            warehouseId,
+            quantity,
+            req.user.id,
+            req.user.id,
+          ]
+        );
+        await client.query(
+          `UPDATE finished_goods
+           SET quantity = quantity + ?
+           WHERE id = ?`,
+          [quantity, allocation.finished_good_id]
+        );
+      }
       await client.query(
         `UPDATE order_item_warehouse_allocations
          SET allocation_status = 'PLANNED',
@@ -6202,25 +6637,30 @@ const undoWarehouseFulfillmentDelivery = async (req, res, next) => {
                       verified_at = NULL`
                  : ''
              }
-         WHERE id = ? AND allocation_status = 'DEDUCTED'`,
+         WHERE id = ? AND allocation_status = ?`,
         [
           ...(capabilities.supportsVerification
             ? [`Delivery reversed: ${reason}`.slice(0, 500)]
             : []),
           allocation.allocation_id,
+          allocationStatus,
         ]
       );
-      await recordWarehouseMovement(client, {
-        finishedGoodId: allocation.finished_good_id,
-        warehouseId,
-        quantity,
-        movementType: 'DELIVERY_REVERSAL',
-        referenceType: 'order',
-        referenceId: orderId,
-        notes: `Reversed warehouse delivery for order #${orderId}: ${reason}`,
-        userId: req.user.id,
-      });
-      restoredPairs += quantity;
+      if (allocationStatus === 'DEDUCTED') {
+        await recordWarehouseMovement(client, {
+          finishedGoodId: allocation.finished_good_id,
+          warehouseId,
+          quantity,
+          movementType: 'DELIVERY_REVERSAL',
+          referenceType: 'order',
+          referenceId: orderId,
+          notes: `Reversed ${warehouseDeliveryNoteNumber || `warehouse delivery for order #${orderId}`}: ${reason}`,
+          userId: req.user.id,
+        });
+        restoredPairs += quantity;
+      } else {
+        reopenedShortagePairs += quantity;
+      }
     }
 
     await client.query(
@@ -6233,11 +6673,13 @@ const undoWarehouseFulfillmentDelivery = async (req, res, next) => {
        WHERE id = ?`,
       [orderId]
     );
-    if (await hasTable('order_warehouse_delivery_notes')) {
+    if (supportsWarehouseDeliveryNotes) {
       await client.query(
         `UPDATE order_warehouse_delivery_notes
          SET status = 'ACTIVE'
-         WHERE order_id = ? AND warehouse_id = ? AND status = 'DELIVERED'`,
+         WHERE order_id = ?
+           AND warehouse_id = ?
+           AND status IN ('DELIVERED', 'SHORTAGE')`,
         [orderId, warehouseId]
       );
     }
@@ -6257,14 +6699,15 @@ const undoWarehouseFulfillmentDelivery = async (req, res, next) => {
       module: 'orders',
       entity_type: 'warehouse_delivery_slip',
       entity_id: orderId,
-      entityName: order.delivery_note_number || getOrderEntityName(order),
+      entityName: warehouseDeliveryNoteNumber || getOrderEntityName(order),
       description: `Reversed the delivered warehouse slip for ${allocationResult.rows[0].warehouse_name} on ${getOrderEntityName(order)}`,
       metadata: {
         order_number: orderId,
-        delivery_note_number: order.delivery_note_number,
+        delivery_note_number: warehouseDeliveryNoteNumber,
         warehouse_id: warehouseId,
         warehouse_name: allocationResult.rows[0].warehouse_name,
         restored_pairs: restoredPairs,
+        reopened_shortage_pairs: reopenedShortagePairs,
         reason,
         previous_order_status: status,
         new_order_status: 'PACKED',
@@ -6281,7 +6724,18 @@ const undoWarehouseFulfillmentDelivery = async (req, res, next) => {
 
     return res.json({
       success: true,
-      message: `${allocationResult.rows[0].warehouse_name} delivery was reversed and ${restoredPairs} pairs were restored. The warehouse slip is pending again; check its products before redelivery.`,
+      message: [
+        `${warehouseDeliveryNoteNumber || allocationResult.rows[0].warehouse_name} was reopened.`,
+        restoredPairs > 0
+          ? `${restoredPairs} delivered pairs were restored to stock.`
+          : null,
+        reopenedShortagePairs > 0
+          ? `${reopenedShortagePairs} shortage pairs were reopened.`
+          : null,
+        'Check its products again before redelivery.',
+      ]
+        .filter(Boolean)
+        .join(' '),
       data: preparedOrder,
     });
   } catch (err) {
@@ -6772,4 +7226,4 @@ const logWarehouseBilling = async (req, res, next) => {
   } catch(err){ next(err); }
 };
 
-module.exports = { getAll, getFilters, getOverview, getAvailability, getOfferPurchases, getOfferVsRegularReport, create, correctItems, updateStatus, assignDeliveryNote, correctWarehouseDeliveryNoteNumbers, reopenPacking, undoConfirmation, verifyWarehouseFulfillment, deliverWarehouseFulfillment, undoWarehouseFulfillmentDelivery, prepareDeliveryNote, logPrint, logWarehouseBilling };
+module.exports = { getAll, getFilters, getOverview, getAvailability, getOfferPurchases, getOfferVsRegularReport, create, correctItems, updateStatus, assignDeliveryNote, correctWarehouseDeliveryNoteNumbers, reopenPacking, correctPackedWarehouseItems, undoConfirmation, verifyWarehouseFulfillment, deliverWarehouseFulfillment, undoWarehouseFulfillmentDelivery, prepareDeliveryNote, logPrint, logWarehouseBilling };

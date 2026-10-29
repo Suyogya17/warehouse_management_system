@@ -249,7 +249,18 @@ export default function ProductLedgerPage() {
         return String(a.id || "").localeCompare(String(b.id || ""), undefined, { numeric: true });
       });
 
-    return rows;
+    // Reconcile every row to the authoritative current physical stock. Working
+    // backwards preserves the true balance even when older history is absent
+    // or the displayed rows are narrowed by date/search filters.
+    let balanceAfterMovement = Number(selectedFG.quantity || 0);
+    const rowsWithBalances = [...rows];
+    for (let index = rowsWithBalances.length - 1; index >= 0; index -= 1) {
+      const row = rowsWithBalances[index];
+      row.balance = balanceAfterMovement;
+      balanceAfterMovement -= Number(row.qty_in || 0) - Number(row.qty_out || 0);
+    }
+
+    return rowsWithBalances;
   }, [selectedProduct, selectedFG, shortageEvents, warehouseMovements]);
 
   const filteredEntries = useMemo(() => {
@@ -319,8 +330,10 @@ export default function ProductLedgerPage() {
         Reference: entry.reference,
         Added: entry.qty_in || "",
         "Sold / Removed": entry.qty_out || "",
+        Balance: entry.balance,
         "Added CTN": entry.qty_in ? getCartons(entry.qty_in, selectedFG) : "",
         "Sold / Removed CTN": entry.qty_out ? getCartons(entry.qty_out, selectedFG) : "",
+        "Balance CTN": getCartons(entry.balance, selectedFG),
       })),
       {},
       { Date: "Total Added", Added: stats.totalAdded },
@@ -341,6 +354,9 @@ export default function ProductLedgerPage() {
       { wch: 34 },
       { wch: 12 },
       { wch: 16 },
+      { wch: 14 },
+      { wch: 16 },
+      { wch: 14 },
       { wch: 14 },
     ];
 
@@ -611,6 +627,7 @@ export default function ProductLedgerPage() {
                       <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Reference</th>
                       <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-emerald-500">Added</th>
                       <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-rose-400">Sold / Removed</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-indigo-500">Balance</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -646,6 +663,9 @@ export default function ProductLedgerPage() {
                           ) : (
                             <span className="text-slate-300">-</span>
                           )}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right font-bold text-indigo-600">
+                          {formatCtnPairs(entry.balance, selectedFG)}
                         </td>
                       </tr>
                     ))}

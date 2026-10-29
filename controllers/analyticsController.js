@@ -78,7 +78,7 @@ const getActiveReservationExpression = async (itemAlias = "oi") =>
            SELECT SUM(delivered_allocation.quantity)
            FROM order_item_warehouse_allocations delivered_allocation
            WHERE delivered_allocation.order_item_id = ${itemAlias}.id
-             AND delivered_allocation.allocation_status = 'DEDUCTED'
+             AND delivered_allocation.allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK')
          ), 0)
        )`
     : `${itemAlias}.qty_ordered`;

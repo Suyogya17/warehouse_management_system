@@ -58,7 +58,7 @@ const getReservedByProduct = async (productIds = []) => {
          ? `LEFT JOIN (
               SELECT order_item_id, SUM(quantity) AS delivered_quantity
               FROM order_item_warehouse_allocations
-              WHERE allocation_status = 'DEDUCTED'
+              WHERE allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK')
               GROUP BY order_item_id
             ) delivered_allocation ON delivered_allocation.order_item_id = oi.id`
          : ''

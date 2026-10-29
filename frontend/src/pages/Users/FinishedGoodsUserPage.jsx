@@ -32,7 +32,14 @@ import {
   sortProductsByDisplayOrder,
 } from "../../utils/productOrdering";
 
-const getAvailableQty = getCustomerVisibleStock;
+const getAvailableQty = (product, user) => {
+  if (["ADMIN", "CO_ADMIN"].includes(String(user?.role || "").toUpperCase())) {
+    const available = Number(product?.available_qty ?? product?.quantity ?? 0);
+    return Number.isFinite(available) ? Math.max(0, Math.floor(available)) : 0;
+  }
+
+  return getCustomerVisibleStock(product);
+};
 
 const getArticleKey = (item) =>
   item.article_code || item.name?.split("_")?.[0] || `product-${item.id}`;
@@ -63,6 +70,7 @@ const DEFAULT_FILTERS = {
   search: "",
   size: "",
   stock: "all",
+  visibility: "all",
   series: [],
   commission: "all",
   nClassification: "all",
@@ -90,7 +98,7 @@ function ProductCard({
   user,
 }) {
   const [selectedVariant, setSelectedVariant] = useState(
-    variants?.find((v) => getAvailableQty(v) > 0) || variants?.[0] || null
+    variants?.find((v) => getAvailableQty(v, user) > 0) || variants?.[0] || null
   );
   const [lightbox, setLightbox] = useState(false);
   const [touchStartX, setTouchStartX] = useState(null);
@@ -117,9 +125,9 @@ function ProductCard({
         (variant) => Number(variant.id) === Number(current?.id)
       );
       if (refreshedCurrent) return refreshedCurrent;
-      return variants.find((variant) => getAvailableQty(variant) > 0) || variants[0];
+      return variants.find((variant) => getAvailableQty(variant, user) > 0) || variants[0];
     });
-  }, [variants]);
+  }, [user, variants]);
 
   const galleryVariants = useMemo(
     () => variants.filter((variant) => variant.image_url),
@@ -161,9 +169,10 @@ function ProductCard({
 
   const cartItem = cartByProductId.get(Number(selectedVariant.id));
   const isInCart = Boolean(cartItem);
-  const availableQty = getAvailableQty(selectedVariant);
+  const availableQty = getAvailableQty(selectedVariant, user);
   const isLowStock = availableQty > 0 && availableQty < 10;
   const isOutOfStock = availableQty <= 0;
+  const isHiddenProduct = Number(selectedVariant.is_visible) !== 1;
   const isNew =
     selectedVariant.created_at &&
     new Date(selectedVariant.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -250,13 +259,18 @@ function ProductCard({
 
         {/* BADGES */}
         <div className="absolute top-2 left-2 right-2 flex items-start justify-between">
-          {isNew ? (
-            <span className="bg-indigo-500 text-white text-[10px] sm:text-xs px-2 py-1 rounded-full font-semibold">
-              NEW
-            </span>
-          ) : (
-            <div />
-          )}
+          <div className="flex flex-wrap gap-1.5">
+            {isHiddenProduct ? (
+              <span className="rounded-full bg-amber-500 px-2 py-1 text-[10px] font-semibold text-white sm:text-xs">
+                HIDDEN
+              </span>
+            ) : null}
+            {isNew ? (
+              <span className="bg-indigo-500 text-white text-[10px] sm:text-xs px-2 py-1 rounded-full font-semibold">
+                NEW
+              </span>
+            ) : null}
+          </div>
           {isInCart && (
             <span className="bg-green-500 text-white text-[10px] sm:text-xs px-2 py-1 rounded-full font-semibold flex items-center gap-1">
               <Check size={12} />
@@ -309,7 +323,7 @@ function ProductCard({
         {variants.length > 0 && (
           <div className="flex flex-row py-1">
             <div className="flex scrollbar-hidden  overflow-x-auto px-1 ">
-              {variants.filter((variant) => getAvailableQty(variant) > 0).map((variant) => (
+              {variants.filter((variant) => getAvailableQty(variant, user) > 0).map((variant) => (
                   <button
                     key={variant.id}
                     onClick={() => setSelectedVariant(variant)}
@@ -561,9 +575,11 @@ export default function FinishedGoodsUserPage() {
   //   reserved_qty    = sum of all PENDING/CONFIRMED/PACKED orders
   //   display_stock   = min(product visible pairs, physical_stock - reserved_qty)
   const load = useCallback(async () => {
-    const result = await api.getAvailability(token);
+    const result = await api.getAvailability(token, {
+      include_hidden: isAdminOrderEntry ? 1 : undefined,
+    });
     setItems(result.data || []);
-  }, [token]);
+  }, [isAdminOrderEntry, token]);
 
   useEffect(() => {
     load().catch(console.error);
@@ -627,20 +643,26 @@ export default function FinishedGoodsUserPage() {
           );
 
           // FIX: Filter by available_qty (reserved-aware), not raw quantity
-          const availableQty = getAvailableQty(item);
+          const availableQty = getAvailableQty(item, user);
           const matchStock =
             filters.stock === "all"
               ? true
               : filters.stock === "low"
               ? availableQty > 0 && availableQty < 10
               : availableQty >= 10;
+          const matchVisibility =
+            !isAdminOrderEntry ||
+            filters.visibility === "all" ||
+            (filters.visibility === "hidden"
+              ? Number(item.is_visible) !== 1
+              : Number(item.is_visible) === 1);
 
-          return matchSearch && matchSize && matchStock && matchSeries && matchCommission && matchNClassification;
+          return matchSearch && matchSize && matchStock && matchVisibility && matchSeries && matchCommission && matchNClassification;
           
         })
       )
       .map((variants) => [...variants].sort(sortProductsByDisplayOrder))
-      .filter((variants) => variants.some((v) => getAvailableQty(v) > 0))
+      .filter((variants) => variants.some((v) => getAvailableQty(v, user) > 0))
       .sort((a, b) => {
         if (sort === "display") {
           return sortProductGroupsByDisplayOrder(a, b);
@@ -650,7 +672,7 @@ export default function FinishedGoodsUserPage() {
         const dateB = new Date(b[0]?.created_at || 0);
         return sort !== "oldest" ? dateB - dateA : dateA - dateB;
       });
-  }, [groupedProducts, filters, sort]);
+  }, [groupedProducts, filters, isAdminOrderEntry, sort, user]);
   const trackProductInterest = useProductInterestTracking({
     token,
     search: filters.search,
@@ -699,7 +721,7 @@ export default function FinishedGoodsUserPage() {
   const handleAddToCart = (product) => {
     trackProductInterest(product);
     // FIX: Guard against out-of-stock using available_qty, not quantity
-    const availableQty = getAvailableQty(product);
+    const availableQty = getAvailableQty(product, user);
     if (!product || availableQty <= 0) return;
 
     const productId = Number(product.id);
@@ -748,7 +770,7 @@ export default function FinishedGoodsUserPage() {
     }
     const item = cartByProductId.get(productId);
     if (!item) return;
-    const availablePairs = getAvailableQty(product);
+    const availablePairs = getAvailableQty(product, user);
     const pairsPerCarton = Number(product.inner_boxes_per_outer_box || 0);
     const maxQuantity =
       item.orderBy === "cartons" && pairsPerCarton > 0
@@ -872,6 +894,23 @@ export default function FinishedGoodsUserPage() {
               <option value="available">In Stock</option>
               <option value="low">Low Stock</option>
             </select>
+
+            {isAdminOrderEntry ? (
+              <select
+                value={filters.visibility}
+                onChange={(e) =>
+                  setFilters((current) => ({
+                    ...current,
+                    visibility: e.target.value,
+                  }))
+                }
+                className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              >
+                <option value="all">Visible and hidden</option>
+                <option value="visible">Visible products</option>
+                <option value="hidden">Hidden products</option>
+              </select>
+            ) : null}
 
             <select
               value={filters.commission}

@@ -811,6 +811,13 @@ export const api = {
       token
     ),
 
+  correctPackedOrderWarehouseItems: (id, warehouseId, payload, token) =>
+    apiRequest(
+      `/orders/${id}/warehouse-fulfillments/${warehouseId}/correct-items`,
+      { method: "PUT", body: JSON.stringify(payload) },
+      token
+    ),
+
   deliverOrderWarehouse: (id, warehouseId, items, token) =>
     apiRequest(
       `/orders/${id}/warehouse-fulfillments/${warehouseId}/deliver`,

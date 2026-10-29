@@ -715,7 +715,7 @@
             ? `LEFT JOIN (
                   SELECT order_item_id, SUM(quantity) AS delivered_quantity
                   FROM order_item_warehouse_allocations
-                  WHERE allocation_status = 'DEDUCTED'
+                  WHERE allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK')
                   GROUP BY order_item_id
                 ) delivered ON delivered.order_item_id = oi.id`
             : ''
@@ -1740,7 +1740,7 @@
           ? `LEFT JOIN (
                 SELECT order_item_id, SUM(quantity) AS delivered_quantity
                 FROM order_item_warehouse_allocations
-                WHERE allocation_status = 'DEDUCTED'
+                WHERE allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK')
                 GROUP BY order_item_id
               ) delivered ON delivered.order_item_id = oi.id`
           : ''}
@@ -1913,16 +1913,18 @@
                     ? 'COALESCE(delivered.delivered_quantity, 0)'
                     : '0'}) AS delivered_quantity,
                   SUM(${supportsWarehouseDelivery
-                    ? 'GREATEST(0, oi.qty_ordered - COALESCE(delivered.delivered_quantity, 0))'
+                    ? 'GREATEST(0, oi.qty_ordered - COALESCE(delivered.resolved_quantity, 0))'
                     : 'oi.qty_ordered'}) AS reserved_quantity
           FROM order_items oi
           JOIN orders o ON o.id = oi.order_id
           LEFT JOIN users u ON u.id = o.created_by
           ${supportsWarehouseDelivery
             ? `LEFT JOIN (
-                  SELECT order_item_id, SUM(quantity) AS delivered_quantity
+                  SELECT order_item_id,
+                         SUM(CASE WHEN allocation_status = 'DEDUCTED' THEN quantity ELSE 0 END) AS delivered_quantity,
+                         SUM(CASE WHEN allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK') THEN quantity ELSE 0 END) AS resolved_quantity
                   FROM order_item_warehouse_allocations
-                  WHERE allocation_status = 'DEDUCTED'
+                  WHERE allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK')
                   GROUP BY order_item_id
                 ) delivered ON delivered.order_item_id = oi.id`
             : ''}
@@ -1967,16 +1969,18 @@
                     : '0'}) AS delivered_quantity,
                   SUM(CASE WHEN o.status IN ('PENDING', 'CONFIRMED', 'PACKED')
                     THEN ${supportsWarehouseDelivery
-                      ? 'GREATEST(0, oi.qty_ordered - COALESCE(delivered.delivered_quantity, 0))'
+                      ? 'GREATEST(0, oi.qty_ordered - COALESCE(delivered.resolved_quantity, 0))'
                       : 'oi.qty_ordered'} ELSE 0 END) AS reserved_quantity
           FROM order_items oi
           JOIN orders o ON o.id = oi.order_id
           LEFT JOIN users u ON u.id = o.created_by
           ${supportsWarehouseDelivery
             ? `LEFT JOIN (
-                  SELECT order_item_id, SUM(quantity) AS delivered_quantity
+                  SELECT order_item_id,
+                         SUM(CASE WHEN allocation_status = 'DEDUCTED' THEN quantity ELSE 0 END) AS delivered_quantity,
+                         SUM(CASE WHEN allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK') THEN quantity ELSE 0 END) AS resolved_quantity
                   FROM order_item_warehouse_allocations
-                  WHERE allocation_status = 'DEDUCTED'
+                  WHERE allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK')
                   GROUP BY order_item_id
                 ) delivered ON delivered.order_item_id = oi.id`
             : ''}

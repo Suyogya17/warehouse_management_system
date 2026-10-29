@@ -213,7 +213,12 @@ function ProductCard({
 // ─────────────────────────────────────────────────────────────
 // OnHoldCard — with lightbox
 // ─────────────────────────────────────────────────────────────
-function OnHoldCard({ variants = [], canManageVisibility = false, onShowForCountry }) {
+function OnHoldCard({
+  variants = [],
+  canManageVisibility = false,
+  onShowForCountry,
+  getAvailableQuantity = getAvailableQty,
+}) {
   const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
 
   useEffect(() => {
@@ -221,13 +226,15 @@ function OnHoldCard({ variants = [], canManageVisibility = false, onShowForCount
     setSelectedVariant((current) => {
       const refreshed = variants.find((v) => Number(v.id) === Number(current?.id));
       if (refreshed) return refreshed;
-      return variants.find((v) => Number(v.quantity || 0) > 0) || variants[0];
+      return variants.find((v) => getAvailableQuantity(v) > 0) || variants[0];
     });
   }, [variants]);
 
   if (!selectedVariant) return null; // ✅ safe now
 
-  const availableQty = Number(selectedVariant?.quantity || 0);
+  // Dashboard availability is warehouse-aware; `quantity` alone can be zero
+  // while cartons are available in a warehouse allocation.
+  const availableQty = getAvailableQuantity(selectedVariant);
   const isNew =
     selectedVariant.created_at &&
     new Date(selectedVariant.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -1196,14 +1203,14 @@ export default function DashboardPage() {
         activeProductIds.add(Number(p.finished_good_id));
       }
     });
+    // Admins must be able to review held products even before stock arrives.
+    // Customers still receive only published, in-stock products through the
+    // availability endpoint above.
     return state.finishedGoods.filter(
-        (product) =>
-          getDashboardAvailableQty(product) > 0 &&
-          (
-            Number(product.is_visible) !== 1 ||
-            !activeProductIds.has(Number(product.id))
-          )
-      );
+      (product) =>
+        Number(product.is_visible) !== 1 ||
+        !activeProductIds.has(Number(product.id))
+    );
   }, [
     canManageVisibility,
     getDashboardAvailableQty,
@@ -1391,7 +1398,6 @@ export default function DashboardPage() {
         };
       }
       const holdItems = state.finishedGoods.filter((product) => {
-        if (getDashboardAvailableQty(product) <= 0) return false;
         if (!matchesProduct(product)) return false;
         const hasVisibleUser = countryUsers.some((countryUser) => {
           const key = `${Number(countryUser.id)}:${Number(product.id)}`;
@@ -1648,7 +1654,7 @@ export default function DashboardPage() {
               />
               <select value={stockFilter} onChange={(e) => setStockFilter(e.target.value)}
                 className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
-                <option value="all">All Displayed</option>
+                <option value="all">All</option>
                 <option value="low">Low Stock</option>
               </select>
               <MultiSeriesFilter options={seriesList} values={seriesFilters} onChange={setSeriesFilters} label="" />
@@ -1691,7 +1697,7 @@ export default function DashboardPage() {
               <EyeOff size={18} className="text-amber-500" />
               On Hold in Any Country&nbsp;
               <span className="text-slate-400 font-normal text-base">
-                ({canManageVisibility ? visibilitySummary.onHoldInAnyCountryArticles : onHoldProducts.length})
+                ({onHoldProducts.length})
               </span>
             </h2>
             <div className="flex gap-2 flex-wrap">
@@ -1761,6 +1767,7 @@ export default function DashboardPage() {
                             variants={variants}
                             canManageVisibility={canManageVisibility}
                             onShowForCountry={showProductForCountries}
+                            getAvailableQuantity={getDashboardAvailableQty}
                           />
                         ))}
                       </div>
@@ -1787,6 +1794,7 @@ export default function DashboardPage() {
                     variants={variants}
                     canManageVisibility={canManageVisibility}
                     onShowForCountry={showProductForCountries}
+                    getAvailableQuantity={getDashboardAvailableQty}
                   />
                 ))}
               </div>

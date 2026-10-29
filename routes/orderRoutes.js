@@ -18,6 +18,7 @@ router.put('/:id/delivery-note', authorize('ADMIN', 'CO_ADMIN'), ctrl.assignDeli
 router.put('/:id/delivery-note/correct-numbers', authorize('ADMIN', 'CO_ADMIN'), ctrl.correctWarehouseDeliveryNoteNumbers);
 router.post('/:id/delivery-note/prepare', authorize('ADMIN', 'CO_ADMIN'), ctrl.prepareDeliveryNote);
 router.put('/:id/warehouse-fulfillments/:warehouseId/verify', authorize('ADMIN', 'CO_ADMIN'), ctrl.verifyWarehouseFulfillment);
+router.put('/:id/warehouse-fulfillments/:warehouseId/correct-items', authorize('ADMIN', 'CO_ADMIN'), ctrl.correctPackedWarehouseItems);
 router.put('/:id/warehouse-fulfillments/:warehouseId/deliver', authorize('ADMIN', 'CO_ADMIN'), ctrl.deliverWarehouseFulfillment);
 router.put('/:id/warehouse-fulfillments/:warehouseId/undo-delivery', authorize('ADMIN', 'CO_ADMIN'), ctrl.undoWarehouseFulfillmentDelivery);
 router.put('/:id/reopen-packing', authorize('ADMIN', 'CO_ADMIN'), ctrl.reopenPacking);

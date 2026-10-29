@@ -41,6 +41,7 @@ const statusTone = {
   DELIVERED: "success",
   CANCELLED: "danger",
   "PARTIALLY DELIVERED": "warning",
+  "COMPLETED WITH SHORTAGE": "warning",
 };
 
 const PRINTABLE_DELIVERY_STATUSES = ["CONFIRMED", "PACKED", "DELIVERED"];
@@ -79,14 +80,21 @@ const ORDER_CORRECTION_CO_ADMIN_EMAILS = new Set([
   "kingarna@nepcha.com",
 ]);
 
-const canUseOrderCorrection = (user = {}) =>
-  String(user.role || "").toUpperCase() === "CO_ADMIN" &&
-  (ORDER_CORRECTION_CO_ADMINS.has(
-    String(user.name || "").trim().replace(/\s+/g, " ").toLowerCase()
-  ) ||
-    ORDER_CORRECTION_CO_ADMIN_EMAILS.has(
-      String(user.email || "").trim().toLowerCase()
-    ));
+const canUseOrderCorrection = (user = {}) => {
+  const role = String(user.role || "").toUpperCase();
+
+  if (role === "ADMIN") return true;
+
+  return (
+    role === "CO_ADMIN" &&
+    (ORDER_CORRECTION_CO_ADMINS.has(
+      String(user.name || "").trim().replace(/\s+/g, " ").toLowerCase()
+    ) ||
+      ORDER_CORRECTION_CO_ADMIN_EMAILS.has(
+        String(user.email || "").trim().toLowerCase()
+      ))
+  );
+};
 
 const getOrderItemSortLabel = (item = {}) =>
   [
@@ -215,6 +223,7 @@ export default function OrdersPage() {
     emptyOrderDateFilters
   );
   const [correctionOrder, setCorrectionOrder] = useState(null);
+  const [correctionWarehouse, setCorrectionWarehouse] = useState(null);
   const [correctionItems, setCorrectionItems] = useState([]);
   const [correctionReason, setCorrectionReason] = useState("");
   const [savingCorrection, setSavingCorrection] = useState(false);
@@ -464,8 +473,8 @@ export default function OrdersPage() {
         },
         {
           status: "DELIVERED",
-          label: "Delivered",
-          description: "Orders completed and delivered",
+          label: "Completed",
+          description: "Completed orders; pair totals show stock actually delivered",
           tone: "border-emerald-200 bg-emerald-50 text-emerald-950",
         },
         {
@@ -857,11 +866,16 @@ export default function OrdersPage() {
   };
 
   const undoWarehouseDelivery = async (order, fulfillment) => {
+    const deliveredPairs = Number(fulfillment.delivered_pairs || 0);
+    const shortagePairs = Number(fulfillment.out_of_stock_pairs || 0);
     const reason = window.prompt(
       [
         `Undo delivery of ${fulfillment.warehouse_slip_number}?`,
-        `${fulfillment.name}: ${formatNumber(fulfillment.cartons)} CTN / ${formatNumber(fulfillment.pairs)} pairs`,
-        "Stock will be restored and the original delivery movement will remain in history with a reversal entry.",
+        `${fulfillment.name}: ${formatNumber(deliveredPairs)} delivered pairs${shortagePairs > 0 ? ` / ${formatNumber(shortagePairs)} shortage pairs` : ""}`,
+        deliveredPairs > 0
+          ? "Delivered stock will be restored. Shortage quantities will be reopened without changing stock. The original movement remains in history with a reversal entry."
+          : "Shortage quantities will be reopened without changing stock. The original shortage history remains recorded.",
+        "If a warehouse bill already exists, correct or cancel it before continuing.",
         "Enter the correction reason:",
       ].join("\n\n")
     );
@@ -1036,15 +1050,6 @@ export default function OrdersPage() {
     }
   };
 
-  const reopenFromVerification = async () => {
-    if (!verificationWarehouse) return;
-    const order = verificationWarehouse.order;
-    setVerificationWarehouse(null);
-    setVerificationItems([]);
-    const reopened = await reopenPacking(order);
-    if (reopened) openCorrection({ ...order, status: "CONFIRMED" });
-  };
-
   const undoConfirmation = async (order) => {
     const reason = window.prompt(
       `Why are you returning Order #${order.id} to pending?\n\nReserved stock will remain. ${order.delivery_note_number || "The assigned delivery note"} will be reclaimed only if it is the latest DN and has never been prepared, printed, packed, or delivered.`
@@ -1109,6 +1114,7 @@ export default function OrdersPage() {
 
   const openCorrection = (order) => {
     setCorrectionOrder(order);
+    setCorrectionWarehouse(null);
     setCorrectionReason("");
     setCorrectionItems((order.items || []).map((item) => ({
       finished_good_id: String(item.finished_good_id),
@@ -1118,24 +1124,91 @@ export default function OrdersPage() {
     })));
   };
 
+  const openPackedWarehouseCorrection = (order, fulfillment) => {
+    const pendingItems = (fulfillment.items || []).filter(
+      (item) => item.allocation_status === "PLANNED"
+    );
+    if (!pendingItems.length) {
+      showToast({
+        tone: "error",
+        title: "Nothing pending",
+        message: "This warehouse DN has no pending products to correct.",
+      });
+      return;
+    }
+
+    setVerificationWarehouse(null);
+    setVerificationItems([]);
+    setCorrectionOrder(order);
+    setCorrectionWarehouse(fulfillment);
+    setCorrectionReason("");
+    setCorrectionItems(
+      pendingItems.map((item) => ({
+        allocation_id: Number(item.allocation_id),
+        finished_good_id: String(item.finished_good_id),
+        product_name: item.product_name,
+        article_code: item.article_code,
+        color: item.color,
+        pairs_per_carton: Number(item.pairs_per_carton || 0),
+        pair_qty: Number(item.quantity || 0),
+        carton_qty:
+          Number(item.pairs_per_carton || 0) > 0
+            ? Number(item.quantity || 0) / Number(item.pairs_per_carton)
+            : "",
+      }))
+    );
+  };
+
+  const closeCorrection = () => {
+    setCorrectionOrder(null);
+    setCorrectionWarehouse(null);
+    setCorrectionItems([]);
+    setCorrectionReason("");
+  };
+
   const saveCorrection = async (event) => {
     event.preventDefault();
     if (!correctionOrder) return;
     setSavingCorrection(true);
     try {
-      await api.correctOrderItems(correctionOrder.id, {
-        reason: correctionReason.trim(),
-        items: correctionItems.map((item) => ({
-          finished_good_id: Number(item.finished_good_id),
-          carton_qty: Number(item.carton_qty),
-        })),
-      }, token);
-      setCorrectionOrder(null);
-      setCorrectionItems([]);
-      setCorrectionReason("");
+      const result = correctionWarehouse
+        ? await api.correctPackedOrderWarehouseItems(
+            correctionOrder.id,
+            correctionWarehouse.warehouse_id,
+            {
+              reason: correctionReason.trim(),
+              items: correctionItems.map((item) => ({
+                allocation_id: Number(item.allocation_id),
+                carton_qty: Number(item.carton_qty),
+                pair_quantity: Number(item.pair_qty),
+              })),
+            },
+            token
+          )
+        : await api.correctOrderItems(
+            correctionOrder.id,
+            {
+              reason: correctionReason.trim(),
+              items: correctionItems.map((item) => ({
+                finished_good_id: Number(item.finished_good_id),
+                carton_qty: Number(item.carton_qty),
+              })),
+            },
+            token
+          );
+      const correctedPackedDn = Boolean(correctionWarehouse);
+      closeCorrection();
       await load();
       announceDataRefresh("orders");
-      showToast({ tone: "success", title: "Order corrected", message: "Reserved stock was recalculated automatically." });
+      showToast({
+        tone: "success",
+        title: correctedPackedDn ? "Warehouse DN corrected" : "Order corrected",
+        message:
+          result.message ||
+          (correctedPackedDn
+            ? "Reprint the corrected DN before delivery."
+            : "Reserved stock was recalculated automatically."),
+      });
     } catch (error) {
       showToast({ tone: "error", title: "Correction failed", message: error.message });
     } finally {
@@ -2575,7 +2648,7 @@ export default function OrdersPage() {
               <option value="PENDING">Pending</option>
               <option value="CONFIRMED">Confirmed</option>
               <option value="PACKED">Packed</option>
-              <option value="DELIVERED">Delivered</option>
+              <option value="DELIVERED">Completed</option>
               <option value="CANCELLED">Cancelled</option>
             </select>
           </label>
@@ -2711,7 +2784,7 @@ export default function OrdersPage() {
                     {Number(row.warehouse_fulfillment_count || 0) > 0 ? (
                       <div className="text-xs text-slate-500">
                         {formatNumber(row.delivered_warehouse_count || 0)} of{" "}
-                        {formatNumber(row.warehouse_fulfillment_count)} warehouses delivered
+                        {formatNumber(row.warehouse_fulfillment_count)} warehouses completed
                       </div>
                     ) : null}
                   </div>
@@ -2784,6 +2857,13 @@ export default function OrdersPage() {
                   render: (row) => {
                     const canPrint = PRINTABLE_DELIVERY_STATUSES.includes(row.status);
                     const canChangeStatus = !["DELIVERED", "CANCELLED"].includes(row.status);
+                    const hasFinalizedWarehouseQuantity = (
+                      row.warehouse_fulfillments || []
+                    ).some(
+                      (fulfillment) =>
+                        Number(fulfillment.delivered_pairs || 0) > 0 ||
+                        Number(fulfillment.out_of_stock_pairs || 0) > 0
+                    );
 
                     if (!canPrint && !canChangeStatus) return null;
 
@@ -2842,7 +2922,7 @@ export default function OrdersPage() {
                                 Deliver from warehouse DNs.
                               </div>
                             ) : null}
-                            {Number(row.delivered_warehouse_count || 0) === 0 ? (
+                            {!hasFinalizedWarehouseQuantity ? (
                               <Button
                                 size="sm"
                                 variant="danger"
@@ -2944,6 +3024,17 @@ export default function OrdersPage() {
                               const isVoid = fulfillment.status === "VOID";
                               const isReassigned = fulfillment.status === "REASSIGNED";
                               const isInactive = isVoid || isReassigned;
+                              const canUndoWarehouseDelivery =
+                                canCorrectWarehouseSource &&
+                                !isInactive &&
+                                [
+                                  "DELIVERED",
+                                  "DELIVERED WITH SHORTAGE",
+                                  "OUT OF STOCK",
+                                  "PARTIALLY DELIVERED",
+                                ].includes(fulfillment.status) &&
+                                (Number(fulfillment.delivered_pairs || 0) > 0 ||
+                                  Number(fulfillment.out_of_stock_pairs || 0) > 0);
                               const pendingWarehouseItems = (fulfillment.items || []).filter(
                                 (item) => item.allocation_status === "PLANNED"
                               );
@@ -3045,7 +3136,7 @@ export default function OrdersPage() {
                                           ? ` · ${formatEnglishDate(fulfillment.delivered_at)}`
                                           : ""}
                                       </div>
-                                      {isDelivered && canCorrectWarehouseSource ? (
+                                      {canUndoWarehouseDelivery ? (
                                         <Button
                                           size="sm"
                                           variant="danger"
@@ -3093,6 +3184,19 @@ export default function OrdersPage() {
                                               ? "Close out-of-stock DN"
                                             : "Deliver verified products"}
                                       </Button>
+                                      {isPartiallyDelivered && canUndoWarehouseDelivery ? (
+                                        <Button
+                                          size="sm"
+                                          variant="danger"
+                                          className="h-auto min-h-8 w-full whitespace-normal px-2 py-1 text-xs"
+                                          disabled={reversingWarehouseKey === warehouseKey}
+                                          onClick={() => undoWarehouseDelivery(row, fulfillment)}
+                                        >
+                                          {reversingWarehouseKey === warehouseKey
+                                            ? "Reversing…"
+                                            : "Undo delivered quantities"}
+                                        </Button>
+                                      ) : null}
                                     </div>
                                   ) : (
                                     <div className="mt-1 text-xs text-amber-700">
@@ -3448,47 +3552,136 @@ export default function OrdersPage() {
       ) : null}
 
       {correctionOrder ? (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" onMouseDown={() => !savingCorrection && setCorrectionOrder(null)}>
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" onMouseDown={() => !savingCorrection && closeCorrection()}>
           <form onSubmit={saveCorrection} onMouseDown={(event) => event.stopPropagation()} className="max-h-[90vh] w-full max-w-3xl space-y-5 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
             <div>
-              <h2 className="text-lg font-bold text-slate-950">Correct Order #{correctionOrder.id}</h2>
-              <p className="text-sm text-slate-500">Only whole cartons are allowed. Reserved pairs update automatically when you save.</p>
+              <h2 className="text-lg font-bold text-slate-950">
+                {correctionWarehouse
+                  ? `Correct ${correctionWarehouse.warehouse_slip_number}`
+                  : `Correct Order #${correctionOrder.id}`}
+              </h2>
+              <p className="text-sm text-slate-500">
+                {correctionWarehouse
+                  ? "Change either CTN or exact pairs for this still-pending DN. The two values update together. Other delivered warehouse DNs will not be changed. Reprint this DN after saving."
+                  : "Only whole cartons are allowed. Reserved pairs update automatically when you save."}
+              </p>
             </div>
 
             <div className="space-y-3">
               {correctionItems.map((item, index) => {
                 const selected = availabilityById.get(String(item.finished_good_id));
-                const pairsPerCarton = Number(selected?.inner_boxes_per_outer_box || 0);
-                const pairs = Number(item.carton_qty || 0) * pairsPerCarton;
+                const pairsPerCarton = Number(
+                  item.pairs_per_carton || selected?.inner_boxes_per_outer_box || 0
+                );
+                const pairs = correctionWarehouse
+                  ? Number(item.pair_qty || 0)
+                  : Number(item.carton_qty || 0) * pairsPerCarton;
                 return (
-                  <div key={`${item.finished_good_id}-${index}`} className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-[2fr_0.7fr_1fr_auto]">
-                    <Select
-                      options={availability.filter((product) => Number(product.inner_boxes_per_outer_box) > 0).map((product) => ({ value: String(product.id), label: `${product.article_code || product.name} · ${product.color || "No color"}` }))}
-                      value={selected ? { value: String(selected.id), label: `${selected.article_code || selected.name} · ${selected.color || "No color"}` } : null}
-                      onChange={(option) => setCorrectionItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, finished_good_id: option?.value || "" } : row))}
-                      placeholder="Select product"
-                      menuPortalTarget={document.body}
-                      menuPosition="fixed"
-                      styles={{ menuPortal: (base) => ({ ...base, zIndex: 9999 }), control: (base) => ({ ...base, minHeight: "42px", borderRadius: "12px" }) }}
-                    />
+                  <div key={`${item.finished_good_id}-${index}`} className={`grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 ${correctionWarehouse ? "md:grid-cols-[2fr_0.7fr_0.8fr_1fr]" : "md:grid-cols-[2fr_0.7fr_1fr_auto]"}`}>
+                    {correctionWarehouse ? (
+                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+                        <strong className="block text-slate-900">
+                          {item.article_code || item.product_name || "Product"}
+                        </strong>
+                        <span className="text-xs text-slate-500">
+                          {item.color || "No color"} · {formatNumber(pairsPerCarton)} pairs/CTN
+                        </span>
+                      </div>
+                    ) : (
+                      <Select
+                        options={availability.filter((product) => Number(product.inner_boxes_per_outer_box) > 0).map((product) => ({ value: String(product.id), label: `${product.article_code || product.name} · ${product.color || "No color"}` }))}
+                        value={selected ? { value: String(selected.id), label: `${selected.article_code || selected.name} · ${selected.color || "No color"}` } : null}
+                        onChange={(option) => setCorrectionItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, finished_good_id: option?.value || "" } : row))}
+                        placeholder="Select product"
+                        menuPortalTarget={document.body}
+                        menuPosition="fixed"
+                        styles={{ menuPortal: (base) => ({ ...base, zIndex: 9999 }), control: (base) => ({ ...base, minHeight: "42px", borderRadius: "12px" }) }}
+                      />
+                    )}
                     <Field label="CTN">
-                      <TextInput type="number" min="1" step="1" required value={item.carton_qty} onChange={(event) => setCorrectionItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, carton_qty: event.target.value } : row))} />
+                      <TextInput
+                        type="number"
+                        min={correctionWarehouse ? "0.0001" : "1"}
+                        step={correctionWarehouse ? "any" : "1"}
+                        required
+                        value={item.carton_qty}
+                        onChange={(event) => {
+                          const cartonValue = event.target.value;
+                          setCorrectionItems((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index
+                                ? {
+                                    ...row,
+                                    carton_qty: cartonValue,
+                                    ...(correctionWarehouse
+                                      ? {
+                                          pair_qty:
+                                            cartonValue === ""
+                                              ? ""
+                                              : Number(cartonValue) * pairsPerCarton,
+                                        }
+                                      : {}),
+                                  }
+                                : row
+                            )
+                          );
+                        }}
+                      />
                     </Field>
-                    <div className="flex flex-col justify-end rounded-xl bg-white px-3 py-2 text-sm"><span className="text-xs text-slate-400">Reserved pairs</span><strong>{pairsPerCarton > 0 ? formatNumber(pairs) : "Set CTN config"}</strong></div>
-                    <div className="flex items-end"><Button type="button" variant="danger" size="sm" disabled={correctionItems.length === 1} onClick={() => setCorrectionItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>Remove</Button></div>
+                    {correctionWarehouse ? (
+                      <Field label="Pairs">
+                        <TextInput
+                          type="number"
+                          min="1"
+                          step="1"
+                          required
+                          value={item.pair_qty}
+                          onChange={(event) => {
+                            const pairValue = event.target.value;
+                            setCorrectionItems((current) =>
+                              current.map((row, rowIndex) =>
+                                rowIndex === index
+                                  ? {
+                                      ...row,
+                                      pair_qty: pairValue,
+                                      carton_qty:
+                                        pairValue === "" || pairsPerCarton <= 0
+                                          ? ""
+                                          : Number(pairValue) / pairsPerCarton,
+                                    }
+                                  : row
+                              )
+                            );
+                          }}
+                        />
+                      </Field>
+                    ) : null}
+                    <div className="flex flex-col justify-end rounded-xl bg-white px-3 py-2 text-sm">
+                      <span className="text-xs text-slate-400">
+                        {correctionWarehouse ? "Corrected quantity" : "Reserved pairs"}
+                      </span>
+                      <strong>{pairsPerCarton > 0 ? `${formatNumber(pairs)} pairs` : "Set CTN config"}</strong>
+                    </div>
+                    {!correctionWarehouse ? (
+                      <div className="flex items-end">
+                        <Button type="button" variant="danger" size="sm" disabled={correctionItems.length === 1} onClick={() => setCorrectionItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>Remove</Button>
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}
             </div>
 
-            <Button type="button" variant="secondary" icon="plus" onClick={() => setCorrectionItems((current) => [...current, { finished_good_id: "", carton_qty: 1 }])}>Add product</Button>
+            {!correctionWarehouse ? (
+              <Button type="button" variant="secondary" icon="plus" onClick={() => setCorrectionItems((current) => [...current, { finished_good_id: "", carton_qty: 1 }])}>Add product</Button>
+            ) : null}
 
             <Field label="Correction reason">
               <TextInput required value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} placeholder="Explain why this order is being changed" />
             </Field>
 
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="secondary" disabled={savingCorrection} onClick={() => setCorrectionOrder(null)}>Cancel</Button>
+              <Button type="button" variant="secondary" disabled={savingCorrection} onClick={closeCorrection}>Cancel</Button>
               <Button type="submit" disabled={savingCorrection || !correctionItems.length}>{savingCorrection ? "Saving..." : "Save correction"}</Button>
             </div>
           </form>
@@ -3668,10 +3861,19 @@ export default function OrdersPage() {
             <div className="flex flex-wrap justify-between gap-2">
               <div>
                 {canCorrectOrders &&
-                !(verificationWarehouse.order.warehouse_fulfillments || []).some(
-                  (fulfillment) => Number(fulfillment.delivered_pairs || 0) > 0
-                ) ? (
-                  <Button type="button" variant="secondary" disabled={Boolean(verifyingWarehouseKey)} onClick={reopenFromVerification}>
+                Number(verificationWarehouse.fulfillment.delivered_pairs || 0) <= 0 &&
+                Number(verificationWarehouse.fulfillment.out_of_stock_pairs || 0) <= 0 ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={Boolean(verifyingWarehouseKey)}
+                    onClick={() =>
+                      openPackedWarehouseCorrection(
+                        verificationWarehouse.order,
+                        verificationWarehouse.fulfillment
+                      )
+                    }
+                  >
                     Reopen & change products
                   </Button>
                 ) : null}
