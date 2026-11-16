@@ -124,14 +124,19 @@ function ProductCard({
       const refreshedCurrent = variants.find(
         (variant) => Number(variant.id) === Number(current?.id)
       );
-      if (refreshedCurrent) return refreshedCurrent;
+      if (refreshedCurrent && getAvailableQty(refreshedCurrent, user) > 0) {
+        return refreshedCurrent;
+      }
       return variants.find((variant) => getAvailableQty(variant, user) > 0) || variants[0];
     });
   }, [user, variants]);
 
   const galleryVariants = useMemo(
-    () => variants.filter((variant) => variant.image_url),
-    [variants]
+    () =>
+      variants.filter(
+        (variant) => variant.image_url && getAvailableQty(variant, user) > 0
+      ),
+    [user, variants]
   );
 
   const selectedGalleryIndex = useMemo(

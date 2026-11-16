@@ -348,6 +348,135 @@ function OnHoldCard({
   );
 }
 
+function PercentageAllocationCard({ variants = [] }) {
+  const [selectedVariant, setSelectedVariant] = useState(variants?.[0] || null);
+
+  useEffect(() => {
+    if (!variants?.length) {
+      setSelectedVariant(null);
+      return;
+    }
+    setSelectedVariant((current) =>
+      variants.find((variant) => Number(variant.id) === Number(current?.id)) || variants[0]
+    );
+  }, [variants]);
+
+  if (!selectedVariant) return null;
+
+  const summary = selectedVariant.allocation_summary || {};
+  const remainingQuantity = Number(summary.remaining_quantity || 0);
+  const cartons = getRoundedCartons(
+    remainingQuantity,
+    selectedVariant.inner_boxes_per_outer_box
+  );
+  const dealerNames = (summary.targets || [])
+    .map((target) => target.user_name || target.user_email)
+    .filter(Boolean);
+
+  return (
+    <article className="group flex flex-col overflow-hidden rounded-2xl border border-violet-200 bg-white transition-all duration-300 hover:shadow-xl">
+      <div className="relative aspect-[5/3] overflow-hidden bg-violet-50">
+        {selectedVariant.image_url ? (
+          <img
+            loading="lazy"
+            decoding="async"
+            width={400}
+            height={300}
+            src={`${APP_BASE_URL}${selectedVariant.image_url}`}
+            alt={selectedVariant.name}
+            className="h-full w-full cursor-zoom-in object-cover transition duration-500 group-hover:scale-105"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center">
+            <PackageIcon className="text-violet-300" size={34} />
+          </div>
+        )}
+        <div className="absolute inset-x-0 top-2 flex justify-end px-2">
+          <span className="flex items-center gap-1 rounded-full bg-violet-600 px-2 py-1 text-[10px] font-semibold text-white sm:text-xs">
+            <Sparkles size={12} />
+            Open to assigned dealers
+          </span>
+        </div>
+        <ProductImageGallery
+          variants={variants}
+          selectedVariant={selectedVariant}
+          onSelect={setSelectedVariant}
+        />
+      </div>
+
+      <div className="flex flex-col gap-2 p-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-bold text-slate-900">
+              {selectedVariant.article_code || selectedVariant.name}
+            </h3>
+            <p className="truncate text-xs text-slate-500">
+              {selectedVariant.sole_code || "No series"} · {selectedVariant.color || "No color"}
+            </p>
+          </div>
+          <span className="shrink-0 rounded-full bg-violet-100 px-2 py-1 text-[10px] font-bold uppercase text-violet-700">
+            {summary.allocation_scope || "Allocated"}
+          </span>
+        </div>
+
+        {variants.length > 1 ? (
+          <div className="flex gap-1 overflow-x-auto">
+            {variants.map((variant) => (
+              <button
+                key={variant.id}
+                type="button"
+                onClick={() => setSelectedVariant(variant)}
+                className={`rounded-lg px-2 py-0.5 text-xs font-medium transition-all ${
+                  Number(selectedVariant.id) === Number(variant.id)
+                    ? "bg-violet-600 text-white"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+              >
+                {variant.color || variant.size || variant.id}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="grid grid-cols-2 gap-2 rounded-xl bg-violet-50 p-2 text-center">
+          <div>
+            <p className="text-[10px] font-bold uppercase text-violet-500">Dealers</p>
+            <p className="text-sm font-black text-violet-950">
+              {formatNumber(summary.dealer_count || 0)}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] font-bold uppercase text-violet-500">Remaining</p>
+            <p className="text-sm font-black text-violet-950">
+              {formatNumber(remainingQuantity)} pairs
+            </p>
+          </div>
+        </div>
+
+        {Number(selectedVariant.inner_boxes_per_outer_box || 0) > 0 ? (
+          <p className="text-xs font-semibold text-slate-600">
+            {formatNumber(cartons)} cartons remaining
+          </p>
+        ) : null}
+        {dealerNames.length ? (
+          <p className="line-clamp-2 text-xs text-slate-500">
+            Assigned to {dealerNames.slice(0, 2).join(", ")}
+            {dealerNames.length > 2 ? ` +${dealerNames.length - 2} more` : ""}
+          </p>
+        ) : null}
+
+        <Link
+          to="/product-percentages"
+          className="mt-1 inline-flex items-center justify-center gap-1 rounded-lg bg-violet-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-violet-700"
+        >
+          Review allocation
+          <ArrowRight size={13} />
+        </Link>
+      </div>
+    </article>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // PaginationBar — unchanged
 // ─────────────────────────────────────────────────────────────
@@ -956,6 +1085,7 @@ export default function DashboardPage() {
     orders: [],
     availability: [],
     permissions: [],
+    percentageAllocations: [],
     users: [],
     advertisements: [],
     carouselSlides: [],
@@ -969,6 +1099,7 @@ export default function DashboardPage() {
   const [onHoldSeriesFilters, setOnHoldSeriesFilters] = useState([]);
   const [selectedHoldCountry, setSelectedHoldCountry] = useState("NP");
   const [currentPage, setCurrentPage]   = useState(1);
+  const [allocationPage, setAllocationPage] = useState(1);
   const [onHoldPage, setOnHoldPage]     = useState(1);
   const PRODUCTS_PER_PAGE = 12;
 
@@ -977,7 +1108,7 @@ export default function DashboardPage() {
   const canManageVisibility = canManageProductVisibility(user);
   const canViewProducts = canViewDashboardProducts(user);
   const canViewDashboard = user.role === "MEMBER" || canViewProducts;
-  const canViewOnHold = canManageVisibility || user.role === "MEMBER";
+  const canViewOnHold = canViewProducts || user.role === "MEMBER";
 
   const load = useCallback(async () => {
     const requests = [
@@ -996,11 +1127,17 @@ export default function DashboardPage() {
           ? api.getAvailability(token, {
               dashboard: user.role === "CO_ADMIN" ? 1 : undefined,
               include_hidden:
-                canManageVisibility || user.role === "MEMBER" ? 1 : undefined,
+                canViewProducts || user.role === "MEMBER" ? 1 : undefined,
             })
           : Promise.resolve({ data: [] }),
       ],
       ["permissions", canManageVisibility ? api.getPermissions(token, { compact: 1 }) : Promise.resolve({ data: [] })],
+      [
+        "percentageAllocations",
+        canViewProducts
+          ? api.getProductPercentageAllocations(token)
+          : Promise.resolve({ data: [] }),
+      ],
       ["users", canManageVisibility ? api.getUsers(token) : Promise.resolve({ data: [] })],
       ["advertisements", isCustomerDashboard ? api.getAdvertisements(token) : Promise.resolve({ data: [] })],
       ["carouselSlides", isCustomerDashboard ? api.getDashboardCarouselSlides(token) : Promise.resolve({ data: [] })],
@@ -1182,12 +1319,60 @@ export default function DashboardPage() {
     [availableQtyByProductId]
   );
 
+  const openPercentageAllocationsByProductId = useMemo(() => {
+    const productById = new Map(
+      state.finishedGoods.map((product) => [Number(product.id), product])
+    );
+    const grouped = new Map();
+
+    state.percentageAllocations.forEach((allocation) => {
+      const productId = Number(allocation.finished_good_id);
+      const product = productById.get(productId);
+      const isAllocationOpen =
+        String(product?.allocation_publication_status || "DRAFT").toUpperCase() === "ACTIVE";
+      const isAllocationOnly = Number(product?.is_visible) !== 1;
+      const hasRemainingAccess =
+        Number(allocation.can_view) === 1 &&
+        Number(allocation.remaining_quantity || 0) > 0;
+
+      if (!product || !isAllocationOpen || !isAllocationOnly || !hasRemainingAccess) {
+        return;
+      }
+
+      if (!grouped.has(productId)) grouped.set(productId, []);
+      grouped.get(productId).push(allocation);
+    });
+
+    return new Map(
+      [...grouped.entries()].map(([productId, targets]) => [
+        productId,
+        {
+          allocation_scope: String(targets[0]?.allocation_scope || "ALLOCATED").toUpperCase(),
+          dealer_count: targets.length,
+          allocated_quantity: targets.reduce(
+            (sum, target) => sum + Number(target.allocation_quantity || 0),
+            0
+          ),
+          remaining_quantity: targets.reduce(
+            (sum, target) => sum + Number(target.remaining_quantity || 0),
+            0
+          ),
+          targets,
+        },
+      ])
+    );
+  }, [state.finishedGoods, state.percentageAllocations]);
+
   const onHoldBaseItems = useMemo(() => {
     if (!canManageVisibility) {
-      return state.availability.filter(
+      const products = user.role === "CO_ADMIN"
+        ? state.finishedGoods
+        : state.availability;
+
+      return products.filter(
         (product) =>
-          getDashboardAvailableQty(product) > 0 &&
-          Number(product.is_visible) !== 1
+          Number(product.is_visible) !== 1 &&
+          !openPercentageAllocationsByProductId.has(Number(product.id))
       );
     }
 
@@ -1208,15 +1393,18 @@ export default function DashboardPage() {
     // availability endpoint above.
     return state.finishedGoods.filter(
       (product) =>
-        Number(product.is_visible) !== 1 ||
-        !activeProductIds.has(Number(product.id))
+        !openPercentageAllocationsByProductId.has(Number(product.id)) &&
+        (Number(product.is_visible) !== 1 ||
+          !activeProductIds.has(Number(product.id)))
     );
   }, [
     canManageVisibility,
     getDashboardAvailableQty,
+    openPercentageAllocationsByProductId,
     state.permissions,
     state.finishedGoods,
     state.availability,
+    user.role,
   ]);
 
   const visibilitySummary = useMemo(
@@ -1281,11 +1469,14 @@ export default function DashboardPage() {
           )
       );
       const countryOnHoldProducts = state.finishedGoods.filter((product) => {
+        if (openPercentageAllocationsByProductId.has(Number(product.id))) return false;
         if (getDashboardAvailableQty(product) <= 0) return false;
-        return !countryUsers.some((countryUser) => {
+        const isGloballyHidden = Number(product.is_visible) !== 1;
+        const isVisibleToCountry = countryUsers.some((countryUser) => {
           const key = `${Number(countryUser.id)}:${Number(product.id)}`;
           return grantedKeys.has(key) && !deniedKeys.has(key);
         });
+        return isGloballyHidden || !isVisibleToCountry;
       });
 
       return [
@@ -1305,6 +1496,7 @@ export default function DashboardPage() {
       canManageVisibility,
       getDashboardAvailableQty,
       onHoldBaseItems,
+      openPercentageAllocationsByProductId,
       selectedHoldCountry,
       state.finishedGoods,
       state.permissions,
@@ -1339,6 +1531,68 @@ export default function DashboardPage() {
     });
     return Object.values(groups);
   }, [onHoldBaseItems, onHoldSearch, onHoldSeriesFilters]);
+
+  const openPercentageAllocationProducts = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+    const groups = {};
+
+    state.finishedGoods.forEach((product) => {
+      const allocationSummary = openPercentageAllocationsByProductId.get(
+        Number(product.id)
+      );
+      if (!allocationSummary) return;
+
+      const matchesSearch =
+        !normalizedSearch ||
+        (product.name || "").toLowerCase().includes(normalizedSearch) ||
+        (product.article_code || "").toLowerCase().includes(normalizedSearch) ||
+        (product.sole_code || "").toLowerCase().includes(normalizedSearch) ||
+        (product.color || "").toLowerCase().includes(normalizedSearch) ||
+        (product.size || "").toLowerCase().includes(normalizedSearch);
+      const matchesStock =
+        stockFilter !== "low" || allocationSummary.remaining_quantity < 10;
+      const matchesSeries =
+        !seriesFilters.length ||
+        seriesFilters.includes(getSeriesName(product.sole_code));
+      const matchesNClassification = matchesProductNClassification(
+        product,
+        nClassificationFilter
+      );
+      if (!matchesSearch || !matchesStock || !matchesSeries || !matchesNClassification) {
+        return;
+      }
+
+      const key =
+        product.article_code ||
+        product.name?.split("_")?.slice(0, -1)?.join("_") ||
+        product.name ||
+        `product-${product.id}`;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push({
+        ...product,
+        allocation_summary: allocationSummary,
+      });
+    });
+
+    return Object.values(groups)
+      .map((variants) => [...variants].sort(sortByDisplayOrder))
+      .sort((left, right) => {
+        const orderDiff = getGroupDisplayOrder(left) - getGroupDisplayOrder(right);
+        if (orderDiff !== 0) return orderDiff;
+        return String(left[0]?.article_code || left[0]?.name || "").localeCompare(
+          String(right[0]?.article_code || right[0]?.name || ""),
+          undefined,
+          { numeric: true, sensitivity: "base" }
+        );
+      });
+  }, [
+    nClassificationFilter,
+    openPercentageAllocationsByProductId,
+    search,
+    seriesFilters,
+    state.finishedGoods,
+    stockFilter,
+  ]);
 
   const usersByCountry = useMemo(() => {
     const grouped = new Map();
@@ -1390,20 +1644,17 @@ export default function DashboardPage() {
 
     return countryOptions.map((countryCode) => {
       const countryUsers = usersByCountry.get(countryCode) || [];
-      if (!countryUsers.length) {
-        return {
-          countryCode,
-          users: countryUsers,
-          products: [],
-        };
-      }
       const holdItems = state.finishedGoods.filter((product) => {
+        if (openPercentageAllocationsByProductId.has(Number(product.id))) return false;
         if (!matchesProduct(product)) return false;
+        const isGloballyHidden = Number(product.is_visible) !== 1;
+        if (!countryUsers.length) return isGloballyHidden;
+
         const hasVisibleUser = countryUsers.some((countryUser) => {
           const key = `${Number(countryUser.id)}:${Number(product.id)}`;
           return grantedKeys.has(key) && !deniedKeys.has(key);
         });
-        return !hasVisibleUser;
+        return isGloballyHidden || !hasVisibleUser;
       });
       const groups = {};
       holdItems.forEach((item) => {
@@ -1426,6 +1677,7 @@ export default function DashboardPage() {
     countryOptions,
     onHoldSearch,
     onHoldSeriesFilters,
+    openPercentageAllocationsByProductId,
     state.finishedGoods,
     state.permissions,
     getDashboardAvailableQty,
@@ -1448,6 +1700,7 @@ export default function DashboardPage() {
     );
 
     state.finishedGoods.forEach((product) => {
+      if (openPercentageAllocationsByProductId.has(Number(product.id))) return;
       if (getDashboardAvailableQty(product) <= 0) return;
       const isOnHoldForAnyCountry = countryOptions.some((countryCode) => {
         const countryUsers = usersByCountry.get(countryCode) || [];
@@ -1466,6 +1719,7 @@ export default function DashboardPage() {
     countryOptions,
     getDashboardAvailableQty,
     onHoldBaseItems,
+    openPercentageAllocationsByProductId,
     state.finishedGoods,
     state.permissions,
     usersByCountry,
@@ -1526,7 +1780,10 @@ export default function DashboardPage() {
     onHoldPage * PRODUCTS_PER_PAGE
   );
 
-  useEffect(() => { setCurrentPage(1); }, [search, stockFilter, seriesFilters, nClassificationFilter]);
+  useEffect(() => {
+    setCurrentPage(1);
+    setAllocationPage(1);
+  }, [search, stockFilter, seriesFilters, nClassificationFilter]);
   useEffect(() => { setOnHoldPage(1); }, [onHoldSearch, onHoldSeriesFilters]);
   useEffect(() => {
     setOnHoldSeriesFilters([]);
@@ -1540,8 +1797,13 @@ export default function DashboardPage() {
   }, [countryHoldGroups, selectedHoldCountry]);
 
   const totalPages        = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE);
+  const allocationTotal   = Math.ceil(openPercentageAllocationProducts.length / PRODUCTS_PER_PAGE);
   const onHoldTotal       = Math.ceil(onHoldProducts.length / PRODUCTS_PER_PAGE);
   const paginatedProducts = filteredProducts.slice((currentPage - 1) * PRODUCTS_PER_PAGE, currentPage * PRODUCTS_PER_PAGE);
+  const paginatedAllocations = openPercentageAllocationProducts.slice(
+    (allocationPage - 1) * PRODUCTS_PER_PAGE,
+    allocationPage * PRODUCTS_PER_PAGE
+  );
   const paginatedOnHold   = onHoldProducts.slice((onHoldPage - 1) * PRODUCTS_PER_PAGE, onHoldPage * PRODUCTS_PER_PAGE);
   const advertisementsAboveStatus = state.advertisements.filter(
     (advertisement) => advertisementPlacement(advertisement) === "ABOVE_STATUS"
@@ -1687,6 +1949,46 @@ export default function DashboardPage() {
             <div className="text-center py-16 text-slate-400 text-sm">No products found.</div>
           )}
         </div>
+      )}
+
+      {canViewProducts && openPercentageAllocationProducts.length > 0 && (
+        <section className="space-y-4 rounded-2xl border border-violet-200 bg-violet-50/40 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="flex items-center gap-2 text-lg font-bold text-slate-800">
+                <Sparkles size={18} className="text-violet-600" />
+                Open Percentage Allocations
+                <span className="font-normal text-slate-400">
+                  ({openPercentageAllocationProducts.length})
+                </span>
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Active products open to assigned dealers with allocation remaining.
+              </p>
+            </div>
+            <Link
+              to="/product-percentages"
+              className="inline-flex items-center gap-1 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700 transition hover:bg-violet-100"
+            >
+              Manage percentages
+              <ArrowRight size={13} />
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-2 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            {paginatedAllocations.map((variants) => (
+              <PercentageAllocationCard
+                key={variants.map((variant) => variant.id).join("-")}
+                variants={variants}
+              />
+            ))}
+          </div>
+          <PaginationBar
+            total={allocationTotal}
+            current={allocationPage}
+            setPage={setAllocationPage}
+          />
+        </section>
       )}
 
       {/* ON HOLD GRID */}

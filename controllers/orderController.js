@@ -657,6 +657,8 @@ const buildWarehouseFulfillments = (
         article_code: item.article_code || null,
         color: item.color || null,
         size: item.size || null,
+        n_classification: item.n_classification || null,
+        is_commission: Number(item.is_commission || 0),
         unit: item.unit || 'pairs',
         pairs_per_carton: pairsPerCarton,
         quantity,
@@ -1622,6 +1624,7 @@ const getAll = async (req, res, next) => {
       supportsOrderFiscalYear,
       supportsParentDealer,
       supportsCommissionFlag,
+      supportsNClassification,
       supportsDeliveryNotePrintedAt,
       supportsDeliveryNotePrintCount,
     ] =
@@ -1638,6 +1641,7 @@ const getAll = async (req, res, next) => {
         hasColumn('orders', 'bs_fiscal_year'),
         hasColumn('users', 'parent_dealer_id'),
         hasColumn('finished_goods', 'is_commission'),
+        hasColumn('finished_goods', 'n_classification'),
         hasColumn('orders', 'delivery_note_printed_at'),
         hasColumn('orders', 'delivery_note_print_count'),
       ]);
@@ -1894,7 +1898,8 @@ const getAll = async (req, res, next) => {
                 fg.unit, fg.quantity AS physical_stock,
                 fg.display_quantity,
                 fg.inner_boxes_per_outer_box,
-                ${supportsCommissionFlag ? 'fg.is_commission' : '0 AS is_commission'}
+                ${supportsCommissionFlag ? 'fg.is_commission' : '0 AS is_commission'},
+                ${supportsNClassification ? 'fg.n_classification' : 'NULL AS n_classification'}
          FROM order_items oi
          JOIN finished_goods fg ON fg.id = oi.finished_good_id
          WHERE oi.order_id IN ${clause}
@@ -3698,6 +3703,25 @@ const create = async (req, res, next) => {
 
 // ─── CORRECT PENDING / CONFIRMED ORDER ─────────────────────────────────────
 const correctItems = async (req, res, next) => {
+  const requestedRows = Array.isArray(req.body?.items) ? req.body.items : [];
+  const requestedWarehouseId = Number(req.body?.warehouse_id);
+  const isWarehouseDnCorrection =
+    requestedWarehouseId > 0 &&
+    requestedRows.length > 0 &&
+    requestedRows.every((row) => Number(row?.allocation_id) > 0);
+
+  // Compatibility guard: a packed-DN correction must never be processed by
+  // the full-order whole-carton workflow. Older frontend/API bundles may send
+  // the DN payload to /:id/items, so forward that unmistakable payload to the
+  // warehouse-scoped handler instead.
+  if (isWarehouseDnCorrection) {
+    req.params = {
+      ...req.params,
+      warehouseId: String(requestedWarehouseId),
+    };
+    return correctPackedWarehouseItems(req, res, next);
+  }
+
   const client = await getClient();
   try {
     if (!canCorrectOrders(req.user)) {
@@ -3709,7 +3733,6 @@ const correctItems = async (req, res, next) => {
 
     await client.query('START TRANSACTION');
     const reason = String(req.body.reason || '').trim();
-    const requestedRows = Array.isArray(req.body.items) ? req.body.items : [];
     if (!reason || !requestedRows.length) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: !reason ? 'Correction reason is required.' : 'An order must contain at least one product.' });
@@ -5052,8 +5075,20 @@ const correctPackedWarehouseItems = async (req, res, next) => {
       const requested = requestedByAllocationId.get(
         Number(allocation.allocation_id)
       );
-      const cartons = Number(requested.carton_qty);
-      const requestedPairQuantity = Number(requested.pair_quantity);
+      const hasCartonQuantity =
+        requested.carton_qty !== undefined &&
+        requested.carton_qty !== null &&
+        String(requested.carton_qty).trim() !== '';
+      const hasPairQuantity =
+        requested.pair_quantity !== undefined &&
+        requested.pair_quantity !== null &&
+        String(requested.pair_quantity).trim() !== '';
+      const cartons = hasCartonQuantity
+        ? Number(requested.carton_qty)
+        : Number.NaN;
+      const requestedPairQuantity = hasPairQuantity
+        ? Number(requested.pair_quantity)
+        : Number.NaN;
       const pairsPerCarton = Number(allocation.inner_boxes_per_outer_box || 0);
       if (pairsPerCarton <= 0) {
         await client.query('ROLLBACK');
@@ -5063,14 +5098,40 @@ const correctPackedWarehouseItems = async (req, res, next) => {
         });
       }
 
-      const correctedQuantity = Number.isFinite(requestedPairQuantity)
+      if (
+        hasCartonQuantity &&
+        (!Number.isFinite(cartons) || cartons <= 0)
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `${allocation.product_name} carton quantity must be a number greater than zero. Fractional cartons are allowed for this DN.`,
+        });
+      }
+
+      const correctedQuantity = hasPairQuantity
         ? requestedPairQuantity
         : cartons * pairsPerCarton;
-      if (!Number.isInteger(correctedQuantity) || correctedQuantity < 1) {
+      if (
+        !Number.isFinite(correctedQuantity) ||
+        !Number.isInteger(correctedQuantity) ||
+        correctedQuantity < 1
+      ) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
           message: `${allocation.product_name} pair quantity must be a whole number greater than zero.`,
+        });
+      }
+
+      if (
+        hasCartonQuantity &&
+        Math.abs(cartons * pairsPerCarton - correctedQuantity) > 0.001
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `${allocation.product_name} carton and pair quantities do not match.`,
         });
       }
       correctedRows.push({
@@ -6770,6 +6831,11 @@ const loadDeliveryNoteOrder = async (client, orderId, capabilities) => {
   const order = orderResult.rows[0];
   if (!order) return null;
 
+  const [supportsCommissionFlag, supportsNClassification] = await Promise.all([
+    hasColumn('finished_goods', 'is_commission'),
+    hasColumn('finished_goods', 'n_classification'),
+  ]);
+
   const itemsResult = await client.query(
     `SELECT item.id, item.order_id, item.finished_good_id, item.qty_ordered,
             product.name AS product_name,
@@ -6777,7 +6843,9 @@ const loadDeliveryNoteOrder = async (client, orderId, capabilities) => {
             product.color,
             product.size,
             product.unit,
-            product.inner_boxes_per_outer_box
+            product.inner_boxes_per_outer_box,
+            ${supportsCommissionFlag ? 'product.is_commission' : '0 AS is_commission'},
+            ${supportsNClassification ? 'product.n_classification' : 'NULL AS n_classification'}
      FROM order_items item
      JOIN finished_goods product ON product.id = item.finished_good_id
      WHERE item.order_id = ?

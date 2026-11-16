@@ -98,6 +98,7 @@ app.use((req, res, next) => {
    HEALTH CHECK
 ──────────────────────────── */
 app.get("/api/health", (req, res) => {
+  res.setHeader("X-App-Revision", "packed-dn-pairs-2026-11-03");
   res.send("API Running...");
 });
 

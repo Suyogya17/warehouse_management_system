@@ -1176,6 +1176,8 @@ export default function OrdersPage() {
             correctionOrder.id,
             correctionWarehouse.warehouse_id,
             {
+              warehouse_id: Number(correctionWarehouse.warehouse_id),
+              correction_mode: "WAREHOUSE_DN_PAIRS",
               reason: correctionReason.trim(),
               items: correctionItems.map((item) => ({
                 allocation_id: Number(item.allocation_id),
@@ -1366,6 +1368,24 @@ export default function OrdersPage() {
   const formatPrintNumber = (value) =>
     Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 
+  const getDnClassTypeLabel = (item = {}) => {
+    const catalogueProduct =
+      availabilityById.get(String(item.finished_good_id || "")) || {};
+    const nClass = String(
+      catalogueProduct.n_classification || item.n_classification || ""
+    )
+      .trim()
+      .toUpperCase();
+    const normalizedNClass = ["N1", "N2"].includes(nClass) ? nClass : "";
+    const typeSign =
+      Number(catalogueProduct.is_commission ?? item.is_commission ?? 0) === 1
+        ? "%"
+        : "N.C";
+    return normalizedNClass
+      ? `${normalizedNClass} (${typeSign})`
+      : `(${typeSign})`;
+  };
+
   const exportDeliveryNoteExcel = async (order = {}) => {
     try {
       setExportingDnOrderId(Number(order.id));
@@ -1496,13 +1516,14 @@ export default function OrdersPage() {
           ].join("\n");
           const tableRows = Array.from({ length: rowsPerPage }, (_, rowIndex) => {
             const item = pageItems[rowIndex];
-            if (!item) return ["", "", "", "", "", "", ""];
+            if (!item) return ["", "", "", "", "", "", "", ""];
             const pairs = Number(item.quantity || 0);
             const pairsPerCarton = Number(item.pairs_per_carton || 0);
             return [
               pageIndex * rowsPerPage + rowIndex + 1,
               Number(item.finished_good_id || 0) || "",
               item.size || "-",
+              getDnClassTypeLabel(item),
               item.product_name || item.article_code || "-",
               fulfillment.name || "-",
               pairsPerCarton > 0 ? pairs / pairsPerCarton : "",
@@ -1510,39 +1531,40 @@ export default function OrdersPage() {
             ];
           });
           const sheetRows = [
-            ["DELIVERY NOTE", "", "", "", "", "", `Page ${pageIndex + 1} of ${itemPages.length}`],
-            [`${dnNumber} · ${fulfillment.name || "Warehouse"} · Overall Total: ${formatPrintNumber(overallCartons)} CTN`, "", "", "", "", "", ""],
-            [leftDetails, "", "", "", rightDetails, "", ""],
-            ["", "", "", "", "", "", ""],
-            ["", "", "", "", "", "", ""],
-            ["", "", "", "", "", "", ""],
-            ["", "", "", "", "", "", ""],
-            ["", "", "", "", "", "", ""],
-            ["S.No", "F.G. ID", "Size", "Description of Goods", "Warehouse", "Carton", "Pairs"],
+            ["DELIVERY NOTE", "", "", "", "", "", "", `Page ${pageIndex + 1} of ${itemPages.length}`],
+            [`${dnNumber} · ${fulfillment.name || "Warehouse"} · Overall Total: ${formatPrintNumber(overallCartons)} CTN`, "", "", "", "", "", "", ""],
+            [leftDetails, "", "", "", rightDetails, "", "", ""],
+            ["", "", "", "", "", "", "", ""],
+            ["", "", "", "", "", "", "", ""],
+            ["", "", "", "", "", "", "", ""],
+            ["", "", "", "", "", "", "", ""],
+            ["", "", "", "", "", "", "", ""],
+            ["S.No", "F.G. ID", "Size", "N Class / Type", "Description of Goods", "Warehouse", "Carton", "Pairs"],
             ...tableRows,
-            ["This page", "", "", "", "", pageCartons, pagePairs],
-            [`${fulfillment.name || "Warehouse"} total`, "", "", "", "", overallCartons, overallPairs],
-            ["", "", "", "", "", "", ""],
-            ["___________________\nPacked / Delivered By", "", "___________________\nChecked By", "", "", "___________________\nReceived By", ""],
+            ["This page", "", "", "", "", "", pageCartons, pagePairs],
+            [`${fulfillment.name || "Warehouse"} total`, "", "", "", "", "", overallCartons, overallPairs],
+            ["", "", "", "", "", "", "", ""],
+            ["___________________\nPacked / Delivered By", "", "___________________\nChecked By", "", "", "", "___________________\nReceived By", ""],
           ];
           const sheet = XLSX.utils.aoa_to_sheet(sheetRows);
           sheet["!merges"] = [
-            { s: { r: 0, c: 0 }, e: { r: 0, c: 5 } },
-            { s: { r: 1, c: 0 }, e: { r: 1, c: 6 } },
+            { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } },
+            { s: { r: 1, c: 0 }, e: { r: 1, c: 7 } },
             { s: { r: 2, c: 0 }, e: { r: 7, c: 3 } },
-            { s: { r: 2, c: 4 }, e: { r: 7, c: 6 } },
-            { s: { r: 34, c: 0 }, e: { r: 34, c: 4 } },
-            { s: { r: 35, c: 0 }, e: { r: 35, c: 4 } },
+            { s: { r: 2, c: 4 }, e: { r: 7, c: 7 } },
+            { s: { r: 34, c: 0 }, e: { r: 34, c: 5 } },
+            { s: { r: 35, c: 0 }, e: { r: 35, c: 5 } },
             { s: { r: 37, c: 0 }, e: { r: 37, c: 1 } },
-            { s: { r: 37, c: 2 }, e: { r: 37, c: 4 } },
-            { s: { r: 37, c: 5 }, e: { r: 37, c: 6 } },
+            { s: { r: 37, c: 2 }, e: { r: 37, c: 5 } },
+            { s: { r: 37, c: 6 }, e: { r: 37, c: 7 } },
           ];
           sheet["!cols"] = [
             { wch: 7 },
             { wch: 10 },
             { wch: 11 },
-            { wch: 36 },
-            { wch: 21 },
+            { wch: 14 },
+            { wch: 31 },
+            { wch: 18 },
             { wch: 11 },
             { wch: 11 },
           ];
@@ -1573,15 +1595,15 @@ export default function OrdersPage() {
             fitToHeight: 1,
           };
 
-          applyCellStyle(sheet, "A1:F1", {
+          applyCellStyle(sheet, "A1:G1", {
             font: { name: "Arial", sz: 20, bold: true },
             alignment: { horizontal: "center", vertical: "center" },
           });
-          applyCellStyle(sheet, "G1:G1", {
+          applyCellStyle(sheet, "H1:H1", {
             font: { name: "Arial", sz: 10, bold: true },
             alignment: { horizontal: "right", vertical: "center" },
           });
-          applyCellStyle(sheet, "A2:G2", {
+          applyCellStyle(sheet, "A2:H2", {
             font: { name: "Arial", sz: 13, bold: true },
             alignment: { horizontal: "center", vertical: "center" },
             border,
@@ -1595,7 +1617,7 @@ export default function OrdersPage() {
             },
             border,
           });
-          applyCellStyle(sheet, "E3:G8", {
+          applyCellStyle(sheet, "E3:H8", {
             font: { name: "Arial", sz: 11 },
             alignment: {
               horizontal: "left",
@@ -1604,7 +1626,7 @@ export default function OrdersPage() {
             },
             border,
           });
-          applyCellStyle(sheet, "A9:G9", {
+          applyCellStyle(sheet, "A9:H9", {
             font: { name: "Arial", sz: 11, bold: true },
             fill: {
               patternType: "solid",
@@ -1613,20 +1635,20 @@ export default function OrdersPage() {
             alignment: { horizontal: "center", vertical: "center", wrapText: true },
             border,
           });
-          applyCellStyle(sheet, "A10:G34", {
+          applyCellStyle(sheet, "A10:H34", {
             font: { name: "Arial", sz: 10 },
             alignment: { vertical: "center", wrapText: true },
             border,
           });
-          applyCellStyle(sheet, "A35:G36", {
+          applyCellStyle(sheet, "A35:H36", {
             font: { name: "Arial", sz: 11, bold: true },
             alignment: { vertical: "center" },
             border,
           });
-          applyCellStyle(sheet, "F10:G36", {
+          applyCellStyle(sheet, "G10:H36", {
             alignment: { horizontal: "right", vertical: "center" },
           });
-          applyCellStyle(sheet, "A38:G38", {
+          applyCellStyle(sheet, "A38:H38", {
             font: { name: "Arial", sz: 10, bold: true },
             alignment: { horizontal: "center", vertical: "bottom", wrapText: true },
           });
@@ -1868,6 +1890,7 @@ export default function OrdersPage() {
           productName: item.product_name || "-",
           color: item.color || "-",
           size: item.size || "-",
+          classType: getDnClassTypeLabel(item),
           warehouseName: allocation.warehouse_name || "-",
           pairs,
           cartons: pairsPerCarton > 0 ? pairs / pairsPerCarton : 0,
@@ -1939,6 +1962,7 @@ export default function OrdersPage() {
                 <td>${page.groupPage === 1 ? index + 1 : page.groupPage * rowsPerPage - rowsPerPage + index + 1}</td>
                 <td>${escapeHtml(item.finishedGoodId)}</td>
                 <td class="nowrap">${escapeHtml(item.size)}</td>
+                <td class="nowrap class-type">${escapeHtml(item.classType)}</td>
                 <td>${escapeHtml(item.productName)}</td>
                 <td>${escapeHtml(item.warehouseName)}</td>
                 <td class="number">${formatPrintNumber(item.cartons)}</td>
@@ -1983,8 +2007,8 @@ export default function OrdersPage() {
             <table class="items">
               <thead>
                 <tr>
-                  <th>S.No</th><th>F.G. ID</th><th>Size</th><th>Description of Goods</th>
-                  <th>Warehouse</th><th>Carton</th><th>Pairs</th>
+                  <th>S.No</th><th>F.G. ID</th><th>Size</th><th>N Class / Type</th>
+                  <th>Description of Goods</th><th>Warehouse</th><th>Carton</th><th>Pairs</th>
                 </tr>
               </thead>
               <tbody>${itemsHtml}</tbody>
@@ -2061,12 +2085,14 @@ export default function OrdersPage() {
             .items th { background: #eee; text-align: left; font-size: 16px; }
             .items td { font-size: 16px; }
             .items th:nth-child(1) { width: 6%; }
-            .items th:nth-child(2) { width: 8%; }
-            .items th:nth-child(3) { width: 10%; }
-            .items th:nth-child(4) { width: 38%; }
-            .items th:nth-child(5) { width: 20%; }
-            .items th:nth-child(6), .items th:nth-child(7) { width: 9%; }
-            .items td:first-child, .items td:nth-child(2), .items td:nth-child(3), .number { text-align: center; }
+            .items th:nth-child(2) { width: 7%; }
+            .items th:nth-child(3) { width: 9%; }
+            .items th:nth-child(4) { width: 11%; }
+            .items th:nth-child(5) { width: 30%; }
+            .items th:nth-child(6) { width: 19%; }
+            .items th:nth-child(7), .items th:nth-child(8) { width: 9%; }
+            .items td:first-child, .items td:nth-child(2), .items td:nth-child(3), .items td:nth-child(4), .number { text-align: center; }
+            .class-type { font-weight: 700; }
             .items tbody td { vertical-align: middle; }
             .nowrap { white-space: nowrap; }
             .totals { margin-top: 4px; }

@@ -1,0 +1,20 @@
+Backend patch: packed DN correction by exact pairs
+
+1. In cPanel, open "Setup Node.js App" and note the Application root for
+   back.nepchawarehouse.com.
+2. Open that exact folder in File Manager.
+3. Upload backend-pair-correction-patch.zip into the Application root.
+4. Extract it there. Confirm these files are overwritten:
+     app.js
+     controllers/orderController.js
+     routes/orderRoutes.js
+5. Return to "Setup Node.js App" and restart that same application.
+
+The patch adds this response header to /api/health:
+  X-App-Revision: packed-dn-pairs-2026-11-03
+If that header is absent from https://back.nepchawarehouse.com/api/health,
+cPanel is running a different application root or the files were not replaced.
+
+Verification:
+The packed-DN endpoint must accept 0.5 CTN as 15 pairs when the product has
+30 pairs per carton. Do not use 1 CTN as a workaround.
