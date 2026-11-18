@@ -2,6 +2,9 @@ const { query, getClient } = require('../config/db');
 const auditLog = require('../utils/auditLog');
 const { getPagination, shouldIncludeTotal } = require('../utils/pagination');
 const { appendFiscalInsertFields } = require('../utils/nepaliFiscalYear');
+const {
+  validateStockAdjustmentInput,
+} = require('../utils/stockAdjustmentValidation');
 
 // GET /api/stock-adjustments
 const getAdjustments = async (req, res, next) => {
@@ -49,24 +52,30 @@ const getAdjustments = async (req, res, next) => {
 
 // POST /api/stock-adjustments
 const createAdjustment = async (req, res, next) => {
-  const client = await getClient();
+  let client;
   try {
-    await client.query('BEGIN');
-
-    const { finished_good_id, qty, reason } = req.body;
-
-    if (!finished_good_id || qty === undefined || Number(qty) === 0) {
-      await client.query('ROLLBACK');
+    const validation = validateStockAdjustmentInput(req.body);
+    if (validation.error) {
       return res.status(400).json({
         success: false,
-        message: 'finished_good_id and non-zero qty are required.',
+        message: validation.error,
       });
     }
 
-    // Check finished good exists
+    const {
+      finishedGoodId,
+      quantity,
+      reason,
+    } = validation.value;
+
+    client = await getClient();
+    await client.query('BEGIN');
+
+    // Lock the row until commit so simultaneous adjustments cannot overwrite
+    // each other after reading the same starting quantity.
     const fgRes = await client.query(
-      'SELECT id, name, quantity FROM finished_goods WHERE id = ?',
-      [finished_good_id]
+      'SELECT id, name, quantity FROM finished_goods WHERE id = ? FOR UPDATE',
+      [finishedGoodId]
     );
     if (fgRes.rows.length === 0) {
       await client.query('ROLLBACK');
@@ -75,14 +84,14 @@ const createAdjustment = async (req, res, next) => {
 
     const fg = fgRes.rows[0];
     const qtyBefore = Number(fg.quantity);
-    const qtyAfter  = qtyBefore + Number(qty);
+    const qtyAfter = qtyBefore + quantity;
 
     // Prevent negative stock
     if (qtyAfter < 0) {
       await client.query('ROLLBACK');
       return res.status(422).json({
         success: false,
-        message: `Cannot remove ${Math.abs(qty)} pairs — only ${qtyBefore} in stock.`,
+        message: `Cannot remove ${Math.abs(quantity)} pairs — only ${qtyBefore} in stock.`,
       });
     }
 
@@ -90,7 +99,7 @@ const createAdjustment = async (req, res, next) => {
     const adjustmentInsert = await appendFiscalInsertFields(
       'stock_adjustments',
       ['finished_good_id', 'qty', 'reason', 'adjusted_by'],
-      [finished_good_id, qty, reason || null, req.user.id]
+      [finishedGoodId, quantity, reason, req.user.id]
     );
     const insertRes = await client.query(
       `INSERT INTO stock_adjustments (${adjustmentInsert.columns.join(', ')})
@@ -101,17 +110,17 @@ const createAdjustment = async (req, res, next) => {
     // Update finished_goods quantity
     await client.query(
       'UPDATE finished_goods SET quantity = ? WHERE id = ?',
-      [qtyAfter, finished_good_id]
+      [qtyAfter, finishedGoodId]
     );
 
     await client.query('COMMIT');
 
     await auditLog({
       userId:    req.user.id,
-      action:    qty > 0 ? 'STOCK_ADDED' : 'STOCK_REMOVED',
+      action:    quantity > 0 ? 'STOCK_ADDED' : 'STOCK_REMOVED',
       tableName: 'stock_adjustments',
       recordId:  insertRes.insertId,
-      detail:    `Adjusted "${fg.name}" by ${qty > 0 ? '+' : ''}${qty} pairs. Reason: ${reason || '—'}`,
+      detail:    `Adjusted "${fg.name}" by ${quantity > 0 ? '+' : ''}${quantity} pairs. Reason: ${reason || '—'}`,
     });
 
     return res.status(201).json({
@@ -119,26 +128,27 @@ const createAdjustment = async (req, res, next) => {
       message: `Stock adjusted successfully.`,
       data: {
         id:               insertRes.insertId,
-        finished_good_id: Number(finished_good_id),
+        finished_good_id: finishedGoodId,
         finished_good_name: fg.name,
-        qty:              Number(qty),
+        qty:              quantity,
         qty_before:       qtyBefore,
         qty_after:        qtyAfter,
-        reason:           reason || null,
+        reason,
       },
     });
   } catch (err) {
-    await client.query('ROLLBACK');
+    if (client) await client.query('ROLLBACK').catch(() => {});
     next(err);
   } finally {
-    client.release();
+    if (client) client.release();
   }
 };
 
 // DELETE /api/stock-adjustments/:id  (admin only)
 const deleteAdjustment = async (req, res, next) => {
-  const client = await getClient();
+  let client;
   try {
+    client = await getClient();
     await client.query('BEGIN');
 
     if (!['ADMIN', 'CO_ADMIN'].includes(req.user.role)) {
@@ -147,7 +157,7 @@ const deleteAdjustment = async (req, res, next) => {
     }
 
     const adjRes = await client.query(
-      'SELECT * FROM stock_adjustments WHERE id = ?',
+      'SELECT * FROM stock_adjustments WHERE id = ? FOR UPDATE',
       [req.params.id]
     );
     if (adjRes.rows.length === 0) {
@@ -157,10 +167,32 @@ const deleteAdjustment = async (req, res, next) => {
 
     const adj = adjRes.rows[0];
 
+    const stockRes = await client.query(
+      'SELECT id, quantity FROM finished_goods WHERE id = ? FOR UPDATE',
+      [adj.finished_good_id]
+    );
+    if (stockRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'The related finished good no longer exists.',
+      });
+    }
+
+    const quantityAfterReversal = Number(stockRes.rows[0].quantity) - Number(adj.qty);
+    if (quantityAfterReversal < 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message:
+          'This adjustment cannot be reversed because some of the added stock has already been used.',
+      });
+    }
+
     // Reverse the qty change on finished_goods
     await client.query(
-      'UPDATE finished_goods SET quantity = quantity - ? WHERE id = ?',
-      [adj.qty, adj.finished_good_id]
+      'UPDATE finished_goods SET quantity = ? WHERE id = ?',
+      [quantityAfterReversal, adj.finished_good_id]
     );
 
     await client.query(
@@ -180,10 +212,10 @@ const deleteAdjustment = async (req, res, next) => {
 
     return res.json({ success: true, message: 'Adjustment reversed and deleted.' });
   } catch (err) {
-    await client.query('ROLLBACK');
+    if (client) await client.query('ROLLBACK').catch(() => {});
     next(err);
   } finally {
-    client.release();
+    if (client) client.release();
   }
 };
 

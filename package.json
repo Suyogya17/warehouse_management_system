@@ -4,6 +4,9 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
+    "test": "node --test tests/*.test.js",
+    "migrate": "node scripts/migrate.js",
+    "migrate:status": "node scripts/migrate.js --status",
     "backfill:nepali-fiscal-year": "node scripts/backfill-nepali-fiscal-year.js",
     "backfill:order-fiscal-dates": "node scripts/backfill-order-fiscal-dates.js",
     "performance:explain": "node scripts/explain-performance.js",

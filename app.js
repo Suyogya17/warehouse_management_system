@@ -1,11 +1,16 @@
+require("dotenv").config();
+const { validateEnvironment } = require("./config/env");
+
+validateEnvironment();
+
 const cors = require("cors");
 const compression = require("compression");
-require("dotenv").config();
 const express = require("express");
 const path = require("path");
 const db = require("./config/db");
 const { clearCache } = require("./middleware/cacheMiddleware");
 const { requestPerformance } = require("./middleware/requestPerformance");
+const { securityHeaders } = require("./middleware/securityHeaders");
 
 const authRoutes = require("./routes/authRoutes");
 const stockRoutes = require("./routes/stockRoute");
@@ -26,6 +31,9 @@ const productInterestRoutes = require("./routes/productInterestRoutes");
 const chatRoutes = require("./routes/chatRoutes");
 
 const app = express();
+
+app.disable("x-powered-by");
+app.use(securityHeaders);
 
 // Compress JSON and static responses. Product, order, and analytics payloads can
 // be large, so this substantially reduces transfer time on slower connections.
@@ -98,21 +106,30 @@ app.use((req, res, next) => {
    HEALTH CHECK
 ──────────────────────────── */
 app.get("/api/health", (req, res) => {
-  res.setHeader("X-App-Revision", "packed-dn-pairs-2026-11-03");
+  res.setHeader(
+    "X-App-Revision",
+    process.env.APP_REVISION || "packed-dn-pairs-2026-11-03"
+  );
   res.send("API Running...");
 });
 
-/* ─────────────────────────────
-   DB TEST
-──────────────────────────── */
-(async () => {
+app.get("/api/ready", async (req, res) => {
   try {
-    const rows = await db.query("SELECT NOW() AS now");
-    console.log("DB Connected:", rows[0]);
+    await db.query("SELECT 1 AS ready");
+    return res.json({ success: true, status: "ready" });
   } catch (err) {
-    console.error("DB Error:", err);
+    console.error("Readiness check failed:", err.code || err.message);
+    return res.status(503).json({
+      success: false,
+      status: "not_ready",
+      message: "The database is unavailable.",
+    });
   }
-})();
+});
+
+/* ─────────────────────────────
+   DATABASE READINESS
+──────────────────────────── */
 
 /* ─────────────────────────────
    ROUTES
@@ -184,8 +201,24 @@ app.use((err, req, res, next) => {
 /* ─────────────────────────────
    START SERVER
 ──────────────────────────── */
-const PORT = process.env.PORT || 3000;
+const startServer = async () => {
+  const PORT = Number(process.env.PORT || 3000);
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+  // Refuse to accept traffic until the database is reachable. A process
+  // manager can then retry startup instead of leaving a partially working API.
+  const rows = await db.query("SELECT NOW() AS now");
+  console.log("DB Connected:", rows[0]);
+
+  return app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+};
+
+if (require.main === module) {
+  startServer().catch((error) => {
+    console.error("Server startup failed:", error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { app, startServer };

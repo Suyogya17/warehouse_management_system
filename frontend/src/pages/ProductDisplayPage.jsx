@@ -21,6 +21,13 @@ import { getRoundedCartons } from "../utils/displayStock";
 
 const DEFAULT_DISPLAY_QUANTITY = 450;
 const managedUserRoles = new Set(["USER", "MEMBER", "ELDER"]);
+const defaultRotationForm = {
+  enabled: true,
+  rotations_per_day: 3,
+  rotation_times: ["06:00", "14:00", "22:00"],
+  in_stock_only: true,
+  locked: false,
+};
 
 const getPairs = (item) => Number(item.quantity || 0);
 
@@ -99,6 +106,10 @@ export default function ProductDisplayPage() {
   const [customCarouselTitle, setCustomCarouselTitle] = useState("");
   const [customCarouselFile, setCustomCarouselFile] = useState(null);
   const [savingCustomCarouselSlide, setSavingCustomCarouselSlide] = useState(false);
+  const [rotationState, setRotationState] = useState(null);
+  const [rotationForm, setRotationForm] = useState(defaultRotationForm);
+  const [savingRotation, setSavingRotation] = useState(false);
+  const [rotatingNow, setRotatingNow] = useState(false);
   const [savingOrder, setSavingOrder] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedSeries, setSelectedSeries] = useState([]);
@@ -129,6 +140,24 @@ export default function ProductDisplayPage() {
     } catch (error) {
       console.error("Product display carousel slides load failed:", error);
       setCustomCarouselSlides([]);
+    }
+
+    try {
+      const rotationResult = await api.getDashboardProductRotation(token);
+      const nextRotationState = rotationResult.data || null;
+      setRotationState(nextRotationState);
+      if (nextRotationState?.settings) {
+        setRotationForm({
+          enabled: Boolean(nextRotationState.settings.enabled),
+          rotations_per_day: Number(nextRotationState.settings.rotations_per_day) === 2 ? 2 : 3,
+          rotation_times: [...(nextRotationState.settings.rotation_times || defaultRotationForm.rotation_times)],
+          in_stock_only: Boolean(nextRotationState.settings.in_stock_only),
+          locked: Boolean(nextRotationState.settings.locked),
+        });
+      }
+    } catch (error) {
+      console.error("Dashboard rotation settings load failed:", error);
+      setRotationState(null);
     }
   }, [isAuthorized, token]);
 
@@ -234,6 +263,14 @@ export default function ProductDisplayPage() {
   const itemById = useMemo(
     () => new Map(items.map((item) => [Number(item.id), item])),
     [items]
+  );
+  const rotationPreviewProducts = useMemo(
+    () =>
+      (rotationState?.ordered_ids || [])
+        .map((id) => itemById.get(Number(id)))
+        .filter(Boolean)
+        .slice(0, 8),
+    [itemById, rotationState]
   );
   const selectedFeaturedProducts = featuredSelection
     .map((id) => itemById.get(Number(id)))
@@ -505,6 +542,72 @@ export default function ProductDisplayPage() {
       });
     } finally {
       setSavingFeatured(false);
+    }
+  };
+
+  const changeRotationsPerDay = (value) => {
+    const count = Number(value) === 2 ? 2 : 3;
+    setRotationForm((current) => ({
+      ...current,
+      rotations_per_day: count,
+      rotation_times: count === 2
+        ? ["08:00", "20:00"]
+        : ["06:00", "14:00", "22:00"],
+    }));
+  };
+
+  const changeRotationTime = (index, value) => {
+    setRotationForm((current) => ({
+      ...current,
+      rotation_times: current.rotation_times.map((time, timeIndex) =>
+        timeIndex === index ? value : time
+      ),
+    }));
+  };
+
+  const saveRotationSettings = async () => {
+    try {
+      setSavingRotation(true);
+      const result = await api.updateDashboardProductRotation(rotationForm, token);
+      setRotationState(result.data || null);
+      announceDataRefresh("product-rotation");
+      showToast({
+        tone: "success",
+        title: "Rotation settings saved",
+        message: rotationForm.locked
+          ? "The current shared card order is locked."
+          : "All dashboards will follow the same Nepal-time rotation schedule.",
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Rotation settings failed",
+        message: error.data?.message || error.message,
+      });
+    } finally {
+      setSavingRotation(false);
+    }
+  };
+
+  const rotateProductsNow = async () => {
+    try {
+      setRotatingNow(true);
+      const result = await api.rotateDashboardProductsNow(token);
+      setRotationState(result.data || null);
+      announceDataRefresh("product-rotation");
+      showToast({
+        tone: "success",
+        title: "Products rotated",
+        message: "The same new card order is now active for every dashboard.",
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Rotation failed",
+        message: error.data?.message || error.message,
+      });
+    } finally {
+      setRotatingNow(false);
     }
   };
 
@@ -844,6 +947,162 @@ export default function ProductDisplayPage() {
           <p className="mt-1 text-2xl font-semibold text-slate-900">{items.length}</p>
         </div>
       </div>
+
+      <SectionCard
+        title="Shared Dashboard Product Rotation"
+        subtitle="Rotate product-card positions for every admin, member, user, and elder with one shared Nepal-time schedule."
+        icon="refresh"
+      >
+        <div className="grid gap-5 p-3 sm:p-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="space-y-4">
+            {!rotationState?.management_available ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                Rotation preview is using safe defaults. Apply migration <strong>0002_dashboard_product_rotation.sql</strong> before saving production settings.
+              </div>
+            ) : null}
+
+            <label className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4">
+              <span>
+                <span className="block text-sm font-semibold text-slate-900">Automatic rotation</span>
+                <span className="mt-1 block text-xs text-slate-500">Use one shared order during each configured time slot.</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={rotationForm.enabled}
+                onChange={(event) => setRotationForm((current) => ({ ...current, enabled: event.target.checked }))}
+                className="h-5 w-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+            </label>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-500">Rotations per day</label>
+                <select
+                  value={rotationForm.rotations_per_day}
+                  onChange={(event) => changeRotationsPerDay(event.target.value)}
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+                >
+                  <option value={2}>2 times</option>
+                  <option value={3}>3 times</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-500">Timezone</label>
+                <div className="flex h-11 items-center rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700">
+                  Nepal · Asia/Kathmandu
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-500">Daily rotation times</label>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {rotationForm.rotation_times.map((time, index) => (
+                  <input
+                    key={index}
+                    type="time"
+                    value={time}
+                    onChange={(event) => changeRotationTime(index, event.target.value)}
+                    className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+                  />
+                ))}
+              </div>
+            </div>
+
+            <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={rotationForm.in_stock_only}
+                onChange={(event) => setRotationForm((current) => ({ ...current, in_stock_only: event.target.checked }))}
+                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              Rotate only products whose main stock quantity is above zero
+            </label>
+            <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={rotationForm.locked}
+                onChange={(event) => setRotationForm((current) => ({ ...current, locked: event.target.checked }))}
+                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              Lock the active order until I unlock it
+            </label>
+
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                icon="check"
+                onClick={saveRotationSettings}
+                disabled={savingRotation || !rotationState?.management_available}
+              >
+                {savingRotation ? "Saving..." : "Save rotation"}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={rotateProductsNow}
+                disabled={rotatingNow || !rotationState?.management_available}
+              >
+                {rotatingNow ? "Rotating..." : "Rotate now"}
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Shared-order preview</p>
+                <p className="mt-1 text-xs text-slate-500">The first available cards in the order currently sent to every dashboard.</p>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                rotationForm.locked
+                  ? "bg-amber-100 text-amber-700"
+                  : rotationForm.enabled
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-slate-200 text-slate-600"
+              }`}>
+                {rotationForm.locked ? "Locked" : rotationForm.enabled ? "Automatic" : "Disabled"}
+              </span>
+            </div>
+            <div className="rounded-lg bg-white p-3 text-xs text-slate-600 ring-1 ring-slate-200">
+              {rotationState?.next_rotation_at && !rotationForm.locked ? (
+                <>
+                  Next rotation: <strong>{new Intl.DateTimeFormat("en-NP", {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                    timeZone: "Asia/Kathmandu",
+                  }).format(new Date(rotationState.next_rotation_at))}</strong>
+                </>
+              ) : rotationForm.locked ? (
+                "Automatic changes are paused while this order is locked."
+              ) : (
+                "Automatic rotation is disabled."
+              )}
+            </div>
+            {rotationPreviewProducts.length ? (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {rotationPreviewProducts.map((product, index) => (
+                  <div key={product.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <div className="relative aspect-[4/3] bg-slate-100">
+                      {product.image_url ? (
+                        <img src={`${APP_BASE_URL}${product.image_url}`} alt={product.article_code || product.name} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-xs text-slate-400">No image</div>
+                      )}
+                      <span className="absolute left-1.5 top-1.5 rounded-full bg-slate-950/80 px-2 py-0.5 text-[10px] font-bold text-white">#{index + 1}</span>
+                    </div>
+                    <p className="truncate px-2 py-2 text-xs font-semibold text-slate-800">{product.article_code || product.name}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-500">
+                No eligible products are available for the preview.
+              </div>
+            )}
+          </div>
+        </div>
+      </SectionCard>
 
       <SectionCard
         title="Dashboard Featured Carousel"

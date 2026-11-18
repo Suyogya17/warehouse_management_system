@@ -26,6 +26,30 @@ const getAvailableQty = (product) =>
 const getGroupDisplayOrder = (variants = []) =>
   Math.min(...variants.map((variant) => Number(variant.display_order || 999999)));
 
+const getGroupRotationRank = (variants = [], rankByProductId = new Map()) => {
+  const ranks = variants
+    .map((variant) => rankByProductId.get(Number(variant.id)))
+    .filter((rank) => Number.isFinite(rank));
+  return ranks.length ? Math.min(...ranks) : Number.MAX_SAFE_INTEGER;
+};
+
+const compareProductGroups = (left, right, rankByProductId = new Map()) => {
+  if (rankByProductId.size) {
+    const rankDiff =
+      getGroupRotationRank(left, rankByProductId) -
+      getGroupRotationRank(right, rankByProductId);
+    if (rankDiff !== 0) return rankDiff;
+  }
+
+  const orderDiff = getGroupDisplayOrder(left) - getGroupDisplayOrder(right);
+  if (orderDiff !== 0) return orderDiff;
+  return String(left[0]?.article_code || left[0]?.name || "").localeCompare(
+    String(right[0]?.article_code || right[0]?.name || ""),
+    undefined,
+    { numeric: true, sensitivity: "base" }
+  );
+};
+
 const sortByDisplayOrder = (a, b) => {
   const orderDiff = Number(a.display_order || 999999) - Number(b.display_order || 999999);
   if (orderDiff !== 0) return orderDiff;
@@ -695,8 +719,14 @@ function PublishedNotices({ notices = [] }) {
   );
 }
 
-function UserDashboardShowcase({ products = [], notices = [], customSlides = [], user }) {
+function UserDashboardShowcase({ products = [], notices = [], customSlides = [], rotation, user }) {
   const [featuredIndex, setFeaturedIndex] = useState(0);
+  const rotationRanks = useMemo(() => {
+    if (!rotation?.settings?.enabled) return new Map();
+    return new Map(
+      (rotation.ordered_ids || []).map((id, index) => [Number(id), index])
+    );
+  }, [rotation]);
 
   const productGroups = useMemo(() => {
     const groups = {};
@@ -714,8 +744,8 @@ function UserDashboardShowcase({ products = [], notices = [], customSlides = [],
 
     return Object.values(groups)
       .map((variants) => [...variants].sort(sortByDisplayOrder))
-      .sort((a, b) => getGroupDisplayOrder(a) - getGroupDisplayOrder(b));
-  }, [products]);
+      .sort((a, b) => compareProductGroups(a, b, rotationRanks));
+  }, [products, rotationRanks]);
 
   const newestProductGroups = useMemo(
     () =>
@@ -1089,6 +1119,7 @@ export default function DashboardPage() {
     users: [],
     advertisements: [],
     carouselSlides: [],
+    dashboardRotation: null,
   });
 
   const [search, setSearch]             = useState("");
@@ -1141,6 +1172,7 @@ export default function DashboardPage() {
       ["users", canManageVisibility ? api.getUsers(token) : Promise.resolve({ data: [] })],
       ["advertisements", isCustomerDashboard ? api.getAdvertisements(token) : Promise.resolve({ data: [] })],
       ["carouselSlides", isCustomerDashboard ? api.getDashboardCarouselSlides(token) : Promise.resolve({ data: [] })],
+      ["dashboardRotation", api.getDashboardProductRotation(token)],
     ];
 
     const results = await Promise.allSettled(
@@ -1168,6 +1200,19 @@ export default function DashboardPage() {
 
   useEffect(() => { load().catch(console.error); }, [load]);
   useDataRefresh(load, "dashboard");
+
+  useEffect(() => {
+    const nextRotationAt = state.dashboardRotation?.next_rotation_at;
+    if (!nextRotationAt) return undefined;
+    const delay = new Date(nextRotationAt).getTime() - Date.now() + 1500;
+    if (!Number.isFinite(delay) || delay <= 0) return undefined;
+
+    const timer = window.setTimeout(
+      () => load().catch(console.error),
+      Math.min(delay, 2_147_000_000)
+    );
+    return () => window.clearTimeout(timer);
+  }, [load, state.dashboardRotation?.next_rotation_at]);
 
   const getProductCountryTargets = (countryScope = "both") => {
     const scopeCodes = countryScope === "both" ? ["NP", "IN"] : [String(countryScope || "NP").toUpperCase()];
@@ -1287,6 +1332,16 @@ export default function DashboardPage() {
     });
     return Object.values(groups);
   }, [state.availability]);
+
+  const rotationRankByProductId = useMemo(() => {
+    if (!state.dashboardRotation?.settings?.enabled) return new Map();
+    return new Map(
+      (state.dashboardRotation?.ordered_ids || []).map((id, index) => [
+        Number(id),
+        index,
+      ])
+    );
+  }, [state.dashboardRotation]);
 
   const seriesList = useMemo(
     () =>
@@ -1750,15 +1805,7 @@ export default function DashboardPage() {
       )
       .map((variants) => [...variants].sort(sortByDisplayOrder))
       .filter((variants) => variants.length > 0)
-      .sort((a, b) => {
-        const orderDiff = getGroupDisplayOrder(a) - getGroupDisplayOrder(b);
-        if (orderDiff !== 0) return orderDiff;
-        return String(a[0]?.article_code || a[0]?.name || "").localeCompare(
-          String(b[0]?.article_code || b[0]?.name || ""),
-          undefined,
-          { numeric: true, sensitivity: "base" }
-        );
-      });
+      .sort((a, b) => compareProductGroups(a, b, rotationRankByProductId));
   }, [
     getDashboardAvailableQty,
     groupedProducts,
@@ -1767,6 +1814,7 @@ export default function DashboardPage() {
     nClassificationFilter,
     seriesFilters,
     stockFilter,
+    rotationRankByProductId,
   ]);
 
   const selectedCountryHoldGroup =
@@ -1850,6 +1898,7 @@ export default function DashboardPage() {
           products={state.availability}
           notices={publishedNotices}
           customSlides={state.carouselSlides}
+          rotation={state.dashboardRotation}
           user={user}
         />
       )}

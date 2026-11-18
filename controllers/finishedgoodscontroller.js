@@ -35,6 +35,11 @@ const getPaginationMeta =
     total_pages: Math.max(1, Math.ceil(Number(total || 0) / pageSize)),
   }));
 const { hasOfferCampaignSchema } = require('../utils/offerCampaigns');
+const {
+  STOCKOUT_WARNING_THRESHOLD,
+  hasStockoutMonitoringSchema,
+  loadStockoutMonitoring,
+} = require('../services/stockoutMonitoringService');
 
 const DEFAULT_DISPLAY_QUANTITY = 450;
 
@@ -52,6 +57,126 @@ const getActor = (req) => ({
 
 const getProductName = (product = {}) =>
   [product.name, product.article_code, product.color].filter(Boolean).join(' / ') || `Product #${product.id}`;
+
+const getStockoutAlerts = async (req, res, next) => {
+  try {
+    if (!(await hasStockoutMonitoringSchema())) {
+      return res.json({ success: true, data: [], tracking_available: false });
+    }
+
+    const products = await query(
+      `SELECT id, name, article_code, sole_code, color, size, quantity
+       FROM finished_goods
+       WHERE COALESCE(quantity, 0) <= 0
+         AND COALESCE(is_deleted, 0) = 0
+       ORDER BY article_code, color, id`
+    );
+    const monitoring = await loadStockoutMonitoring(
+      products.map((product) => product.id)
+    );
+    const alerts = products
+      .map((product) => ({
+        ...product,
+        ...monitoring.get(Number(product.id)),
+      }))
+      .filter(
+        (product) =>
+          Number(product.stockout_cycles_since_check || 0) >=
+          STOCKOUT_WARNING_THRESHOLD
+      )
+      .sort(
+        (left, right) =>
+          Number(right.stockout_cycles_since_check || 0) -
+            Number(left.stockout_cycles_since_check || 0) ||
+          Number(right.id) - Number(left.id)
+      );
+
+    return res.json({ success: true, data: alerts, tracking_available: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const markPhysicalCheck = async (req, res, next) => {
+  try {
+    if (!(await hasStockoutMonitoringSchema())) {
+      return res.status(409).json({
+        success: false,
+        message:
+          'Physical stock checks require sql/add-finished-good-stockout-monitoring.sql.',
+      });
+    }
+
+    const finishedGoodId = Number(req.params.id);
+    const note = String(req.body?.note || '').trim();
+    if (!Number.isInteger(finishedGoodId) || finishedGoodId <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid product ID.' });
+    }
+    if (note.length > 500) {
+      return res.status(400).json({
+        success: false,
+        message: 'Physical check note can be up to 500 characters.',
+      });
+    }
+
+    const products = await query(
+      `SELECT id, name, article_code, color, quantity
+       FROM finished_goods
+       WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+       LIMIT 1`,
+      [finishedGoodId]
+    );
+    if (!products.length) {
+      return res.status(404).json({ success: false, message: 'Product not found.' });
+    }
+
+    const monitoring = await loadStockoutMonitoring([finishedGoodId]);
+    const current = monitoring.get(finishedGoodId) || {};
+    const checkedCount = Number(current.stockout_cycles_since_check || 0);
+    const result = await query(
+      `INSERT INTO finished_good_physical_checks
+         (finished_good_id, checked_by, stockout_count_at_check,
+          last_stockout_event_id, note)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        finishedGoodId,
+        req.user.id,
+        checkedCount,
+        current.last_stockout_event_id || null,
+        note || null,
+      ]
+    );
+    clearCache();
+
+    const product = products[0];
+    await auditLog({
+      ...getActor(req),
+      actionType: 'PHYSICAL_CHECK',
+      module: 'finished_goods',
+      entity_type: 'finished_good',
+      entity_id: finishedGoodId,
+      entityName: getProductName(product),
+      description: `Physical stock checked after ${checkedCount} recorded stockout cycle${checkedCount === 1 ? '' : 's'}`,
+      metadata: {
+        stockout_cycles_checked: checkedCount,
+        recorded_quantity: Number(product.quantity || 0),
+        note: note || null,
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Physical check recorded. The repeat-stockout counter has been reset.',
+      data: {
+        id: result.insertId,
+        finished_good_id: finishedGoodId,
+        stockout_cycles_checked: checkedCount,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
 
 const normalizeCommissionFlag = (value) =>
   value === true || value === 1 || value === '1' || value === 'true' ? 1 : 0;
@@ -1938,6 +2063,8 @@ module.exports = {
   createDashboardCarouselSlide,
   removeDashboardCarouselSlide,
   getOfferAllocationHistory,
+  getStockoutAlerts,
+  markPhysicalCheck,
   setOffer,
   transferOfferBalance
 };

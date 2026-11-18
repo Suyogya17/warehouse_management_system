@@ -31,9 +31,45 @@ const getAvailableQuantity = (product = {}) =>
     )
   );
 
+const getStockoutAlertDetails = (product = {}) => {
+  const cycles = Math.max(0, Number(product.stockout_cycles_since_check || 0));
+  if (cycles >= 5) {
+    return {
+      cycles,
+      label: "Physical check required now",
+      message: `This variant has reached physical zero ${cycles} times since its last check.`,
+      className: "border-red-300 bg-red-100 text-red-900",
+    };
+  }
+  if (cycles >= 2) {
+    return {
+      cycles,
+      label: "Repeated stockout warning",
+      message: `This variant has reached physical zero ${cycles} times. Schedule a physical check.`,
+      className: "border-amber-300 bg-amber-50 text-amber-900",
+    };
+  }
+  if (cycles === 1) {
+    return {
+      cycles,
+      label: "First recorded stockout",
+      message: "Another physical stockout will raise a repeated-stock warning.",
+      className: "border-sky-200 bg-sky-50 text-sky-900",
+    };
+  }
+  return {
+    cycles,
+    label: product.last_physical_check_at ? "Checked and monitoring" : "Stockout monitoring active",
+    message: product.last_physical_check_at
+      ? "The counter was reset after the last physical check."
+      : "Future positive-to-zero stock transitions will be counted.",
+    className: "border-slate-200 bg-slate-50 text-slate-700",
+  };
+};
+
 const PRODUCTS_PER_PAGE = 12;
 
-function OutOfStockCard({ variants = [], user }) {
+function OutOfStockCard({ variants = [], user, onPhysicalCheck, checking }) {
   const [selectedVariant, setSelectedVariant] = useState(variants[0] || null);
 
   useEffect(() => {
@@ -53,6 +89,8 @@ function OutOfStockCard({ variants = [], user }) {
   if (!selectedVariant) return null;
 
   const availableQuantity = getAvailableQuantity(selectedVariant);
+  const physicalStock = Math.max(0, Number(selectedVariant.physical_stock ?? selectedVariant.quantity ?? 0));
+  const stockoutAlert = getStockoutAlertDetails(selectedVariant);
   const cartons = getRoundedCartons(
     availableQuantity,
     selectedVariant.inner_boxes_per_outer_box
@@ -161,6 +199,38 @@ function OutOfStockCard({ variants = [], user }) {
             </span>
           </div>
         </div>
+
+        {physicalStock <= 0 ? (
+          <div className={`mt-2 rounded-xl border p-2.5 text-xs ${stockoutAlert.className}`}>
+            <div className="font-bold">{stockoutAlert.label}</div>
+            <div className="mt-1 leading-relaxed">{stockoutAlert.message}</div>
+            {selectedVariant.last_physical_check_at ? (
+              <div className="mt-1 opacity-75">
+                Last checked {new Date(selectedVariant.last_physical_check_at).toLocaleString()}
+                {selectedVariant.last_physical_check_by
+                  ? ` by ${selectedVariant.last_physical_check_by}`
+                  : ""}
+              </div>
+            ) : null}
+            {stockoutAlert.cycles >= 2 ? (
+              <Button
+                type="button"
+                size="sm"
+                variant={stockoutAlert.cycles >= 5 ? "danger" : "secondary"}
+                className="mt-2 w-full"
+                disabled={checking}
+                onClick={() => onPhysicalCheck?.(selectedVariant)}
+              >
+                {checking ? "Recording check..." : "Mark physical check completed"}
+              </Button>
+            ) : null}
+          </div>
+        ) : (
+          <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900">
+            <div className="font-bold">All available stock is reserved</div>
+            <div className="mt-1">Physical stock is still {formatNumber(physicalStock)} pairs, so this does not count as a physical stockout.</div>
+          </div>
+        )}
       </div>
     </article>
   );
@@ -174,6 +244,7 @@ export default function OutOfStockPage() {
   const [seriesFilters, setSeriesFilters] = useState([]);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [checkingProductId, setCheckingProductId] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -190,6 +261,39 @@ export default function OutOfStockPage() {
       setLoading(false);
     }
   }, [showToast, token]);
+
+  const markPhysicalCheck = useCallback(
+    async (product) => {
+      const productLabel = product.article_code || product.name || `Product #${product.id}`;
+      if (!window.confirm(`Confirm that you physically checked ${productLabel}. This will reset its repeat-stockout counter.`)) {
+        return;
+      }
+
+      try {
+        setCheckingProductId(Number(product.id));
+        const result = await api.markFinishedGoodPhysicalCheck(
+          product.id,
+          { note: "Confirmed from the Out of Stock page." },
+          token
+        );
+        showToast({
+          tone: "success",
+          title: "Physical check recorded",
+          message: `${productLabel}: ${result.data?.stockout_cycles_checked || 0} recorded stockout cycle(s) acknowledged.`,
+        });
+        await load();
+      } catch (error) {
+        showToast({
+          tone: "error",
+          title: "Could not record physical check",
+          message: error.message,
+        });
+      } finally {
+        setCheckingProductId(null);
+      }
+    },
+    [load, showToast, token]
+  );
 
   useEffect(() => {
     load();
@@ -286,6 +390,24 @@ export default function OutOfStockPage() {
       ).size,
     [outOfStockProducts]
   );
+  const repeatedStockoutCount = useMemo(
+    () =>
+      outOfStockProducts.filter(
+        (product) =>
+          Number(product.physical_stock ?? product.quantity ?? 0) <= 0 &&
+          Number(product.stockout_cycles_since_check || 0) >= 2
+      ).length,
+    [outOfStockProducts]
+  );
+  const criticalCheckCount = useMemo(
+    () =>
+      outOfStockProducts.filter(
+        (product) =>
+          Number(product.physical_stock ?? product.quantity ?? 0) <= 0 &&
+          Number(product.stockout_cycles_since_check || 0) >= 5
+      ).length,
+    [outOfStockProducts]
+  );
 
   useEffect(() => {
     setPage(1);
@@ -323,7 +445,7 @@ export default function OutOfStockPage() {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard
           label="Out-of-stock variants"
           value={formatNumber(outOfStockProducts.length)}
@@ -333,6 +455,18 @@ export default function OutOfStockPage() {
         <StatCard
           label="Affected articles"
           value={formatNumber(articleCount)}
+          tone="alert"
+          icon="stock"
+        />
+        <StatCard
+          label="Repeated stockouts"
+          value={formatNumber(repeatedStockoutCount)}
+          tone="alert"
+          icon="stock"
+        />
+        <StatCard
+          label="Physical checks required"
+          value={formatNumber(criticalCheckCount)}
           tone="alert"
           icon="stock"
         />
@@ -388,6 +522,11 @@ export default function OutOfStockPage() {
                     key={variants.map((variant) => variant.id).join("-")}
                     variants={variants}
                     user={user}
+                    onPhysicalCheck={markPhysicalCheck}
+                    checking={
+                      Number(checkingProductId) ===
+                      Number(variants.find((variant) => Number(variant.id) === Number(checkingProductId))?.id)
+                    }
                   />
                 ))}
               </div>

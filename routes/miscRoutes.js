@@ -1,6 +1,7 @@
 // ── Finished Goods ────────────────────────────────────────────────────────────
 const fgRouter = require('express').Router();
 const fgCtrl   = require('../controllers/finishedgoodscontroller');
+const dashboardRotationCtrl = require('../controllers/dashboardRotationController');
 const { authenticate, authorize, authorizeAdminOrPagePermission } = require('../middleware/authMiddleware');
 const { PRODUCT_VISIBILITY_PAGE_KEY } = require('../utils/userPagePermissions');
 const { uploadMiddleware } = require('../middleware/upload');
@@ -11,10 +12,15 @@ fgRouter.get('/',       cacheResponse(15000), fgCtrl.getAll);
 fgRouter.get('/filters', cacheResponse(60000), fgCtrl.getFilters);
 fgRouter.put('/display-order', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDisplayOrder);
 fgRouter.put('/dashboard-featured', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDashboardFeatured);
+fgRouter.get('/dashboard-rotation', dashboardRotationCtrl.getDashboardRotation);
+fgRouter.put('/dashboard-rotation', authorize('ADMIN', 'CO_ADMIN'), dashboardRotationCtrl.updateDashboardRotation);
+fgRouter.post('/dashboard-rotation/rotate-now', authorize('ADMIN', 'CO_ADMIN'), dashboardRotationCtrl.rotateDashboardProductsNow);
 fgRouter.get('/dashboard-carousel-slides', fgCtrl.getDashboardCarouselSlides);
 fgRouter.post('/dashboard-carousel-slides', authorize('ADMIN', 'CO_ADMIN'), uploadMiddleware('image'), fgCtrl.createDashboardCarouselSlide);
 fgRouter.delete('/dashboard-carousel-slides/:id', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.removeDashboardCarouselSlide);
 fgRouter.get('/offer-allocation-history', authorize('ADMIN', 'CO_ADMIN'), cacheResponse(15000), fgCtrl.getOfferAllocationHistory);
+fgRouter.get('/stockout-alerts', authorize('ADMIN', 'CO_ADMIN'), cacheResponse(15000), fgCtrl.getStockoutAlerts);
+fgRouter.post('/:id/physical-check', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.markPhysicalCheck);
 fgRouter.get('/:id',    cacheResponse(15000), fgCtrl.getOne);
 fgRouter.post('/',      authorize('ADMIN', 'CO_ADMIN'), uploadMiddleware('image'), fgCtrl.create);
 fgRouter.put('/:id/visibility', authorizeAdminOrPagePermission(PRODUCT_VISIBILITY_PAGE_KEY, 'can_edit'), fgCtrl.setVisibility);

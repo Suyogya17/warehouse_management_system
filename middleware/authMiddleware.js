@@ -8,6 +8,13 @@ const AUTH_USER_CACHE_TTL_MS = Math.max(
 );
 const authenticatedUserCache = new Map();
 
+const invalidateAuthenticatedUser = (userId) => {
+  const key = Number(userId);
+  if (Number.isInteger(key) && key > 0) {
+    authenticatedUserCache.delete(key);
+  }
+};
+
 const getAuthenticatedUser = async (userId) => {
   const key = Number(userId);
   const cached = authenticatedUserCache.get(key);
@@ -118,4 +125,9 @@ const authorizeAdminOrPagePermission = (pageKey, action = 'can_edit') => {
   };
 };
 
-module.exports = { authenticate, authorize, authorizeAdminOrPagePermission };
+module.exports = {
+  authenticate,
+  authorize,
+  authorizeAdminOrPagePermission,
+  invalidateAuthenticatedUser,
+};

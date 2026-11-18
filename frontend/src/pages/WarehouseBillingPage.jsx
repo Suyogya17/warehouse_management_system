@@ -1,7 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx-js-style";
-import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable";
 import { useSearchParams } from "react-router-dom";
 
 import Button from "../components/Button";
@@ -234,8 +231,10 @@ export default function WarehouseBillingPage() {
     stopCamera();
   };
 
-  const buildWorkbook = () => {
+  const buildWorkbook = async () => {
     if (!selected || !items.length) return null;
+    const xlsxModule = await import("xlsx-js-style");
+    const XLSX = xlsxModule.default || xlsxModule;
     const baseBillNumber = selected.fulfillment.warehouse_slip_number || selected.fulfillment.delivery_note_number || `ORDER-${selected.order.id}`;
     const billNumber = baseBillNumber;
     const deliveredDate = selected.fulfillment.delivered_at ? new Date(selected.fulfillment.delivered_at) : new Date();
@@ -312,7 +311,7 @@ export default function WarehouseBillingPage() {
     sheet[`H${summaryRow + 4}`].z = "#,##0.00";
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, sheet, "Warehouse Bill");
-    return { workbook, billNumber };
+    return { workbook, billNumber, XLSX };
   };
 
   const recordBillCreation = async (outputType) => {
@@ -327,14 +326,19 @@ export default function WarehouseBillingPage() {
   };
 
   const exportExcel = async () => {
-    const built = buildWorkbook();
+    const built = await buildWorkbook();
     if (!built) return;
     if (!await recordBillCreation("EXCEL")) return;
-    XLSX.writeFile(built.workbook, `${built.billNumber}-bill.xlsx`, { cellStyles: true });
+    built.XLSX.writeFile(built.workbook, `${built.billNumber}-bill.xlsx`, { cellStyles: true });
   };
 
   const buildPdf = async () => {
     if (!selected || !items.length) return null;
+    const [{ jsPDF }, autoTableModule] = await Promise.all([
+      import("jspdf"),
+      import("jspdf-autotable"),
+    ]);
+    const autoTable = autoTableModule.default;
     const baseBillNumber = selected.fulfillment.warehouse_slip_number || selected.fulfillment.delivery_note_number || `ORDER-${selected.order.id}`;
     const billNumber = baseBillNumber;
     const deliveredDate = selected.fulfillment.delivered_at ? new Date(selected.fulfillment.delivered_at) : new Date();

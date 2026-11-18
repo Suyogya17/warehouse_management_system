@@ -513,6 +513,16 @@ export const api = {
   getOfferAllocationHistory: (token) =>
     apiRequest("/finished-goods/offer-allocation-history", {}, token),
 
+  getStockoutAlerts: (token) =>
+    apiRequest("/finished-goods/stockout-alerts", { showLoader: false }, token),
+
+  markFinishedGoodPhysicalCheck: (id, payload, token) =>
+    apiRequest(
+      `/finished-goods/${id}/physical-check`,
+      { method: "POST", body: JSON.stringify(payload || {}) },
+      token
+    ),
+
   createFinishedGood: (payload, token) =>
     apiRequest(
       "/finished-goods",
@@ -545,6 +555,23 @@ export const api = {
     apiRequest(
       "/finished-goods/dashboard-featured",
       { method: "PUT", body: JSON.stringify({ ordered_ids: orderedIds }) },
+      token
+    ),
+
+  getDashboardProductRotation: (token) =>
+    apiRequest("/finished-goods/dashboard-rotation", { showLoader: false }, token),
+
+  updateDashboardProductRotation: (payload, token) =>
+    apiRequest(
+      "/finished-goods/dashboard-rotation",
+      { method: "PUT", body: JSON.stringify(payload) },
+      token
+    ),
+
+  rotateDashboardProductsNow: (token) =>
+    apiRequest(
+      "/finished-goods/dashboard-rotation/rotate-now",
+      { method: "POST" },
       token
     ),
 

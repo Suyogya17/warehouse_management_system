@@ -5,7 +5,7 @@ const { getAdjustments, createAdjustment, deleteAdjustment } = require('../contr
 const { cacheResponse } = require('../middleware/cacheMiddleware');
 
 router.get('/',       authenticate, cacheResponse(10000), getAdjustments);
-router.post('/',      authenticate, createAdjustment);
+router.post('/',      authenticate, authorize('ADMIN', 'CO_ADMIN'), createAdjustment);
 router.delete('/:id', authenticate, authorize('ADMIN', 'CO_ADMIN'), deleteAdjustment);
 
 module.exports = router;

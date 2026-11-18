@@ -1,3 +1,7 @@
+-- LEGACY BASE SCHEMA ONLY.
+-- Existing installations may also require historical patches under sql/.
+-- New changes must use checksum-tracked files under migrations/.
+
 USE nepchawa_warehouse;
 
 CREATE TABLE users (
@@ -10,8 +14,6 @@ CREATE TABLE users (
   currency_code CHAR(3) NOT NULL DEFAULT 'NPR',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
-SELECT * FROM table users;
 
 CREATE TABLE notifications (
   id INT AUTO_INCREMENT PRIMARY KEY,
@@ -238,10 +240,3 @@ CREATE TABLE order_items (
 
 CREATE INDEX idx_orders_status ON orders(status);
 CREATE INDEX idx_order_items_finished_good ON order_items(finished_good_id);
-
-
-ALTER TABLE finished_goods
-ADD COLUMN is_visible TINYINT(1) NOT NULL DEFAULT 0;
-
-
-SELECT * FROM users;

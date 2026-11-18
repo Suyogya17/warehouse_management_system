@@ -11,6 +11,9 @@ const {
   loadUserSeriesOfferAdjustments,
 } = require('./offerPricing');
 const { getIndiaPriceFromNepalPrice } = require('./priceConversion');
+const {
+  loadStockoutMonitoring,
+} = require('../services/stockoutMonitoringService');
 
 const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'PACKED'];
 const DEFAULT_DISPLAY_QUANTITY = 450;
@@ -285,6 +288,7 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
     controlledPoolRows,
     privateAllocationRows,
     seriesOfferAdjustments,
+    stockoutMonitoring,
   ] =
     await Promise.all([
     shouldLoadOfferTargets
@@ -383,6 +387,9 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
       : Promise.resolve({ rows: [] }),
     usesCustomerOfferAudience && supportsOfferPriceAdjustments
       ? loadUserSeriesOfferAdjustments(query, availabilityUserId)
+      : Promise.resolve(new Map()),
+    ['ADMIN', 'CO_ADMIN'].includes(req.user.role)
+      ? loadStockoutMonitoring(productIds)
       : Promise.resolve(new Map()),
   ]);
 
@@ -577,6 +584,7 @@ const loadAvailabilityForRequest = async (req, options = {}) => {
 
       return {
         ...product,
+        ...(stockoutMonitoring.get(Number(product.id)) || {}),
         ...(canSeeOffer
           ? {}
           : {

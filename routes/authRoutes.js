@@ -12,6 +12,10 @@ const {
   setWarehouseBillingPermission,
 } = require('../controllers/authController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
+const {
+  loginAccountLimiter,
+  loginIpLimiter,
+} = require('../middleware/rateLimit');
 const { query } = require('../config/db');
 
 const allowFirstUserOrAdmin = async (req, res, next) => {
@@ -36,7 +40,7 @@ const allowFirstUserOrAdmin = async (req, res, next) => {
 router.post('/register', allowFirstUserOrAdmin);
 
 // POST /api/auth/login
-router.post('/login', login);
+router.post('/login', loginIpLimiter, loginAccountLimiter, login);
 
 // GET /api/auth/profile
 router.get('/profile', authenticate, getProfile);
@@ -53,9 +57,9 @@ router.put('/users/:id/dashboard-products-permission', authenticate, authorize('
 router.put('/users/:id/warehouse-billing-permission', authenticate, authorize('ADMIN'), setWarehouseBillingPermission);
 
 // PUT /api/auth/users/:id  (ADMIN only)
-router.put('/users/:id', authenticate, authorize('ADMIN','CO_ADMIN'), updateUser);
+router.put('/users/:id', authenticate, authorize('ADMIN'), updateUser);
 
 // DELETE /api/auth/users/:id  (ADMIN only)
-router.delete('/users/:id', authenticate, authorize('ADMIN','CO_ADMIN'), deleteUser);
+router.delete('/users/:id', authenticate, authorize('ADMIN'), deleteUser);
 
 module.exports = router;

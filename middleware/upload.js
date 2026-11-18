@@ -1,10 +1,24 @@
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const multer = require("multer");
 const sharp = require("sharp");
 
 const uploadsDirectory = path.join(__dirname, "..", "uploads");
 fs.mkdirSync(uploadsDirectory, { recursive: true });
+
+const ALLOWED_IMAGE_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+const ALLOWED_VIDEO_TYPES = new Set(["video/mp4", "video/webm"]);
+const MAX_UPLOAD_BYTES = Math.max(
+  1024 * 1024,
+  Number(process.env.MAX_PUBLIC_UPLOAD_BYTES || 50 * 1024 * 1024)
+);
 
 const safeBaseName = (fileName = "upload") =>
   path
@@ -18,20 +32,27 @@ const storage = multer.diskStorage({
     callback(null, uploadsDirectory);
   },
   filename: (_req, file, callback) => {
-    const extension = path.extname(file.originalname).toLowerCase();
+    const mediaType = String(file.mimetype || "").toLowerCase();
+    const extension =
+      mediaType === "video/mp4"
+        ? ".mp4"
+        : mediaType === "video/webm"
+          ? ".webm"
+          : path.extname(file.originalname).toLowerCase();
     callback(
       null,
-      `${Date.now()}-${safeBaseName(file.originalname)}${extension}`
+      `${Date.now()}-${crypto.randomUUID()}-${safeBaseName(file.originalname)}${extension}`
     );
   },
 });
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
   fileFilter: (_req, file, callback) => {
-    const isImage = String(file.mimetype || "").startsWith("image/");
-    const isVideo = String(file.mimetype || "").startsWith("video/");
+    const mediaType = String(file.mimetype || "").toLowerCase();
+    const isImage = ALLOWED_IMAGE_TYPES.has(mediaType);
+    const isVideo = ALLOWED_VIDEO_TYPES.has(mediaType);
     callback(
       isImage || isVideo
         ? null
@@ -40,6 +61,37 @@ const upload = multer({
     );
   },
 });
+
+const hasValidVideoSignature = (buffer, mimetype) => {
+  if (mimetype === "video/webm") {
+    return (
+      buffer.length >= 4 &&
+      buffer[0] === 0x1a &&
+      buffer[1] === 0x45 &&
+      buffer[2] === 0xdf &&
+      buffer[3] === 0xa3
+    );
+  }
+
+  if (mimetype === "video/mp4") {
+    return buffer.length >= 12 && buffer.subarray(4, 8).toString() === "ftyp";
+  }
+
+  return false;
+};
+
+const validateUploadedVideo = async (file) => {
+  const handle = await fs.promises.open(file.path, "r");
+  try {
+    const header = Buffer.alloc(16);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (!hasValidVideoSignature(header.subarray(0, bytesRead), file.mimetype)) {
+      throw new Error("The selected video is invalid or unsupported.");
+    }
+  } finally {
+    await handle.close();
+  }
+};
 
 const optimizeUploadedImage = async (file) => {
   if (!file || !String(file.mimetype || "").startsWith("image/")) return file;
@@ -88,6 +140,7 @@ const optimizeUploadedImage = async (file) => {
     };
   } catch (error) {
     await fs.promises.unlink(temporaryPath).catch(() => {});
+    await fs.promises.unlink(file.path).catch(() => {});
     throw new Error(`Image optimization failed: ${error.message}`);
   }
 };
@@ -98,12 +151,24 @@ const uploadMiddleware = (fieldName) => (req, res, next) => {
     if (!req.file) return next();
 
     try {
-      req.file = await optimizeUploadedImage(req.file);
+      if (String(req.file.mimetype || "").startsWith("video/")) {
+        await validateUploadedVideo(req.file);
+      } else {
+        req.file = await optimizeUploadedImage(req.file);
+      }
       return next();
     } catch (error) {
+      await fs.promises.unlink(req.file.path).catch(() => {});
+      error.statusCode = 400;
       return next(error);
     }
   });
 };
 
-module.exports = { uploadMiddleware, optimizeUploadedImage };
+module.exports = {
+  ALLOWED_IMAGE_TYPES,
+  ALLOWED_VIDEO_TYPES,
+  hasValidVideoSignature,
+  uploadMiddleware,
+  optimizeUploadedImage,
+};

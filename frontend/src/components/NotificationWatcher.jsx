@@ -100,42 +100,77 @@ export default function NotificationWatcher({ user, token, onNotify }) {
 
     const orderSnapshotKey = `store-management:notifications:orders:${user.id}`;
     const productSnapshotKey = `store-management:notifications:products:${user.id}`;
+    const stockoutSnapshotKey = `store-management:notifications:stockouts:${user.id}`;
     let cancelled = false;
 
     const checkAdminOrders = async () => {
-      const result = await api.getOrders(token, { limit: NOTIFICATION_ORDER_LIMIT });
+      const [result, stockoutResult] = await Promise.all([
+        api.getOrders(token, { limit: NOTIFICATION_ORDER_LIMIT }),
+        api.getStockoutAlerts(token),
+      ]);
       const orders = result.data || [];
+      const stockoutAlerts = stockoutResult.data || [];
       const snapshot = readSnapshot(orderSnapshotKey, null);
+      const stockoutSnapshot = readSnapshot(stockoutSnapshotKey, null);
       const currentOrderIds = orders.map((order) => Number(order.id)).filter(Boolean);
 
       if (!snapshot) {
         writeSnapshot(orderSnapshotKey, { orderIds: currentOrderIds });
-        return;
+      } else {
+        const seen = new Set(snapshot.orderIds || []);
+        const newOrders = orders
+          .filter((order) => !seen.has(Number(order.id)))
+          .sort((a, b) => Number(a.id) - Number(b.id));
+
+        newOrders.forEach((order) => {
+          const time = formatTime(order.order_placed_at || order.created_at || order.createdAt);
+          const notification = {
+            unique_key: `admin:new-order:${order.id}`,
+            tone: "info",
+            title: "New order placed",
+            message: `${order.created_by_name || order.customer_name || "User"} placed an order at ${time}. Items: ${getOrderItemSummary(order)}.`,
+          };
+
+          showToast({
+            ...notification,
+            duration: 7000,
+          });
+          onNotify?.(notification);
+          playSound();
+        });
       }
 
-      const seen = new Set(snapshot.orderIds || []);
-      const newOrders = orders
-        .filter((order) => !seen.has(Number(order.id)))
-        .sort((a, b) => Number(a.id) - Number(b.id));
+      writeSnapshot(orderSnapshotKey, { orderIds: currentOrderIds });
 
-      newOrders.forEach((order) => {
-        const time = formatTime(order.order_placed_at || order.created_at || order.createdAt);
-        const notification = {
-          unique_key: `admin:new-order:${order.id}`,
-          tone: "info",
-          title: "New order placed",
-          message: `${order.created_by_name || order.customer_name || "User"} placed an order at ${time}. Items: ${getOrderItemSummary(order)}.`,
-        };
-
-        showToast({
-          ...notification,
-          duration: 7000,
-        });
-        onNotify?.(notification);
-        playSound();
+      const previousStockoutCounts = stockoutSnapshot?.counts || {};
+      const currentStockoutCounts = Object.fromEntries(
+        stockoutAlerts.map((product) => [
+          Number(product.id),
+          Number(product.stockout_cycles_since_check || 0),
+        ])
+      );
+      const alertsToNotify = stockoutAlerts.filter((product) => {
+        const previous = Number(previousStockoutCounts[Number(product.id)] || 0);
+        return Number(product.stockout_cycles_since_check || 0) > previous;
       });
 
-      writeSnapshot(orderSnapshotKey, { orderIds: currentOrderIds });
+      alertsToNotify.forEach((product) => {
+        const cycles = Number(product.stockout_cycles_since_check || 0);
+        const productName = [product.article_code || product.name, product.color]
+          .filter(Boolean)
+          .join(" / ");
+        const notification = {
+          unique_key: `admin:stockout:${product.id}:${cycles}:${product.last_stockout_at || "current"}`,
+          tone: cycles >= 5 ? "error" : "warning",
+          title: cycles >= 5 ? "Physical stock check required" : "Repeated stockout warning",
+          message: `${productName || `Product #${product.id}`} has reached physical zero ${cycles} times since its last physical check.`,
+        };
+
+        showToast({ ...notification, duration: cycles >= 5 ? 12000 : 8000 });
+        onNotify?.(notification);
+      });
+      if (alertsToNotify.length) playSound();
+      writeSnapshot(stockoutSnapshotKey, { counts: currentStockoutCounts });
     };
 
     const checkCustomerUpdates = async () => {

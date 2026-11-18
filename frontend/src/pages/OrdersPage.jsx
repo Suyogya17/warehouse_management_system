@@ -1407,7 +1407,8 @@ export default function OrdersPage() {
         throw new Error("This order has no current warehouse delivery notes to export.");
       }
 
-      const XLSX = await import("xlsx-js-style");
+      const xlsxModule = await import("xlsx-js-style");
+      const XLSX = xlsxModule.default || xlsxModule;
       const cleanSheetName = (value, index) => {
         const cleaned = String(value || `DN ${index + 1}`)
           .replace(/[\\/?*:[\]]/g, "-")

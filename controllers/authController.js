@@ -15,6 +15,17 @@ const { clearCache } = require('../middleware/cacheMiddleware');
 const {
   splitParentDealerAllocations,
 } = require('../services/subDealerAllocationService');
+const {
+  invalidateAuthenticatedUser,
+} = require('../middleware/authMiddleware');
+
+const ALLOWED_USER_ROLES = new Set([
+  'ADMIN',
+  'CO_ADMIN',
+  'MEMBER',
+  'USER',
+  'ELDER',
+]);
 
 const DEFAULT_EXCHANGE_RATES = {
   NPR: 1,
@@ -165,6 +176,13 @@ const register = async (req, res, next) => {
     const parentSharePercentage = Number(parent_allocation_percentage || 0);
     const creatingShareholderShop = parentDealerId > 0;
     let copiedProductIds = [];
+
+    if (!ALLOWED_USER_ROLES.has(normalizedRole)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user role.',
+      });
+    }
 
     if (creatingShareholderShop) {
       if (normalizedRole !== 'USER') {
@@ -462,7 +480,7 @@ const login = async (req, res, next) => {
         currency_code: user.currency_code,
       },
       process.env.JWT_SECRET,
-      { expiresIn: '2h' }
+      { expiresIn: process.env.JWT_EXPIRES_IN || '2h' }
     );
 
     const userPayload = await buildUserPayload(user);
@@ -528,7 +546,24 @@ const updateUser = async (req, res, next) => {
       percentage_product_markup,
       non_commission_product_markup,
     } = req.body;
-    const userId = req.params.id;
+    const userId = Number(req.params.id);
+    const normalizedRole = role
+      ? String(role).trim().toUpperCase()
+      : null;
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID.',
+      });
+    }
+
+    if (normalizedRole && !ALLOWED_USER_ROLES.has(normalizedRole)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user role.',
+      });
+    }
     const [supportsExchangeRate, supportsRegularPriceMarkup, supportsPercentageProductMarkup, supportsNonCommissionProductMarkup] = await Promise.all([
       hasColumn('users', 'exchange_rate'),
       hasColumn('users', 'regular_price_markup'),
@@ -548,7 +583,7 @@ const updateUser = async (req, res, next) => {
       name,
       email,
       null,
-      role ? role.toUpperCase() : null,
+      normalizedRole,
       country_code ? locale.countryCode : null,
       currency_code ? locale.currencyCode : null,
     ];
@@ -618,6 +653,7 @@ const updateUser = async (req, res, next) => {
        WHERE id = ?`,
       [...updateParams, userId]
     );
+    invalidateAuthenticatedUser(userId);
 
     await auditLog({
       userId: req.user.id,
@@ -639,7 +675,16 @@ const updateUser = async (req, res, next) => {
 // ─── DELETE USER ─────────────────────────────────────────────────────────────
 const deleteUser = async (req, res, next) => {
   try {
-    if (Number(req.params.id) === Number(req.user.id)) {
+    const userId = Number(req.params.id);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID.',
+      });
+    }
+
+    if (userId === Number(req.user.id)) {
       return res.status(400).json({
         success: false,
         message: 'Cannot delete yourself',
@@ -648,7 +693,7 @@ const deleteUser = async (req, res, next) => {
 
     const result = await query(
       'DELETE FROM users WHERE id = ?',
-      [req.params.id]
+      [userId]
     );
 
     if (result.affectedRows === 0) {
@@ -657,12 +702,13 @@ const deleteUser = async (req, res, next) => {
         message: 'User not found',
       });
     }
+    invalidateAuthenticatedUser(userId);
 
     await auditLog({
       userId: req.user.id,
       action: 'DELETED',
       tableName: 'users',
-      recordId: req.params.id,
+      recordId: userId,
       detail: `User deleted`,
     });
 

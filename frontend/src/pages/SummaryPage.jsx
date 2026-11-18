@@ -225,7 +225,8 @@ export default function SummaryPage() {
       return;
     }
 
-    const StyledXLSX = await import("xlsx-js-style");
+    const xlsxModule = await import("xlsx-js-style");
+    const StyledXLSX = xlsxModule.default || xlsxModule;
     const workbook = StyledXLSX.utils.book_new();
     const groups = new Map();
     filteredDeliveryRows.forEach((row) => {

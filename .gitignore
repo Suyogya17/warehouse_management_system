@@ -1,6 +1,10 @@
 node_modules
 .catalogue-cache/
 private_uploads/
+uploads/
+outputs/
+video_ad_output/
+video_ad_inspection/
 # Keep environment variables out of version control
 .env
 
