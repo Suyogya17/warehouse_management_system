@@ -647,8 +647,10 @@ export default function OrdersPage() {
   };
 
   const checkWarehouseProducts = (order, fulfillment) => {
-    const pendingItems = (fulfillment.items || []).filter(
-      (item) => item.allocation_status === "PLANNED"
+    const pendingItems = sortOrderItemsByName(
+      (fulfillment.items || []).filter(
+        (item) => item.allocation_status === "PLANNED"
+      )
     );
     if (!pendingItems.length) {
       showToast({
@@ -707,21 +709,25 @@ export default function OrdersPage() {
     );
   };
 
-  const setVerificationItemAction = (allocationId, action) => {
+  const selectVerificationAction = (allocationId, action) => {
     setVerificationItems((current) =>
       current.map((item) => {
         if (Number(item.allocation_id) !== Number(allocationId)) return item;
+
+        const planned = Number(item.quantity || 0);
+        const found = Number(item.deliver_quantity || 0);
         if (action === "ALL_FOUND") {
           return {
             ...item,
-            deliver_quantity: Number(item.quantity || 0),
+            deliver_quantity: planned,
             remainder_action: "DELIVER_LATER",
             target_warehouse_id: "",
           };
         }
+
         return {
           ...item,
-          deliver_quantity: 0,
+          deliver_quantity: found >= planned ? 0 : found,
           remainder_action: action,
           target_warehouse_id:
             action === "FOUND_OTHER_WAREHOUSE"
@@ -1490,7 +1496,9 @@ export default function OrdersPage() {
           fulfillment.warehouse_slip_number ||
           `DN ${fulfillmentIndex + 1}`;
         const sourceItems = fulfillment.items || [];
-        const rowsPerPage = 25;
+        // Leave enough vertical room for totals, signatures, and a handwritten
+        // remarks box without shrinking the delivery note during A4 printing.
+        const rowsPerPage = 22;
         const itemPages = [];
         for (let itemIndex = 0; itemIndex < sourceItems.length; itemIndex += rowsPerPage) {
           itemPages.push(sourceItems.slice(itemIndex, itemIndex + rowsPerPage));
@@ -1546,6 +1554,13 @@ export default function OrdersPage() {
               pairs,
             ];
           });
+          const itemStartRowIndex = 9;
+          const itemEndRowIndex = itemStartRowIndex + rowsPerPage - 1;
+          const pageTotalRowIndex = itemEndRowIndex + 1;
+          const warehouseTotalRowIndex = pageTotalRowIndex + 1;
+          const spacerRowIndex = warehouseTotalRowIndex + 1;
+          const signatureRowIndex = spacerRowIndex + 1;
+          const remarksRowIndex = signatureRowIndex + 1;
           const sheetRows = [
             ["DELIVERY NOTE", "", "", "", "", "", "", `Page ${pageIndex + 1} of ${itemPages.length}`],
             [`${dnNumber} · ${fulfillment.name || "Warehouse"} · Overall Total: ${formatPrintNumber(overallCartons)} CTN`, "", "", "", "", "", "", ""],
@@ -1561,6 +1576,7 @@ export default function OrdersPage() {
             [`${fulfillment.name || "Warehouse"} total`, "", "", "", "", "", overallCartons, overallPairs],
             ["", "", "", "", "", "", "", ""],
             ["___________________\nPacked / Delivered By", "", "___________________\nChecked By", "", "", "", "___________________\nReceived By", ""],
+            ["Remarks:\n\n", "", "", "", "", "", "", ""],
           ];
           const sheet = XLSX.utils.aoa_to_sheet(sheetRows);
           sheet["!merges"] = [
@@ -1568,11 +1584,12 @@ export default function OrdersPage() {
             { s: { r: 1, c: 0 }, e: { r: 1, c: 7 } },
             { s: { r: 2, c: 0 }, e: { r: 7, c: 3 } },
             { s: { r: 2, c: 4 }, e: { r: 7, c: 7 } },
-            { s: { r: 34, c: 0 }, e: { r: 34, c: 5 } },
-            { s: { r: 35, c: 0 }, e: { r: 35, c: 5 } },
-            { s: { r: 37, c: 0 }, e: { r: 37, c: 1 } },
-            { s: { r: 37, c: 2 }, e: { r: 37, c: 5 } },
-            { s: { r: 37, c: 6 }, e: { r: 37, c: 7 } },
+            { s: { r: pageTotalRowIndex, c: 0 }, e: { r: pageTotalRowIndex, c: 5 } },
+            { s: { r: warehouseTotalRowIndex, c: 0 }, e: { r: warehouseTotalRowIndex, c: 5 } },
+            { s: { r: signatureRowIndex, c: 0 }, e: { r: signatureRowIndex, c: 1 } },
+            { s: { r: signatureRowIndex, c: 2 }, e: { r: signatureRowIndex, c: 5 } },
+            { s: { r: signatureRowIndex, c: 6 }, e: { r: signatureRowIndex, c: 7 } },
+            { s: { r: remarksRowIndex, c: 0 }, e: { r: remarksRowIndex, c: 7 } },
           ];
           sheet["!cols"] = [
             { wch: 7 },
@@ -1592,8 +1609,10 @@ export default function OrdersPage() {
                   ? 23
                   : rowIndex >= 2 && rowIndex <= 7
                     ? 18
-                    : rowIndex === 37
+                    : rowIndex === signatureRowIndex
                       ? 38
+                      : rowIndex === remarksRowIndex
+                        ? 58
                       : 20,
           }));
           sheet["!margins"] = {
@@ -1651,23 +1670,40 @@ export default function OrdersPage() {
             alignment: { horizontal: "center", vertical: "center", wrapText: true },
             border,
           });
-          applyCellStyle(sheet, "A10:H34", {
+          applyCellStyle(sheet, `A10:H${itemEndRowIndex + 1}`, {
             font: { name: "Arial", sz: 10 },
             alignment: { vertical: "center", wrapText: true },
             border,
           });
-          applyCellStyle(sheet, "A35:H36", {
+          applyCellStyle(
+            sheet,
+            `A${pageTotalRowIndex + 1}:H${warehouseTotalRowIndex + 1}`,
+            {
             font: { name: "Arial", sz: 11, bold: true },
             alignment: { vertical: "center" },
             border,
-          });
-          applyCellStyle(sheet, "G10:H36", {
+            }
+          );
+          applyCellStyle(sheet, `G10:H${warehouseTotalRowIndex + 1}`, {
             alignment: { horizontal: "right", vertical: "center" },
           });
-          applyCellStyle(sheet, "A38:H38", {
+          applyCellStyle(
+            sheet,
+            `A${signatureRowIndex + 1}:H${signatureRowIndex + 1}`,
+            {
             font: { name: "Arial", sz: 10, bold: true },
             alignment: { horizontal: "center", vertical: "bottom", wrapText: true },
-          });
+            }
+          );
+          applyCellStyle(
+            sheet,
+            `A${remarksRowIndex + 1}:H${remarksRowIndex + 1}`,
+            {
+              font: { name: "Arial", sz: 11, bold: true },
+              alignment: { horizontal: "left", vertical: "top", wrapText: true },
+              border,
+            }
+          );
 
           const baseSheetName = `${dnNumber}${
             itemPages.length > 1 ? ` P${pageIndex + 1}` : ""
@@ -1947,8 +1983,8 @@ export default function OrdersPage() {
     // Each actual warehouse starts on its own paper. A warehouse only continues
     // onto another paper when its own item count cannot fit safely on one A4 page.
     // Windows and macOS Chrome use slightly different print font metrics.
-    // Twenty rows leaves enough room for totals and signatures on both.
-    const rowsPerPage = 20;
+    // Eighteen rows leaves enough room for totals, signatures, and remarks on both.
+    const rowsPerPage = 18;
     const pages = groups.flatMap((group) => {
       const chunks = [];
       for (let index = 0; index < group.rows.length; index += rowsPerPage) {
@@ -2038,6 +2074,7 @@ export default function OrdersPage() {
               <div>___________________<br/>Checked By</div>
               <div>___________________<br/>Received By</div>
             </div>
+            <div class="remarks"><strong>Remarks:</strong></div>
           </section>`;
       })
       .join("");
@@ -2116,7 +2153,8 @@ export default function OrdersPage() {
             .totals .label { text-align: right; }
             .signature { margin-top: 22px; display: flex; justify-content: space-between; }
             .signature div { width: 30%; text-align: center; font-size: 15px; line-height: 1.5; }
-            tr, .totals, .signature { break-inside: avoid; page-break-inside: avoid; }
+            .remarks { margin-top: 12px; min-height: 58px; border: 1.5px solid #111; padding: 7px 9px; font-size: 15px; }
+            tr, .totals, .signature, .remarks { break-inside: avoid; page-break-inside: avoid; }
             @media print {
               html, body { width: 210mm; }
               .print-page { min-height: 260mm; }
@@ -2139,7 +2177,8 @@ export default function OrdersPage() {
         const tbody = pageElement.querySelector(".items tbody");
         const totalsTable = pageElement.querySelector(".totals");
         const signature = pageElement.querySelector(".signature");
-        if (!rows.length || !tbody || !totalsTable || !signature) return;
+        const remarks = pageElement.querySelector(".remarks");
+        if (!rows.length || !tbody || !totalsTable || !signature || !remarks) return;
 
         rows.forEach((row) => {
           row.style.height = "auto";
@@ -2149,8 +2188,10 @@ export default function OrdersPage() {
         const tbodyRect = tbody.getBoundingClientRect();
         const totalsStyle = printWindow.getComputedStyle(totalsTable);
         const signatureStyle = printWindow.getComputedStyle(signature);
+        const remarksStyle = printWindow.getComputedStyle(remarks);
         const totalsMarginTop = Number.parseFloat(totalsStyle.marginTop) || 0;
         const signatureMarginTop = Number.parseFloat(signatureStyle.marginTop) || 0;
+        const remarksMarginTop = Number.parseFloat(remarksStyle.marginTop) || 0;
         const naturalRowHeight = Math.max(
           ...rows.map((row) => row.getBoundingClientRect().height)
         );
@@ -2159,6 +2200,8 @@ export default function OrdersPage() {
           totalsMarginTop +
           signature.getBoundingClientRect().height +
           signatureMarginTop +
+          remarks.getBoundingClientRect().height +
+          remarksMarginTop +
           16;
         const availableRowsHeight = Math.max(
           0,
@@ -3745,7 +3788,7 @@ export default function OrdersPage() {
           <form
             onSubmit={submitWarehouseVerification}
             onMouseDown={(event) => event.stopPropagation()}
-            className="max-h-[92vh] w-full max-w-4xl space-y-5 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"
+            className="max-h-[92vh] w-full max-w-6xl space-y-5 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"
           >
             <div>
               <h2 className="text-lg font-bold text-slate-950">
@@ -3756,151 +3799,114 @@ export default function OrdersPage() {
               </p>
             </div>
 
-            <div className="space-y-3">
-              {verificationItems.map((item) => {
-                const planned = Number(item.quantity || 0);
-                const deliverNow = Number(item.deliver_quantity || 0);
-                const remaining = Math.max(0, planned - deliverNow);
-                return (
-                  <div key={item.allocation_id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
-                      <div>
-                        <div className="font-bold text-slate-950">
-                          {item.article_code || item.product_name}
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          {[item.product_name, item.color, item.size].filter(Boolean).join(" · ")}
-                        </div>
-                      </div>
-                      <div className="rounded-lg bg-white px-3 py-1 text-sm font-semibold text-slate-700">
-                        Planned: {formatNumber(planned)} pairs
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3 md:grid-cols-[1fr_1fr_1.4fr]">
-                      <Field label="Found and ready (pairs)">
-                        <TextInput
-                          type="number"
-                          min="0"
-                          max={planned}
-                          step="1"
-                          required
-                          value={item.deliver_quantity}
-                          onChange={(event) =>
-                            updateVerificationItem(item.allocation_id, "deliver_quantity", event.target.value)
-                          }
-                        />
-                      </Field>
-                      <Field label={`Remaining (${formatNumber(remaining)})`}>
-                        <SelectInput
-                          value={item.remainder_action}
-                          disabled={remaining <= 0}
-                          onChange={(event) =>
-                            updateVerificationItem(item.allocation_id, "remainder_action", event.target.value)
-                          }
-                        >
-                          <option value="DELIVER_LATER">Deliver later</option>
-                          <option value="NOT_FOUND">Not found — recheck later</option>
-                          <option value="OUT_OF_STOCK">Close as out of stock</option>
-                          <option value="FOUND_OTHER_WAREHOUSE">Found in another warehouse</option>
-                        </SelectInput>
-                      </Field>
-                      <Field label="Warehouse note">
-                        <TextInput
-                          value={item.note}
-                          maxLength={500}
-                          onChange={(event) =>
-                            updateVerificationItem(item.allocation_id, "note", event.target.value)
-                          }
-                          placeholder="Optional physical-count note"
-                        />
-                      </Field>
-                    </div>
-                    {remaining > 0 && item.remainder_action === "FOUND_OTHER_WAREHOUSE" ? (
-                      <div className="mt-3 max-w-sm">
-                        <Field label="Found in warehouse">
-                          <SelectInput
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full min-w-[940px] border-collapse text-sm">
+                <thead>
+                  <tr className="bg-slate-100 text-left text-xs font-bold uppercase tracking-wide text-slate-600">
+                    <th className="w-14 border-b border-r border-slate-200 px-3 py-3 text-center">S.N.</th>
+                    <th className="min-w-[230px] border-b border-r border-slate-200 px-3 py-3">Product</th>
+                    <th className="w-28 border-b border-r border-slate-200 px-3 py-3 text-center">Planned</th>
+                    <th className="w-32 border-b border-r border-slate-200 px-3 py-3 text-center">Found</th>
+                    <th className="min-w-[240px] border-b border-r border-slate-200 px-3 py-3">Remaining action</th>
+                    <th className="min-w-[210px] border-b border-slate-200 px-3 py-3">Warehouse note</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {verificationItems.map((item, index) => {
+                    const planned = Number(item.quantity || 0);
+                    const found = Number(item.deliver_quantity || 0);
+                    const remaining = Math.max(0, planned - found);
+                    return (
+                      <tr key={item.allocation_id} className="align-middle odd:bg-white even:bg-slate-50/70">
+                        <td className="border-b border-r border-slate-200 px-3 py-3 text-center font-bold text-slate-700">
+                          {index + 1}
+                        </td>
+                        <td className="border-b border-r border-slate-200 px-3 py-3">
+                          <div className="font-bold text-slate-950">
+                            {item.article_code || item.product_name}
+                          </div>
+                          <div className="mt-0.5 text-xs text-slate-500">
+                            {[item.product_name, item.color, item.size].filter(Boolean).join(" · ")}
+                          </div>
+                        </td>
+                        <td className="border-b border-r border-slate-200 px-3 py-3 text-center font-semibold text-slate-800">
+                          {formatNumber(planned)} pairs
+                        </td>
+                        <td className="border-b border-r border-slate-200 px-3 py-3">
+                          <TextInput
+                            className="h-11 w-full min-w-[128px] rounded-lg px-3 py-2 text-center text-base font-semibold shadow-none"
+                            aria-label={`Found pairs for ${item.article_code || item.product_name}`}
+                            type="number"
+                            min="0"
+                            max={planned}
+                            step="1"
                             required
-                            value={item.target_warehouse_id}
+                            value={item.deliver_quantity}
                             onChange={(event) =>
-                              updateVerificationItem(item.allocation_id, "target_warehouse_id", event.target.value)
+                              updateVerificationItem(item.allocation_id, "deliver_quantity", event.target.value)
+                            }
+                          />
+                        </td>
+                        <td className="border-b border-r border-slate-200 px-3 py-3">
+                          <div className={`mb-1.5 text-xs font-semibold ${remaining > 0 ? "text-amber-700" : "text-emerald-700"}`}>
+                            {remaining > 0 ? `${formatNumber(remaining)} pairs remaining` : "Complete"}
+                          </div>
+                          <SelectInput
+                            className="rounded-lg px-3 py-2 text-sm shadow-none"
+                            aria-label={`Remaining action for ${item.article_code || item.product_name}`}
+                            value={remaining <= 0 ? "ALL_FOUND" : item.remainder_action}
+                            onChange={(event) =>
+                              selectVerificationAction(item.allocation_id, event.target.value)
                             }
                           >
-                            <option value="">Select destination warehouse</option>
-                            {warehouses
-                              .filter(
-                                (warehouse) =>
-                                  Number(warehouse.id) !==
-                                    Number(verificationWarehouse.fulfillment.warehouse_id) &&
-                                  Number(warehouse.is_active) !== 0
-                              )
-                              .map((warehouse) => (
-                                <option key={warehouse.id} value={warehouse.id}>
-                                  {warehouse.name}
-                                </option>
-                              ))}
+                            <option value="ALL_FOUND">All found</option>
+                            <option value="DELIVER_LATER">Deliver later</option>
+                            <option value="NOT_FOUND">Not found — recheck later</option>
+                            <option value="OUT_OF_STOCK">Close as out of stock</option>
+                            <option value="FOUND_OTHER_WAREHOUSE">Found in another warehouse</option>
                           </SelectInput>
-                        </Field>
-                      </div>
-                    ) : null}
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() =>
-                          setVerificationItemAction(item.allocation_id, "ALL_FOUND")
-                        }
-                      >
-                        All found
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() =>
-                          setVerificationItemAction(item.allocation_id, "DELIVER_LATER")
-                        }
-                      >
-                        Deliver later
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="danger"
-                        onClick={() =>
-                          setVerificationItemAction(item.allocation_id, "NOT_FOUND")
-                        }
-                      >
-                        Not found
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="danger"
-                        onClick={() =>
-                          setVerificationItemAction(item.allocation_id, "OUT_OF_STOCK")
-                        }
-                      >
-                        Out of stock
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() =>
-                          setVerificationItemAction(
-                            item.allocation_id,
-                            "FOUND_OTHER_WAREHOUSE"
-                          )
-                        }
-                      >
-                        Found in another warehouse
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
+                          {remaining > 0 && item.remainder_action === "FOUND_OTHER_WAREHOUSE" ? (
+                            <SelectInput
+                              required
+                              className="mt-2 rounded-lg px-3 py-2 text-sm shadow-none"
+                              aria-label={`Destination warehouse for ${item.article_code || item.product_name}`}
+                              value={item.target_warehouse_id}
+                              onChange={(event) =>
+                                updateVerificationItem(item.allocation_id, "target_warehouse_id", event.target.value)
+                              }
+                            >
+                              <option value="">Select destination warehouse</option>
+                              {warehouses
+                                .filter(
+                                  (warehouse) =>
+                                    Number(warehouse.id) !== Number(verificationWarehouse.fulfillment.warehouse_id) &&
+                                    Number(warehouse.is_active) !== 0
+                                )
+                                .map((warehouse) => (
+                                  <option key={warehouse.id} value={warehouse.id}>
+                                    {warehouse.name}
+                                  </option>
+                                ))}
+                            </SelectInput>
+                          ) : null}
+                        </td>
+                        <td className="border-b border-slate-200 px-3 py-3">
+                          <TextInput
+                            className="rounded-lg px-3 py-2 shadow-none"
+                            aria-label={`Warehouse note for ${item.article_code || item.product_name}`}
+                            value={item.note}
+                            maxLength={500}
+                            onChange={(event) =>
+                              updateVerificationItem(item.allocation_id, "note", event.target.value)
+                            }
+                            placeholder="Optional note"
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
 
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
