@@ -1622,6 +1622,7 @@ const getAll = async (req, res, next) => {
       supportsPerWarehouseDeliveryNotes,
       supportsOrderBsDate,
       supportsOrderFiscalYear,
+      supportsOrderFiscalYearId,
       supportsParentDealer,
       supportsCommissionFlag,
       supportsNClassification,
@@ -1639,6 +1640,7 @@ const getAll = async (req, res, next) => {
         hasTable('order_warehouse_delivery_notes'),
         hasColumn('orders', 'bs_date'),
         hasColumn('orders', 'bs_fiscal_year'),
+        hasColumn('orders', 'fiscal_year_id'),
         hasColumn('users', 'parent_dealer_id'),
         hasColumn('finished_goods', 'is_commission'),
         hasColumn('finished_goods', 'n_classification'),
@@ -1731,10 +1733,10 @@ const getAll = async (req, res, next) => {
         message: 'Fiscal year must use the format 2083/84.',
       });
     }
-    if (fiscalYear && !supportsOrderFiscalYear) {
+    if (fiscalYear && !supportsOrderFiscalYear && !supportsOrderFiscalYearId) {
       return res.status(409).json({
         success: false,
-        message: 'Fiscal-year filtering requires sql/add-nepali-fiscal-year-fields.sql.',
+        message: 'Fiscal-year filtering requires database migration 0003.',
       });
     }
     if (dateFrom) {
@@ -1754,7 +1756,13 @@ const getAll = async (req, res, next) => {
       params.push(bsDateTo);
     }
     if (fiscalYear) {
-      conditions.push('o.bs_fiscal_year = ?');
+      conditions.push(
+        supportsOrderFiscalYear && supportsOrderFiscalYearId
+          ? "COALESCE(o.bs_fiscal_year, (SELECT code FROM fiscal_years WHERE id = o.fiscal_year_id LIMIT 1)) = ?"
+          : supportsOrderFiscalYear
+            ? 'o.bs_fiscal_year = ?'
+          : 'o.fiscal_year_id = (SELECT id FROM fiscal_years WHERE code = ? LIMIT 1)'
+      );
       params.push(fiscalYear);
     }
 
@@ -1823,7 +1831,15 @@ const getAll = async (req, res, next) => {
               o.created_at,
               o.updated_at,
               ${supportsOrderBsDate ? 'o.bs_date' : 'NULL AS bs_date'},
-              ${supportsOrderFiscalYear ? 'o.bs_fiscal_year' : 'NULL AS bs_fiscal_year'},
+              ${
+                supportsOrderFiscalYear && supportsOrderFiscalYearId
+                  ? 'COALESCE(o.bs_fiscal_year, (SELECT code FROM fiscal_years WHERE id = o.fiscal_year_id LIMIT 1)) AS bs_fiscal_year'
+                  : supportsOrderFiscalYear
+                    ? 'o.bs_fiscal_year'
+                  : supportsOrderFiscalYearId
+                    ? '(SELECT code FROM fiscal_years WHERE id = o.fiscal_year_id LIMIT 1) AS bs_fiscal_year'
+                    : 'NULL AS bs_fiscal_year'
+              },
               o.stock_deducted,
               o.delivery_note_number,
               o.confirmed_by,
@@ -2149,10 +2165,137 @@ const getFilters = async (req, res, next) => {
 
 const getOverview = async (req, res, next) => {
   try {
-    const supportsWarehouseDelivery = await hasColumn(
-      'order_item_warehouse_allocations',
-      'allocation_status'
-    );
+    const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+    const dateFrom = String(req.query.date_from || '').trim();
+    const dateTo = String(req.query.date_to || '').trim();
+    const bsDateFrom = String(req.query.bs_date_from || '').trim();
+    const bsDateTo = String(req.query.bs_date_to || '').trim();
+    const fiscalYear = String(req.query.fiscal_year || '')
+      .trim()
+      .replace('-', '/');
+
+    if (dateFrom && !datePattern.test(dateFrom)) {
+      return res.status(400).json({
+        success: false,
+        message: 'English from date must use YYYY-MM-DD.',
+      });
+    }
+    if (dateTo && !datePattern.test(dateTo)) {
+      return res.status(400).json({
+        success: false,
+        message: 'English to date must use YYYY-MM-DD.',
+      });
+    }
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      return res.status(400).json({
+        success: false,
+        message: 'The English from date cannot be after the to date.',
+      });
+    }
+    if (bsDateFrom && !datePattern.test(bsDateFrom)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nepali from date must use YYYY-MM-DD.',
+      });
+    }
+    if (bsDateTo && !datePattern.test(bsDateTo)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nepali to date must use YYYY-MM-DD.',
+      });
+    }
+    if (bsDateFrom && bsDateTo && bsDateFrom > bsDateTo) {
+      return res.status(400).json({
+        success: false,
+        message: 'The Nepali from date cannot be after the to date.',
+      });
+    }
+    if (fiscalYear && !/^\d{4}\/\d{2}$/.test(fiscalYear)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Fiscal year must use the format 2083/84.',
+      });
+    }
+
+    const [
+      supportsWarehouseDelivery,
+      supportsOrderBsDate,
+      supportsOrderFiscalYear,
+      supportsOrderFiscalYearId,
+      supportsFiscalYearTable,
+      supportsAllocationDeliveredAt,
+      supportsOrderDeliveredAt,
+    ] = await Promise.all([
+      hasColumn('order_item_warehouse_allocations', 'allocation_status'),
+      hasColumn('orders', 'bs_date'),
+      hasColumn('orders', 'bs_fiscal_year'),
+      hasColumn('orders', 'fiscal_year_id'),
+      hasTable('fiscal_years'),
+      hasColumn('order_item_warehouse_allocations', 'delivered_at'),
+      hasColumn('orders', 'delivered_at'),
+    ]);
+
+    if ((bsDateFrom || bsDateTo) && !supportsOrderBsDate) {
+      return res.status(409).json({
+        success: false,
+        message: 'Nepali date filtering is not enabled for orders yet.',
+      });
+    }
+    if (
+      fiscalYear &&
+      !supportsOrderFiscalYear &&
+      !(supportsOrderFiscalYearId && supportsFiscalYearTable)
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: 'Fiscal-year filtering requires database migration 0003.',
+      });
+    }
+
+    const buildDateFilter = (alias) => {
+      const conditions = [];
+      const params = [];
+      if (dateFrom) {
+        conditions.push(`${alias}.created_at >= ?`);
+        params.push(`${dateFrom} 00:00:00`);
+      }
+      if (dateTo) {
+        conditions.push(`${alias}.created_at < DATE_ADD(?, INTERVAL 1 DAY)`);
+        params.push(dateTo);
+      }
+      if (bsDateFrom) {
+        conditions.push(`${alias}.bs_date >= ?`);
+        params.push(bsDateFrom);
+      }
+      if (bsDateTo) {
+        conditions.push(`${alias}.bs_date <= ?`);
+        params.push(bsDateTo);
+      }
+      if (fiscalYear) {
+        if (
+          supportsOrderFiscalYear &&
+          supportsOrderFiscalYearId &&
+          supportsFiscalYearTable
+        ) {
+          conditions.push(
+            `COALESCE(${alias}.bs_fiscal_year, (SELECT code FROM fiscal_years WHERE id = ${alias}.fiscal_year_id LIMIT 1)) = ?`
+          );
+        } else if (supportsOrderFiscalYear) {
+          conditions.push(`${alias}.bs_fiscal_year = ?`);
+        } else {
+          conditions.push(
+            `${alias}.fiscal_year_id = (SELECT id FROM fiscal_years WHERE code = ? LIMIT 1)`
+          );
+        }
+        params.push(fiscalYear);
+      }
+      return { conditions, params };
+    };
+
+    const statusFilter = buildDateFilter('o');
+    const statusWhere = statusFilter.conditions.length
+      ? `WHERE ${statusFilter.conditions.join(' AND ')}`
+      : '';
     const deliveredQuantityExpr = supportsWarehouseDelivery
       ? 'COALESCE(delivered_allocation.delivered_quantity, 0)'
       : '0';
@@ -2218,8 +2361,90 @@ const getOverview = async (req, res, next) => {
               ) delivered_allocation ON delivered_allocation.order_item_id = oi.id`
            : ''
        }
-       GROUP BY UPPER(o.status)`
+       ${statusWhere}
+       GROUP BY UPPER(o.status)`,
+      statusFilter.params
     );
+
+    // Order workflow stages belong to the order's fiscal year, but delivered
+    // quantities belong to the year in which the warehouse actually delivered
+    // them. This matters around year-end: an Ashadh order delivered in Shrawan
+    // must appear in the following year's delivery total.
+    let fiscalDeliverySummary = null;
+    let fiscalDeliveryPeriod = null;
+    let fiscalDeliveryBasis = null;
+    if (fiscalYear && supportsFiscalYearTable) {
+      const fiscalYearRows = await query(
+        `SELECT id, code,
+                DATE_FORMAT(ad_start_date, '%Y-%m-%d') AS ad_start_date,
+                DATE_FORMAT(ad_end_date, '%Y-%m-%d') AS ad_end_date
+         FROM fiscal_years
+         WHERE code = ?
+         LIMIT 1`,
+        [fiscalYear]
+      );
+      const selectedFiscalYear = fiscalYearRows[0];
+      if (!selectedFiscalYear) {
+        return res.status(400).json({
+          success: false,
+          message: `Fiscal year ${fiscalYear} is not configured.`,
+        });
+      }
+
+      fiscalDeliveryPeriod = {
+        fiscal_year: selectedFiscalYear.code,
+        ad_start_date: selectedFiscalYear.ad_start_date,
+        ad_end_date: selectedFiscalYear.ad_end_date,
+      };
+
+      if (supportsWarehouseDelivery && supportsAllocationDeliveredAt) {
+        const deliveryTimestampExpr = supportsOrderDeliveredAt
+          ? 'COALESCE(allocation.delivered_at, o.delivered_at)'
+          : 'allocation.delivered_at';
+        const rows = await query(
+          `SELECT COUNT(DISTINCT oi.order_id) AS order_count,
+                  COALESCE(SUM(allocation.quantity), 0) AS pairs,
+                  COALESCE(SUM(
+                    CASE
+                      WHEN COALESCE(fg.inner_boxes_per_outer_box, 0) > 0
+                        THEN allocation.quantity / fg.inner_boxes_per_outer_box
+                      ELSE 0
+                    END
+                  ), 0) AS cartons
+           FROM order_item_warehouse_allocations allocation
+           JOIN order_items oi ON oi.id = allocation.order_item_id
+           JOIN orders o ON o.id = oi.order_id
+           JOIN finished_goods fg ON fg.id = oi.finished_good_id
+           WHERE allocation.allocation_status = 'DEDUCTED'
+             AND ${deliveryTimestampExpr} >= ?
+             AND ${deliveryTimestampExpr} < DATE_ADD(?, INTERVAL 1 DAY)`,
+          [selectedFiscalYear.ad_start_date, selectedFiscalYear.ad_end_date]
+        );
+        fiscalDeliverySummary = rows[0] || null;
+        fiscalDeliveryBasis = 'WAREHOUSE_DELIVERY_DATE';
+      } else if (supportsOrderDeliveredAt) {
+        const rows = await query(
+          `SELECT COUNT(DISTINCT o.id) AS order_count,
+                  COALESCE(SUM(oi.qty_ordered), 0) AS pairs,
+                  COALESCE(SUM(
+                    CASE
+                      WHEN COALESCE(fg.inner_boxes_per_outer_box, 0) > 0
+                        THEN oi.qty_ordered / fg.inner_boxes_per_outer_box
+                      ELSE 0
+                    END
+                  ), 0) AS cartons
+           FROM orders o
+           JOIN order_items oi ON oi.order_id = o.id
+           JOIN finished_goods fg ON fg.id = oi.finished_good_id
+           WHERE UPPER(o.status) = 'DELIVERED'
+             AND o.delivered_at >= ?
+             AND o.delivered_at < DATE_ADD(?, INTERVAL 1 DAY)`,
+          [selectedFiscalYear.ad_start_date, selectedFiscalYear.ad_end_date]
+        );
+        fiscalDeliverySummary = rows[0] || null;
+        fiscalDeliveryBasis = 'ORDER_DELIVERY_DATE';
+      }
+    }
 
     const [
       supportsActionType,
@@ -2248,6 +2473,10 @@ const getOverview = async (req, res, next) => {
     const userNameExpr = supportsUserName ? 'al.user_name' : 'NULL';
     const userRoleExpr = supportsUserRole ? 'al.user_role' : 'NULL';
 
+    const transitionFilter = buildDateFilter('order_row');
+    const transitionWhere = transitionFilter.conditions.length
+      ? `AND ${transitionFilter.conditions.join(' AND ')}`
+      : '';
     const recentRows = await query(
       `SELECT al.id,
               ${actionExpr} AS action_type,
@@ -2265,8 +2494,10 @@ const getOverview = async (req, res, next) => {
          AND UPPER(COALESCE(${actionExpr}, '')) IN (
            'CONFIRMED', 'PACKED', 'DELIVERED', 'CANCELLED', 'UPDATE'
          )
+         ${transitionWhere}
        ORDER BY al.created_at DESC, al.id DESC
-       LIMIT 100`
+       LIMIT 100`,
+      transitionFilter.params
     );
 
     const fallbackTransitions = {
@@ -2327,11 +2558,33 @@ const getOverview = async (req, res, next) => {
       return summary;
     }, {});
 
+    if (fiscalDeliverySummary) {
+      const deliveredPairs = Number(fiscalDeliverySummary.pairs || 0);
+      const deliveredCartons = Number(fiscalDeliverySummary.cartons || 0);
+      statusSummary.DELIVERED = {
+        ...(statusSummary.DELIVERED || {}),
+        orders: Number(fiscalDeliverySummary.order_count || 0),
+        cartons: deliveredCartons,
+        pairs: deliveredPairs,
+        already_delivered_cartons: deliveredCartons,
+        already_delivered_pairs: deliveredPairs,
+        delivery_basis: fiscalDeliveryBasis,
+      };
+    }
+
     return res.json({
       success: true,
       data: {
         statuses: statusSummary,
         recent_transitions: recentTransitions,
+        fiscal_delivery_period: fiscalDeliveryPeriod,
+        filters: {
+          date_from: dateFrom || null,
+          date_to: dateTo || null,
+          bs_date_from: bsDateFrom || null,
+          bs_date_to: bsDateTo || null,
+          fiscal_year: fiscalYear || null,
+        },
       },
     });
   } catch (err) {
@@ -7289,7 +7542,16 @@ const logWarehouseBilling = async (req, res, next) => {
     const rows=await query('SELECT COUNT(*) AS count FROM warehouse_billing_history WHERE order_id=? AND warehouse_id=?',[orderId,warehouseId]);
     const count=Number(rows[0]?.count||0);
     if(count && req.body?.confirm_rebill!==true) return res.status(409).json({success:false,message:`Bill already created ${count} time${count===1?'':'s'}. Confirm only if correcting a human error.`,data:{billing_count:count}});
-    await query('INSERT INTO warehouse_billing_history (order_id,warehouse_id,delivery_note_number,created_by,output_type,invoice_number,final_total) VALUES (?,?,?,?,?,?,?)',[orderId,warehouseId,req.body?.delivery_note_number||null,req.user.id,req.body?.output_type||'PDF',req.body?.invoice_number||null,Number(req.body?.final_total||0)]);
+    const billingInsert = await appendFiscalInsertFields(
+      'warehouse_billing_history',
+      ['order_id', 'warehouse_id', 'delivery_note_number', 'created_by', 'output_type', 'invoice_number', 'final_total'],
+      [orderId, warehouseId, req.body?.delivery_note_number || null, req.user.id, req.body?.output_type || 'PDF', req.body?.invoice_number || null, Number(req.body?.final_total || 0)]
+    );
+    await query(
+      `INSERT INTO warehouse_billing_history (${billingInsert.columns.join(', ')})
+       VALUES (${billingInsert.columns.map(() => '?').join(', ')})`,
+      billingInsert.values
+    );
     return res.json({success:true,data:{billing_count:count+1}});
   } catch(err){ next(err); }
 };

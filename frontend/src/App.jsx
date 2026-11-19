@@ -49,6 +49,7 @@ const ChatPage = lazy(() => import("./pages/ChatPage"));
 const PartyOrderReportPage = lazy(() => import("./pages/PartyOrderReportPage"));
 const OrderShortageHistoryPage = lazy(() => import("./pages/OrderShortageHistoryPage"));
 const WarehouseBillingPage = lazy(() => import("./pages/WarehouseBillingPage"));
+const FiscalYearsPage = lazy(() => import("./pages/FiscalYearsPage"));
 
 const PageFallback = () => <NepchaLoader />;
 
@@ -400,6 +401,14 @@ export default function App() {
           element={
             <ProtectedRoute roles={["ADMIN"]}>
               {withSuspense(<UsersPage />)}
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="fiscal-years"
+          element={
+            <ProtectedRoute roles={["ADMIN"]}>
+              {withSuspense(<FiscalYearsPage />)}
             </ProtectedRoute>
           }
         />

@@ -29,6 +29,7 @@ const importTrackingRoutes = require("./routes/importTrackingRoutes");
 const catalogueRoutes = require("./routes/catalogueRoutes");
 const productInterestRoutes = require("./routes/productInterestRoutes");
 const chatRoutes = require("./routes/chatRoutes");
+const fiscalYearRoutes = require("./routes/fiscalYearRoutes");
 
 const app = express();
 
@@ -168,6 +169,7 @@ app.use("/api/import-tracking", importTrackingRoutes);
 app.use("/api/catalogues", catalogueRoutes);
 app.use("/api/product-interest", productInterestRoutes);
 app.use("/api/chat", chatRoutes);
+app.use("/api/fiscal-years", fiscalYearRoutes);
 
 /* ─────────────────────────────
    ROOT ENDPOINT
@@ -214,7 +216,16 @@ const startServer = async () => {
   });
 };
 
-if (require.main === module) {
+// LiteSpeed/CloudLinux's `lsnode` wrapper can load the configured startup file
+// instead of executing it as Node's main module. In that environment
+// `require.main === module` is false, so the old guard created a worker that
+// never called listen() and the public API returned 503. Production is always
+// an application runtime; tests and development imports still remain inert.
+const shouldStartServer =
+  require.main === module ||
+  String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
+
+if (shouldStartServer) {
   startServer().catch((error) => {
     console.error("Server startup failed:", error);
     process.exitCode = 1;

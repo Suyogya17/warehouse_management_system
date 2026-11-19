@@ -35,11 +35,22 @@ const getPaginationMeta =
     total_pages: Math.max(1, Math.ceil(Number(total || 0) / pageSize)),
   }));
 const { hasOfferCampaignSchema } = require('../utils/offerCampaigns');
-const {
-  STOCKOUT_WARNING_THRESHOLD,
-  hasStockoutMonitoringSchema,
-  loadStockoutMonitoring,
-} = require('../services/stockoutMonitoringService');
+const stockoutMonitoringService = require('../services/stockoutMonitoringService');
+const STOCKOUT_WARNING_THRESHOLD = Number(
+  stockoutMonitoringService.STOCKOUT_WARNING_THRESHOLD || 2
+);
+// Keep the catalogue usable during a rolling or incomplete deployment. The
+// endpoint reports tracking_available=false until the matching service and
+// schema reach the server, instead of crashing the entire dashboard with a
+// TypeError.
+const hasStockoutMonitoringSchema =
+  typeof stockoutMonitoringService.hasStockoutMonitoringSchema === 'function'
+    ? stockoutMonitoringService.hasStockoutMonitoringSchema
+    : async () => false;
+const loadStockoutMonitoring =
+  typeof stockoutMonitoringService.loadStockoutMonitoring === 'function'
+    ? stockoutMonitoringService.loadStockoutMonitoring
+    : async () => new Map();
 
 const DEFAULT_DISPLAY_QUANTITY = 450;
 
@@ -64,11 +75,12 @@ const getStockoutAlerts = async (req, res, next) => {
       return res.json({ success: true, data: [], tracking_available: false });
     }
 
+    const supportsSoftDelete = await hasColumn('finished_goods', 'is_deleted');
     const products = await query(
       `SELECT id, name, article_code, sole_code, color, size, quantity
        FROM finished_goods
        WHERE COALESCE(quantity, 0) <= 0
-         AND COALESCE(is_deleted, 0) = 0
+         ${supportsSoftDelete ? 'AND COALESCE(is_deleted, 0) = 0' : ''}
        ORDER BY article_code, color, id`
     );
     const monitoring = await loadStockoutMonitoring(
@@ -119,10 +131,11 @@ const markPhysicalCheck = async (req, res, next) => {
       });
     }
 
+    const supportsSoftDelete = await hasColumn('finished_goods', 'is_deleted');
     const products = await query(
       `SELECT id, name, article_code, color, quantity
        FROM finished_goods
-       WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+       WHERE id = ? ${supportsSoftDelete ? 'AND COALESCE(is_deleted, 0) = 0' : ''}
        LIMIT 1`,
       [finishedGoodId]
     );

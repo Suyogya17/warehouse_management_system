@@ -1,9 +1,16 @@
 const NepaliDateModule = require("nepali-date-converter");
 const { hasColumn } = require("./schemaSupport");
+const { getFiscalYearForDate } = require("../services/fiscalYearService");
 
 const NepaliDate = NepaliDateModule.default || NepaliDateModule;
 
-const FISCAL_COLUMNS = ["bs_date", "bs_year", "bs_month", "bs_fiscal_year"];
+const FISCAL_COLUMNS = [
+  "bs_date",
+  "bs_year",
+  "bs_month",
+  "bs_fiscal_year",
+  "fiscal_year_id",
+];
 
 const getNepaliFiscalMeta = (value = new Date()) => {
   const date = value instanceof Date ? value : new Date(value);
@@ -39,10 +46,28 @@ const appendFiscalInsertFields = async (tableName, columns, values, date = new D
   }
 
   const meta = getNepaliFiscalMeta(date);
+  const fiscalYear = supportedColumns.includes("fiscal_year_id")
+    ? await getFiscalYearForDate(date)
+    : null;
+  if (supportedColumns.includes("fiscal_year_id") && !fiscalYear) {
+    throw Object.assign(
+      new Error("No configured fiscal year covers this transaction date."),
+      { statusCode: 409 }
+    );
+  }
+  if (fiscalYear && Number(fiscalYear.is_locked) === 1) {
+    throw Object.assign(
+      new Error(`Fiscal year ${fiscalYear.code} is closed and locked.`),
+      { statusCode: 409 }
+    );
+  }
+  const insertColumns = supportedColumns;
+  const valueForColumn = (column) =>
+    column === "fiscal_year_id" ? Number(fiscalYear.id) : meta[column];
 
   return {
-    columns: [...columns, ...supportedColumns],
-    values: [...values, ...supportedColumns.map((column) => meta[column])],
+    columns: [...columns, ...insertColumns],
+    values: [...values, ...insertColumns.map(valueForColumn)],
   };
 };
 

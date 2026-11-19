@@ -21,6 +21,7 @@ import MultiSeriesFilter from "../../components/MultiSeriesFilter";
 
 import { useAuth } from "../../context/AuthContext";
 import { useDataRefresh } from "../../hooks/useDataRefresh";
+import { useDashboardProductRotation } from "../../hooks/useDashboardProductRotation";
 import { useProductInterestTracking } from "../../hooks/useProductInterestTracking";
 
 import { api, APP_BASE_URL } from "../../services/api";
@@ -28,7 +29,8 @@ import { getCustomerVisibleStock, getRoundedCartons } from "../../utils/displayS
 import { formatNumber, formatProductPriceForUser } from "../../utils/format";
 import { matchesCommissionFilter, matchesProductNClassification } from "../../utils/commission";
 import {
-  sortProductGroupsByDisplayOrder,
+  buildProductRotationRanks,
+  sortProductGroupsByRotation,
   sortProductsByDisplayOrder,
 } from "../../utils/productOrdering";
 
@@ -60,7 +62,7 @@ const getNextSort = (current) => {
 };
 
 const getSortLabel = (sort) => {
-  if (sort === "display") return "Display order";
+  if (sort === "display") return "Shared rotation";
   if (sort !== "oldest") return "Newest";
   return "Oldest";
 };
@@ -549,6 +551,11 @@ export default function FinishedGoodsUserPage() {
   const [filters, setFilters] = useState(savedCatalogView.filters);
   const [currentPage, setCurrentPage] = useState(savedCatalogView.page);
   const restoredCatalogView = useRef(false);
+  const dashboardRotation = useDashboardProductRotation(token);
+  const rotationRanks = useMemo(
+    () => buildProductRotationRanks(dashboardRotation),
+    [dashboardRotation]
+  );
 
   const productsPerPage = 12;
 
@@ -613,8 +620,8 @@ export default function FinishedGoodsUserPage() {
 
     return Array.from(groups.values())
       .map((variants) => [...variants].sort(sortProductsByDisplayOrder))
-      .sort(sortProductGroupsByDisplayOrder);
-  }, [catalogItems]);
+      .sort((a, b) => sortProductGroupsByRotation(a, b, rotationRanks));
+  }, [catalogItems, rotationRanks]);
 
   const sizes = [...new Set(catalogItems.map((i) => i.size).filter(Boolean))];
   const seriesList = useMemo(
@@ -670,14 +677,14 @@ export default function FinishedGoodsUserPage() {
       .filter((variants) => variants.some((v) => getAvailableQty(v, user) > 0))
       .sort((a, b) => {
         if (sort === "display") {
-          return sortProductGroupsByDisplayOrder(a, b);
+          return sortProductGroupsByRotation(a, b, rotationRanks);
         }
 
         const dateA = new Date(a[0]?.created_at || 0);
         const dateB = new Date(b[0]?.created_at || 0);
         return sort !== "oldest" ? dateB - dateA : dateA - dateB;
       });
-  }, [groupedProducts, filters, isAdminOrderEntry, sort, user]);
+  }, [groupedProducts, filters, isAdminOrderEntry, rotationRanks, sort, user]);
   const trackProductInterest = useProductInterestTracking({
     token,
     search: filters.search,

@@ -48,6 +48,7 @@ const navByRole = {
     { to: "/product-ledger", label:"Product Ledger", icon: "ledger"},
     { to: "/summary", label: "Summary", icon: "hidden" },
     { to: "/activity-logs", label: "Activity Logs", icon: "ledger" },
+    { to: "/fiscal-years", label: "Fiscal Years", icon: "ledger" },
     { to: "/users", label: "Users", icon: "users" },
   ],
 

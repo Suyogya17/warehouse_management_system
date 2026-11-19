@@ -23,3 +23,32 @@ export const sortProductGroupsByDisplayOrder = (a, b) => {
 
   return Number(firstA?.id || 0) - Number(firstB?.id || 0);
 };
+
+export const buildProductRotationRanks = (rotation) => {
+  if (!rotation?.settings?.enabled) return new Map();
+  return new Map(
+    (rotation.ordered_ids || []).map((id, index) => [Number(id), index])
+  );
+};
+
+const getProductGroupRotationRank = (variants = [], rankByProductId = new Map()) => {
+  const ranks = variants
+    .map((variant) => rankByProductId.get(Number(variant?.id)))
+    .filter((rank) => Number.isFinite(rank));
+  return ranks.length ? Math.min(...ranks) : Number.MAX_SAFE_INTEGER;
+};
+
+export const sortProductGroupsByRotation = (
+  a,
+  b,
+  rankByProductId = new Map()
+) => {
+  if (rankByProductId.size) {
+    const rankDiff =
+      getProductGroupRotationRank(a, rankByProductId) -
+      getProductGroupRotationRank(b, rankByProductId);
+    if (rankDiff !== 0) return rankDiff;
+  }
+
+  return sortProductGroupsByDisplayOrder(a, b);
+};

@@ -170,6 +170,26 @@ const downloadProtectedFile = async (path, token) => {
 };
 
 export const api = {
+  getFiscalYears: (token) =>
+    apiRequest("/fiscal-years", { showLoader: false }, token),
+
+  createFiscalYear: (payload, token) =>
+    apiRequest(
+      "/fiscal-years",
+      { method: "POST", body: JSON.stringify(payload) },
+      token
+    ),
+
+  updateFiscalYearState: (id, payload, token) =>
+    apiRequest(
+      `/fiscal-years/${id}/state`,
+      { method: "PATCH", body: JSON.stringify(payload) },
+      token
+    ),
+
+  backfillFiscalYears: (token) =>
+    apiRequest("/fiscal-years/backfill", { method: "POST" }, token),
+
   login: (payload) =>
     apiRequest("/auth/login", {
       method: "POST",
@@ -770,7 +790,10 @@ export const api = {
 
   getOrderFilters: (token) => apiRequest("/orders/filters", {}, token),
 
-  getOrderOverview: (token) => apiRequest("/orders/overview", {}, token),
+  getOrderOverview: (token, options = {}) => {
+    const query = buildQueryString(options);
+    return apiRequest(`/orders/overview${query ? `?${query}` : ""}`, {}, token);
+  },
 
   getAvailability: (token, options = {}) => {
     const query = buildQueryString(options);

@@ -12,7 +12,7 @@ fgRouter.get('/',       cacheResponse(15000), fgCtrl.getAll);
 fgRouter.get('/filters', cacheResponse(60000), fgCtrl.getFilters);
 fgRouter.put('/display-order', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDisplayOrder);
 fgRouter.put('/dashboard-featured', authorize('ADMIN', 'CO_ADMIN'), fgCtrl.setDashboardFeatured);
-fgRouter.get('/dashboard-rotation', dashboardRotationCtrl.getDashboardRotation);
+fgRouter.get('/dashboard-rotation', cacheResponse(30000), dashboardRotationCtrl.getDashboardRotation);
 fgRouter.put('/dashboard-rotation', authorize('ADMIN', 'CO_ADMIN'), dashboardRotationCtrl.updateDashboardRotation);
 fgRouter.post('/dashboard-rotation/rotate-now', authorize('ADMIN', 'CO_ADMIN'), dashboardRotationCtrl.rotateDashboardProductsNow);
 fgRouter.get('/dashboard-carousel-slides', fgCtrl.getDashboardCarouselSlides);

@@ -218,6 +218,7 @@ export default function OrdersPage() {
     statuses: {},
     recent_transitions: [],
   });
+  const [fiscalYears, setFiscalYears] = useState([]);
   const [orderDateFilters, setOrderDateFilters] = useState(emptyOrderDateFilters);
   const [appliedOrderDateFilters, setAppliedOrderDateFilters] = useState(
     emptyOrderDateFilters
@@ -351,15 +352,16 @@ export default function OrdersPage() {
   };
 
   const loadReferenceData = useCallback(async () => {
-    const [availabilityResult, warehouseResult, orderFiltersResult, overviewResult] = await Promise.all([
+    const [availabilityResult, warehouseResult, orderFiltersResult, overviewResult, fiscalYearsResult] = await Promise.all([
       api.getAvailability(token, {
         include_hidden: canManageOrders ? 1 : undefined,
       }),
       api.getWarehouses(token),
       api.getOrderFilters(token),
       canManageOrders
-        ? api.getOrderOverview(token)
+        ? api.getOrderOverview(token, appliedOrderDateFilters)
         : Promise.resolve({ data: { statuses: {}, recent_transitions: [] } }),
+      api.getFiscalYears(token),
     ]);
     setAvailability(availabilityResult.data || []);
     setWarehouses(warehouseResult.data || []);
@@ -367,7 +369,8 @@ export default function OrdersPage() {
     setOrderOverview(
       overviewResult.data || { statuses: {}, recent_transitions: [] }
     );
-  }, [canManageOrders, token]);
+    setFiscalYears(fiscalYearsResult.data || []);
+  }, [appliedOrderDateFilters, canManageOrders, token]);
 
   const load = useCallback(
     () => Promise.all([loadOrders(), loadReferenceData()]),
@@ -485,6 +488,18 @@ export default function OrdersPage() {
         },
       ].map((card) => ({
         ...card,
+        label:
+          card.status === "DELIVERED" &&
+          appliedOrderDateFilters.fiscal_year &&
+          orderOverview.statuses?.DELIVERED?.delivery_basis
+            ? "Delivered in fiscal year"
+            : card.label,
+        description:
+          card.status === "DELIVERED" &&
+          appliedOrderDateFilters.fiscal_year &&
+          orderOverview.statuses?.DELIVERED?.delivery_basis
+            ? `Stock actually delivered during fiscal year ${appliedOrderDateFilters.fiscal_year}`
+            : card.description,
         ...(orderOverview.statuses?.[card.status] || {
           orders: 0,
           cartons: 0,
@@ -495,7 +510,7 @@ export default function OrdersPage() {
           already_delivered_pairs: 0,
         }),
       })),
-    [orderOverview.statuses]
+    [appliedOrderDateFilters.fiscal_year, orderOverview.statuses]
   );
 
   const updateOrderItemProduct = (index, productId) => {
@@ -2204,7 +2219,11 @@ export default function OrdersPage() {
       {canManageOrders ? (
         <SectionCard
           title="Order workflow overview"
-          subtitle="Live totals for every order stage, followed by the latest status movements."
+          subtitle={
+            appliedOrderDateFilters.fiscal_year
+              ? `Totals and workflow movements for fiscal year ${appliedOrderDateFilters.fiscal_year}.`
+              : "Live totals for every order stage, followed by the latest status movements."
+          }
           icon="analytics"
         >
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -2746,11 +2765,7 @@ export default function OrdersPage() {
           </label>
           <label className="grid gap-1 text-xs font-semibold text-slate-600">
             Nepali fiscal year
-            <input
-              type="text"
-              inputMode="numeric"
-              maxLength={7}
-              placeholder="2083/84"
+            <select
               value={orderDateFilters.fiscal_year}
               onChange={(event) =>
                 setOrderDateFilters((current) => ({
@@ -2759,7 +2774,14 @@ export default function OrdersPage() {
                 }))
               }
               className="h-10 rounded-xl border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-            />
+            >
+              <option value="">All fiscal years</option>
+              {fiscalYears.map((year) => (
+                <option key={year.id} value={year.code}>
+                  {year.code}{year.status === "ACTIVE" ? " (active)" : ""}
+                </option>
+              ))}
+            </select>
           </label>
           <div className="flex gap-2 md:col-span-2 xl:col-span-5 xl:justify-end">
             <Button type="button" size="sm" variant="secondary" onClick={clearAllOrderFilters}>
