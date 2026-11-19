@@ -1395,7 +1395,7 @@ export default function OrdersPage() {
     const typeSign =
       Number(catalogueProduct.is_commission ?? item.is_commission ?? 0) === 1
         ? "%"
-        : "N.C";
+        : "NSB";
     return normalizedNClass
       ? `${normalizedNClass} (${typeSign})`
       : `(${typeSign})`;
