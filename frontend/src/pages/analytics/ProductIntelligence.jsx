@@ -232,6 +232,7 @@ export default function ProductIntelligence({ token }) {
     const exportRows = (result.data?.products || []).map((row) => {
       const salesState = getSalesState(row, days);
       return {
+        "FG.ID": String(row.id ?? row.finished_good_id ?? ""),
         Article: row.article_code || "",
         Product: row.name || "",
         Series: row.sole_code || "",

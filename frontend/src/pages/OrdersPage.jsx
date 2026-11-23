@@ -186,6 +186,7 @@ export default function OrdersPage() {
   const { token, user } = useAuth();
   const { showToast } = useToast();
   const canManageOrders = hasRole(user?.role, ["ADMIN", "CO_ADMIN"]);
+  const canRestoreCancelledOrders = String(user?.role || "").toUpperCase() === "ADMIN";
   const canCorrectOrders = canUseOrderCorrection(user);
   const canCorrectWarehouseSource =
     String(user?.role || "").toUpperCase() === "ADMIN" || canCorrectOrders;
@@ -247,6 +248,7 @@ export default function OrdersPage() {
   const [lockedOrderHistory, setLockedOrderHistory] = useState([]);
   const [loadingLockedOrderHistory, setLoadingLockedOrderHistory] = useState(false);
   const [exportingDnOrderId, setExportingDnOrderId] = useState(null);
+  const [restoringOrderId, setRestoringOrderId] = useState(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1107,6 +1109,53 @@ export default function OrdersPage() {
         title: "Could not undo confirmation",
         message: error.message,
       });
+    }
+  };
+
+  const restoreCancelledOrder = async (order) => {
+    const confirmed = window.confirm(
+      `Restore cancelled Order #${order.id} to CONFIRMED?\n\nWarehouse stock will be checked again, reservations will be rebuilt, and the order must be packed and verified again before delivery.`
+    );
+    if (!confirmed) return;
+
+    const reason = window.prompt(
+      `Why is cancelled Order #${order.id} being restored?\n\nExample: Co-admin cancelled the confirmed order by mistake.`
+    );
+    if (reason === null) return;
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      showToast({
+        tone: "error",
+        title: "Reason required",
+        message: "Enter why this cancelled order must be restored.",
+      });
+      return;
+    }
+
+    setRestoringOrderId(Number(order.id));
+    try {
+      const result = await api.restoreCancelledOrder(
+        order.id,
+        trimmedReason,
+        token
+      );
+      await load();
+      announceDataRefresh("orders");
+      showToast({
+        tone: "success",
+        title: "Order restored",
+        message:
+          result.message ||
+          `Order #${order.id} is confirmed again. Pack and verify it before delivery.`,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Could not restore order",
+        message: error.message,
+      });
+    } finally {
+      setRestoringOrderId(null);
     }
   };
 
@@ -3316,6 +3365,21 @@ export default function OrdersPage() {
                   align: "center",
                   render: (row) => {
                     if (!canCorrectOrders) return <span className="text-slate-400">-</span>;
+                    if (row.status === "CANCELLED" && canRestoreCancelledOrders) {
+                      return (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-auto min-h-9 w-full whitespace-normal px-2 py-1.5 text-sm"
+                          disabled={restoringOrderId === Number(row.id)}
+                          onClick={() => restoreCancelledOrder(row)}
+                        >
+                          {restoringOrderId === Number(row.id)
+                            ? "Restoring…"
+                            : "Restore cancelled order"}
+                        </Button>
+                      );
+                    }
                     if (row.status === "PACKED") {
                       if ((row.warehouse_fulfillments || []).some(
                         (fulfillment) => Number(fulfillment.delivered_pairs || 0) > 0

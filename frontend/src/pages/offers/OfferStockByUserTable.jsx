@@ -77,6 +77,7 @@ export default function OfferStockByUserTable({ rows, purchases = [] }) {
   const exportRows = async () => {
     const XLSX = await import("xlsx");
     const data = filteredRows.map((row) => ({
+      "FG.ID": String(row.finished_good_id ?? ""),
       Product: row.article_code || row.product_name,
       Series: row.sole_code || "",
       Color: row.color || "",

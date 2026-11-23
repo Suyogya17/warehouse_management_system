@@ -456,7 +456,7 @@ export default function PermissionsPage() {
       .flatMap((group) =>
         group.products.map((product) => ({
           Country: getCountryLabel(group.countryCode),
-          "Product ID": product.id,
+          "FG.ID": String(product.id ?? ""),
           Product: product.name || "",
           Article: product.article_code || "",
           Sole: product.sole_code || "",
@@ -523,7 +523,7 @@ export default function PermissionsPage() {
             User: indiaUser.name || "",
             Email: indiaUser.email || "",
             Role: indiaUser.role || "",
-            "Product ID": product.id,
+            "FG.ID": String(product.id ?? ""),
             Product: product.name || "",
             Article: product.article_code || "",
             Series: product.sole_code || "",
@@ -535,7 +535,7 @@ export default function PermissionsPage() {
         });
 
         return {
-          "Product ID": product.id,
+          "FG.ID": String(product.id ?? ""),
           Product: product.name || "",
           Article: product.article_code || "",
           Series: product.sole_code || "",

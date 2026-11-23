@@ -105,6 +105,9 @@ const canCorrectOrders = (user = {}) => {
 const canCorrectWarehouseSource = (user = {}) =>
   String(user.role || '').toUpperCase() === 'ADMIN' || canCorrectOrders(user);
 
+const canRestoreCancelledOrders = (user = {}) =>
+  String(user.role || '').toUpperCase() === 'ADMIN';
+
 const getWarehouseSlipNumber = (
   deliveryNoteNumber,
   printGroupCode,
@@ -5648,6 +5651,192 @@ const undoConfirmation = async (req, res, next) => {
   }
 };
 
+// ─── RESTORE MISTAKENLY CANCELLED ORDER ───────────────────────────────────
+const restoreCancelledOrder = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    if (!canRestoreCancelledOrders(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only an administrator can restore a cancelled order.',
+      });
+    }
+
+    await client.query('START TRANSACTION');
+
+    const reason = String(req.body.reason || '').trim();
+    if (!reason) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Restoration reason is required.',
+      });
+    }
+
+    const orderResult = await client.query(
+      'SELECT * FROM orders WHERE id = ? FOR UPDATE',
+      [req.params.id]
+    );
+    const order = orderResult.rows[0];
+
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+    if (String(order.status || '').toUpperCase() !== 'CANCELLED') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Only a cancelled order can be restored.',
+      });
+    }
+    if (!order.confirmed_by && !order.confirmed_at) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message:
+          'This order was cancelled before confirmation. Create a replacement order instead of restoring it as confirmed.',
+      });
+    }
+    if (Number(order.stock_deducted || 0) === 1) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message:
+          'This order has already affected physical stock and cannot be restored from cancellation.',
+      });
+    }
+
+    if (await hasTable('order_item_warehouse_allocations')) {
+      const finalizedResult = await client.query(
+        `SELECT COUNT(*) AS finalized_count
+         FROM order_item_warehouse_allocations allocation
+         JOIN order_items item ON item.id = allocation.order_item_id
+         WHERE item.order_id = ?
+           AND allocation.allocation_status IN ('DEDUCTED', 'OUT_OF_STOCK')`,
+        [order.id]
+      );
+      if (Number(finalizedResult.rows[0]?.finalized_count || 0) > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message:
+            'This order has finalized warehouse quantities and cannot be restored from cancellation.',
+        });
+      }
+    }
+
+    const supportsPerWarehouseDeliveryNotes = await hasTable(
+      'order_warehouse_delivery_notes'
+    );
+    let warehouseDeliveryNotes = [];
+    let restoredDeliveryNoteNumber = order.delivery_note_number || null;
+
+    if (supportsPerWarehouseDeliveryNotes) {
+      // This deletes the RELEASED rows created by cancellation, verifies current
+      // unreserved warehouse stock, and builds a fresh plan in one transaction.
+      await ensurePlannedWarehouseAllocations(client, order.id, req.user.id);
+      warehouseDeliveryNotes = await ensureWarehouseDeliveryNotes(
+        client,
+        order,
+        req.user.id
+      );
+    }
+
+    const updateFields = [
+      "status = 'CONFIRMED'",
+      'cancellation_reason = NULL',
+      'confirmed_by = COALESCE(confirmed_by, ?)',
+      'confirmed_at = COALESCE(confirmed_at, NOW())',
+      'packed_by = NULL',
+      'packed_at = NULL',
+      'delivered_by = NULL',
+      'delivered_at = NULL',
+      'stock_deducted = 0',
+      'updated_at = NOW()',
+    ];
+    const updateParams = [req.user.id];
+    const [supportsCancellationCode, supportsDuplicateOrderLink] =
+      await Promise.all([
+        hasColumn('orders', 'cancellation_code'),
+        hasColumn('orders', 'duplicate_of_order_id'),
+      ]);
+    if (supportsCancellationCode) updateFields.push('cancellation_code = NULL');
+    if (supportsDuplicateOrderLink) updateFields.push('duplicate_of_order_id = NULL');
+
+    if (!order.delivery_note_number && !supportsPerWarehouseDeliveryNotes) {
+      const nextDeliveryNote = await getNextDeliveryNoteNumber(
+        client,
+        order.created_at ? new Date(order.created_at) : new Date()
+      );
+      updateFields.push('delivery_note_number = ?');
+      updateParams.push(nextDeliveryNote);
+      restoredDeliveryNoteNumber = nextDeliveryNote;
+    }
+
+    await client.query(
+      `UPDATE orders SET ${updateFields.join(', ')} WHERE id = ?`,
+      [...updateParams, order.id]
+    );
+
+    await client.query('COMMIT');
+    clearCache();
+
+    await auditLog({
+      ...getActor(req),
+      actionType: 'UPDATE',
+      module: 'orders',
+      entity_type: 'order',
+      entity_id: order.id,
+      entityName: getOrderEntityName(order),
+      description: `Restored mistakenly cancelled ${getOrderEntityName(order)} to confirmed: ${reason}`,
+      metadata: {
+        reason,
+        previous_status: 'CANCELLED',
+        status: 'CONFIRMED',
+        previous_cancellation_reason: order.cancellation_reason || null,
+        previous_cancellation_code: order.cancellation_code || null,
+        previous_duplicate_of_order_id: order.duplicate_of_order_id || null,
+        delivery_note_number: restoredDeliveryNoteNumber,
+        warehouse_delivery_note_numbers: warehouseDeliveryNotes.map(
+          (note) => note.delivery_note_number
+        ),
+        warehouse_allocations_rebuilt: supportsPerWarehouseDeliveryNotes,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: warehouseDeliveryNotes.length
+        ? `Order restored to confirmed. Warehouse DNs: ${warehouseDeliveryNotes
+            .map((note) => note.delivery_note_number)
+            .join(', ')}.`
+        : 'Order restored to confirmed. Pack and verify the order again before delivery.',
+      data: {
+        id: Number(order.id),
+        status: 'CONFIRMED',
+        delivery_note_number: restoredDeliveryNoteNumber,
+        warehouse_delivery_note_numbers: warehouseDeliveryNotes.map(
+          (note) => note.delivery_note_number
+        ),
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({
+        success: false,
+        message: err.message,
+        ...(err.shortage ? { shortages: [err.shortage] } : {}),
+      });
+    }
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 // Save the storekeeper's physical count without deducting stock. Delivery is a
 // separate action so the saved quantities can be reviewed first.
 const verifyWarehouseFulfillment = async (req, res, next) => {
@@ -7556,4 +7745,4 @@ const logWarehouseBilling = async (req, res, next) => {
   } catch(err){ next(err); }
 };
 
-module.exports = { getAll, getFilters, getOverview, getAvailability, getOfferPurchases, getOfferVsRegularReport, create, correctItems, updateStatus, assignDeliveryNote, correctWarehouseDeliveryNoteNumbers, reopenPacking, correctPackedWarehouseItems, undoConfirmation, verifyWarehouseFulfillment, deliverWarehouseFulfillment, undoWarehouseFulfillmentDelivery, prepareDeliveryNote, logPrint, logWarehouseBilling };
+module.exports = { getAll, getFilters, getOverview, getAvailability, getOfferPurchases, getOfferVsRegularReport, create, correctItems, updateStatus, assignDeliveryNote, correctWarehouseDeliveryNoteNumbers, reopenPacking, correctPackedWarehouseItems, undoConfirmation, restoreCancelledOrder, verifyWarehouseFulfillment, deliverWarehouseFulfillment, undoWarehouseFulfillmentDelivery, prepareDeliveryNote, logPrint, logWarehouseBilling, canRestoreCancelledOrders };

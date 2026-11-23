@@ -11,6 +11,7 @@ import { api } from "../services/api";
 import { getRoundedCartons } from "../utils/displayStock";
 import { formatDate, formatNumber } from "../utils/format";
 import { getProductNClassification, matchesProductNClassification } from "../utils/commission";
+import { exportStyledTableExcel } from "../utils/tableExcelExport";
 import Select from "react-select";
 
 const emptyWarehouseForm = { name: "" };
@@ -51,13 +52,6 @@ const selectStyles = {
   }),
 };
 
-const escapeExcelCell = (value) =>
-  String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-
 const noScroll = (e) => e.target.blur();
 const transferPairWindowMs = 60 * 1000;
 
@@ -73,6 +67,12 @@ const getCartons = (quantity, item) => {
   const pairsPerCarton = Number(item.inner_boxes_per_outer_box || 0);
 
   return getRoundedCartons(pairs, pairsPerCarton);
+};
+
+const getExcelDate = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date;
 };
 
 export default function WareHousePage() {
@@ -368,7 +368,7 @@ export default function WareHousePage() {
     [nClassificationFilter, seriesFilters, stockRows]
   );
 
-  const exportWarehouseStock = () => {
+  const exportWarehouseStock = async () => {
     if (!filteredStockRows.length) {
       showToast({
         tone: "error",
@@ -378,86 +378,79 @@ export default function WareHousePage() {
       return;
     }
 
-    const columns = [
-      ["Product", "product_name"],
-      ["Article", "article_code"],
-      ["Series", "sole_code"],
-      ["N Classification", "n_classification"],
-      ["Color", "color"],
-      ["Size", "size"],
-      ["Warehouse", "warehouse_name"],
-      ["Qty", "quantity"],
-      ["CTN", "ctn"],
-      ["Reserved Qty", "reserved_quantity"],
-      ["Reserved CTN", "reserved_ctn"],
-      ["Unit", "unit"],
-      ["Total Stock", "total_product_quantity"],
-      ["Updated By", "updated_by_name"],
-      ["Updated At", "updated_at"],
-    ];
+    try {
+      const columns = [
+        { label: "FG.ID", width: 10, type: "id" },
+        { label: "Product", width: 28 },
+        { label: "Article", width: 16 },
+        { label: "Series", width: 15 },
+        { label: "N Classification", width: 17 },
+        { label: "Color", width: 15 },
+        { label: "Size", width: 11 },
+        { label: "Warehouse", width: 22 },
+        { label: "Qty", width: 13, type: "number" },
+        { label: "CTN", width: 13, type: "number" },
+        { label: "Reserved Qty", width: 15, type: "number" },
+        { label: "Reserved CTN", width: 15, type: "number" },
+        { label: "Unit", width: 10 },
+        { label: "Total Product Stock", width: 19, type: "number" },
+        { label: "Updated By", width: 22 },
+        { label: "Updated At", width: 20, type: "date" },
+      ];
+      const rows = filteredStockRows.map((row) => [
+        String(row.finished_good_id ?? ""),
+        row.product_name || "",
+        row.article_code || "",
+        row.sole_code || "",
+        getProductNClassification(row) || "",
+        row.color || "",
+        row.size || "",
+        row.warehouse_name || "",
+        Number(row.quantity || 0),
+        getCartons(row.quantity, row),
+        Number(row.reserved_quantity || 0),
+        getCartons(row.reserved_quantity, row),
+        row.unit || "",
+        Number(row.total_product_quantity || 0),
+        row.updated_by_name || "",
+        getExcelDate(row.updated_at),
+      ]);
+      const totalReservedQuantity = filteredStockRows.reduce(
+        (sum, row) => sum + Number(row.reserved_quantity || 0),
+        0
+      );
+      const today = new Date().toISOString().slice(0, 10);
+      await exportStyledTableExcel({
+        title: "Warehouse Stock",
+        filename: `warehouse-stock-${today}.xlsx`,
+        sheetName: "Warehouse Stock",
+        columns,
+        rows,
+        totalRow: [
+          "TOTAL", "", "", "", "", "", "", "",
+          totalWarehouseStock,
+          totalWarehouseCartons,
+          totalReservedQuantity,
+          totalReservedWarehouseCartons,
+          "", "", "", "",
+        ],
+      });
 
-    const headerHtml = columns
-      .map(([label]) => `<th>${escapeExcelCell(label)}</th>`)
-      .join("");
-    const rowsHtml = filteredStockRows
-      .map((row) => {
-        const cells = columns
-          .map(([, key]) => {
-            const value =
-              key === "updated_at"
-                ? formatDate(row[key])
-                : key === "ctn"
-                ? getCartons(row.quantity, row)
-                : key === "reserved_ctn"
-                ? getCartons(row.reserved_quantity, row)
-                : row[key];
-            return `<td>${escapeExcelCell(value)}</td>`;
-          })
-          .join("");
-        return `<tr>${cells}</tr>`;
-      })
-      .join("");
-
-    const workbookHtml = `
-      <html>
-        <head>
-          <meta charset="UTF-8" />
-          <style>
-            table { border-collapse: collapse; }
-            th, td { border: 1px solid #d9d9d9; padding: 6px; }
-            th { background: #f3f4f6; font-weight: 700; }
-          </style>
-        </head>
-        <body>
-          <table>
-            <thead><tr>${headerHtml}</tr></thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
-        </body>
-      </html>
-    `;
-
-    const today = new Date().toISOString().slice(0, 10);
-    const blob = new Blob([workbookHtml], {
-      type: "application/vnd.ms-excel;charset=utf-8;",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `warehouse-stock-${today}.xls`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    showToast({
-      tone: "success",
-      title: "Excel exported",
-      message: `${filteredStockRows.length} warehouse stock row${filteredStockRows.length === 1 ? "" : "s"} exported.`,
-    });
+      showToast({
+        tone: "success",
+        title: "Excel exported",
+        message: `${filteredStockRows.length} warehouse stock row${filteredStockRows.length === 1 ? "" : "s"} exported with FG.ID.`,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Excel export failed",
+        message: error.message || "Could not create the warehouse stock workbook.",
+      });
+    }
   };
 
-  const exportTransferReport = () => {
+  const exportTransferReport = async () => {
     if (!transferReportRows.length) {
       showToast({
         tone: "error",
@@ -467,69 +460,55 @@ export default function WareHousePage() {
       return;
     }
 
-    const columns = [
-      ["Date", "created_at"],
-      ["Product", "product_name"],
-      ["Article", "article_code"],
-      ["Color", "color"],
-      ["From Warehouse", "from_warehouse_name"],
-      ["To Warehouse", "to_warehouse_name"],
-      ["Quantity", "quantity"],
-      ["Unit", "unit"],
-      ["Transferred By", "created_by_name"],
-      ["Notes", "notes"],
-    ];
+    try {
+      const columns = [
+        { label: "Date", width: 20, type: "date" },
+        { label: "FG.ID", width: 10, type: "id" },
+        { label: "Product", width: 28 },
+        { label: "Article", width: 16 },
+        { label: "Color", width: 15 },
+        { label: "From Warehouse", width: 22 },
+        { label: "To Warehouse", width: 22 },
+        { label: "Quantity", width: 14, type: "number" },
+        { label: "Unit", width: 10 },
+        { label: "Transferred By", width: 22 },
+        { label: "Notes", width: 36, wrap: true },
+      ];
+      const rows = transferReportRows.map((row) => [
+        getExcelDate(row.created_at),
+        String(row.finished_good_id ?? ""),
+        row.product_name || "",
+        row.article_code || "",
+        row.color || "",
+        row.from_warehouse_name || "",
+        row.to_warehouse_name || "",
+        Number(row.quantity || 0),
+        row.unit || "",
+        row.created_by_name || "",
+        row.notes || "",
+      ]);
+      const today = new Date().toISOString().slice(0, 10);
+      await exportStyledTableExcel({
+        title: "Warehouse Transfer Report",
+        filename: `warehouse-transfer-report-${today}.xlsx`,
+        sheetName: "Transfers",
+        columns,
+        rows,
+        totalRow: ["", "TOTAL", "", "", "", "", "", transferReportTotalQty, "", "", ""],
+      });
 
-    const headerHtml = columns.map(([label]) => `<th>${escapeExcelCell(label)}</th>`).join("");
-    const rowsHtml = transferReportRows
-      .map((row) => {
-        const cells = columns
-          .map(([, key]) => {
-            const value = key === "created_at" ? formatDate(row.created_at) : row[key];
-            return `<td>${escapeExcelCell(value)}</td>`;
-          })
-          .join("");
-        return `<tr>${cells}</tr>`;
-      })
-      .join("");
-
-    const workbookHtml = `
-      <html>
-        <head>
-          <meta charset="UTF-8" />
-          <style>
-            table { border-collapse: collapse; }
-            th, td { border: 1px solid #d9d9d9; padding: 6px; }
-            th { background: #f3f4f6; font-weight: 700; }
-          </style>
-        </head>
-        <body>
-          <table>
-            <thead><tr>${headerHtml}</tr></thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
-        </body>
-      </html>
-    `;
-
-    const today = new Date().toISOString().slice(0, 10);
-    const blob = new Blob([workbookHtml], {
-      type: "application/vnd.ms-excel;charset=utf-8;",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `warehouse-transfer-report-${today}.xls`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    showToast({
-      tone: "success",
-      title: "Transfer report exported",
-      message: `${transferReportRows.length} transfer row${transferReportRows.length === 1 ? "" : "s"} exported.`,
-    });
+      showToast({
+        tone: "success",
+        title: "Transfer report exported",
+        message: `${transferReportRows.length} transfer row${transferReportRows.length === 1 ? "" : "s"} exported with FG.ID.`,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "Excel export failed",
+        message: error.message || "Could not create the warehouse transfer workbook.",
+      });
+    }
   };
 
   const totalWarehouseStock = filteredStockRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);

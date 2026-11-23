@@ -247,6 +247,7 @@ export default function OfferAllocationReport({
   const exportReport = async () => {
     const XLSX = await import("xlsx");
     const exportRows = filteredRows.map((row) => ({
+      "FG.ID": String(row.finished_good_id ?? ""),
       Product: row.article_code || row.product_name,
       Series: row.sole_code || "",
       Color: row.color || "",

@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { formatDate, formatNumber } from "../utils/format";
+import {
+  exportStyledTableExcel,
+  getFinishedGoodId,
+  hasFinishedGoodIdColumn,
+} from "../utils/tableExcelExport";
 import EmptyState from "./EmptyState";
 
 const toExportValue = (value) => {
@@ -17,6 +22,11 @@ const normalizeFilename = (value = "data-table") =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "") || "data-table";
+
+const exportTitle = (value = "Data") =>
+  String(value || "Data")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 
 export default function DataTable({
   columns,
@@ -177,21 +187,43 @@ export default function DataTable({
         return;
       }
 
-      const XLSX = await import("xlsx");
+      const shouldAddFinishedGoodId =
+        !hasFinishedGoodIdColumn(columns) &&
+        filteredData.some((row) => getFinishedGoodId(row) !== null);
+      const exportColumns = shouldAddFinishedGoodId
+        ? [
+            {
+              key: "__finished_good_id",
+              label: "FG.ID",
+              exportType: "id",
+              exportWidth: 10,
+              exportValue: (row) => String(getFinishedGoodId(row) ?? ""),
+            },
+            ...columns,
+          ]
+        : columns;
       const exportRows = filteredData.map((row, rowIndex) =>
-        columns.reduce((result, column) => {
-          result[column.label || column.key] = getExportCellValue(
-            row,
-            column,
-            rowIndex
-          );
-          return result;
-        }, {})
+        exportColumns.map((column) => getExportCellValue(row, column, rowIndex))
       );
-      const worksheet = XLSX.utils.json_to_sheet(exportRows);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Data");
-      XLSX.writeFile(workbook, `${normalizeFilename(exportFilename)}.xlsx`);
+      const excelColumns = exportColumns.map((column, columnIndex) => {
+        const hasNumericValues = exportRows.some(
+          (row) => typeof row[columnIndex] === "number" && Number.isFinite(row[columnIndex])
+        );
+        return {
+          label: column.label || column.key,
+          width: column.exportWidth,
+          type: column.exportType || (hasNumericValues ? "number" : undefined),
+          wrap: wrapCells,
+        };
+      });
+      const normalizedFilename = normalizeFilename(exportFilename);
+      await exportStyledTableExcel({
+        title: exportTitle(exportFilename),
+        filename: `${normalizedFilename}.xlsx`,
+        sheetName: "Data",
+        columns: excelColumns,
+        rows: exportRows,
+      });
     } finally {
       setExporting(false);
     }

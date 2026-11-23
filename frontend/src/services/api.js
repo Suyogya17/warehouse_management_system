@@ -903,6 +903,13 @@ export const api = {
       token
     ),
 
+  restoreCancelledOrder: (id, reason, token) =>
+    apiRequest(
+      `/orders/${id}/restore-cancelled`,
+      { method: "PUT", body: JSON.stringify({ reason }) },
+      token
+    ),
+
   logOrderPrint: (id, token, payload = { print_type: "delivery_note" }) =>
     apiRequest(
       `/orders/${id}/print`,
@@ -1009,6 +1016,14 @@ deleteStockAdjustment: (id, token) =>
     ),
 
   getAnalytics: (section, token) => apiRequest(`/analytics/${section}`, {}, token),
+  getProductionOrderReport: (params, token) => {
+    const query = buildQueryString(params);
+    return apiRequest(
+      `/analytics/production-orders${query ? `?${query}` : ""}`,
+      {},
+      token
+    );
+  },
   getProductIntelligence: (params, token) => {
     const query = buildQueryString(params);
     return apiRequest(

@@ -4,6 +4,7 @@ const productIntelligence = require("../controllers/productIntelligenceControlle
 const partyOrderReport = require("../controllers/partyOrderReportController");
 const deliveryReport = require("../controllers/deliveryReportController");
 const orderShortageHistory = require("../controllers/orderShortageHistoryController");
+const productionOrderReport = require("../controllers/productionOrderReportController");
 const { authenticate, authorize } = require("../middleware/authMiddleware");
 const { cacheResponse } = require("../middleware/cacheMiddleware");
 
@@ -14,6 +15,7 @@ router.get("/dashboard", cacheResponse(30000), ctrl.getDashboard);
 router.get("/inventory", cacheResponse(30000), ctrl.getInventory);
 router.get("/products", cacheResponse(15000), productIntelligence.getProducts);
 router.get("/production", cacheResponse(30000), ctrl.getProduction);
+router.get("/production-orders", cacheResponse(10000), productionOrderReport.getProductionOrderReport);
 router.get("/sales", cacheResponse(30000), ctrl.getSales);
 router.get("/sales/product/:id", cacheResponse(15000), ctrl.getProductSales);
 router.get("/dealers/product-orders", cacheResponse(15000), ctrl.getDealerProductOrders);

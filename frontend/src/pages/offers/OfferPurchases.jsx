@@ -97,6 +97,7 @@ export default function OfferPurchases({ purchases, loading, viewer }) {
     const rows = filteredPurchases.map((row) => ({
       "Order ID": row.order_id,
       "Delivery Note": row.delivery_note_number || "",
+      "FG.ID": String(row.finished_good_id ?? ""),
       Product: row.article_code || row.product_name,
       Series: row.sole_code || "",
       Color: row.color || "",

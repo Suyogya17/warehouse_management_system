@@ -8,7 +8,7 @@ export default function useAnalytics(token) {
   const [error, setError] = useState("");
 
   const loadTab = useCallback(async () => {
-    if (activeTab === "products") {
+    if (["products", "production-orders"].includes(activeTab)) {
       setLoading(false);
       setError("");
       return;

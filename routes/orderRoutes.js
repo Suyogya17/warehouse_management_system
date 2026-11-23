@@ -23,6 +23,7 @@ router.put('/:id/warehouse-fulfillments/:warehouseId/deliver', authorize('ADMIN'
 router.put('/:id/warehouse-fulfillments/:warehouseId/undo-delivery', authorize('ADMIN', 'CO_ADMIN'), ctrl.undoWarehouseFulfillmentDelivery);
 router.put('/:id/reopen-packing', authorize('ADMIN', 'CO_ADMIN'), ctrl.reopenPacking);
 router.put('/:id/undo-confirmation', authorize('ADMIN', 'CO_ADMIN'), ctrl.undoConfirmation);
+router.put('/:id/restore-cancelled', authorize('ADMIN'), ctrl.restoreCancelledOrder);
 router.post('/:id/print', authorize('ADMIN', 'CO_ADMIN'), ctrl.logPrint);
 router.post('/:id/warehouse-billing', authorize('ADMIN', 'CO_ADMIN'), ctrl.logWarehouseBilling);
 

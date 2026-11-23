@@ -321,6 +321,7 @@ export default function ProductLedgerPage() {
 
     const rows = [
       ...filteredEntries.map((entry) => ({
+        "FG.ID": String(selectedFG.id ?? ""),
         Date: entry.date,
         Movement: entry.movement,
         Product: entry.productName,
@@ -336,15 +337,16 @@ export default function ProductLedgerPage() {
         "Balance CTN": getCartons(entry.balance, selectedFG),
       })),
       {},
-      { Date: "Total Added", Added: stats.totalAdded },
-      { Date: "Total Sold / Removed", "Sold / Removed": stats.totalRemoved },
-      { Date: "Current Physical Stock", Added: stats.currentStock },
-      { Date: "Reserved in Active Orders", Added: stats.reservedStock },
-      { Date: "Available after Reserve", Added: stats.availableStock },
+      { "FG.ID": String(selectedFG.id ?? ""), Date: "Total Added", Added: stats.totalAdded },
+      { "FG.ID": String(selectedFG.id ?? ""), Date: "Total Sold / Removed", "Sold / Removed": stats.totalRemoved },
+      { "FG.ID": String(selectedFG.id ?? ""), Date: "Current Physical Stock", Added: stats.currentStock },
+      { "FG.ID": String(selectedFG.id ?? ""), Date: "Reserved in Active Orders", Added: stats.reservedStock },
+      { "FG.ID": String(selectedFG.id ?? ""), Date: "Available after Reserve", Added: stats.availableStock },
     ];
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
     worksheet["!cols"] = [
+      { wch: 10 },
       { wch: 12 },
       { wch: 24 },
       { wch: 30 },
@@ -367,6 +369,7 @@ export default function ProductLedgerPage() {
     if (reservations.length > 0) {
       const reservationSheet = XLSX.utils.json_to_sheet(
         reservations.map((row) => ({
+          "FG.ID": String(selectedFG.id ?? ""),
           "Order #": row.order_id,
           Date: row.ordered_at ? toDateInputValue(new Date(row.ordered_at)) : "",
           Status: row.status,
@@ -378,7 +381,7 @@ export default function ProductLedgerPage() {
         }))
       );
       reservationSheet["!cols"] = [
-        { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 24 },
+        { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 24 },
         { wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 16 },
       ];
       XLSX.utils.book_append_sheet(workbook, reservationSheet, "Active Reservations");

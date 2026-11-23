@@ -43,12 +43,16 @@ import useAnalytics from "./analytics/useAnalytics";
 const ProductIntelligence = lazy(
   () => import("./analytics/ProductIntelligence")
 );
+const ProductionOrdersAnalytics = lazy(
+  () => import("./analytics/ProductionOrdersAnalytics")
+);
 
 const tabs = [
   { key: "dashboard", label: "Dashboard" },
   { key: "inventory", label: "Inventory" },
   { key: "products", label: "Product Intelligence" },
   { key: "production", label: "Production" },
+  { key: "production-orders", label: "Production vs Orders" },
   { key: "sales", label: "Sales" },
   { key: "dealers", label: "Dealers" },
   { key: "users", label: "Users" },
@@ -738,6 +742,13 @@ export default function AnalyticsPage() {
         </Suspense>
       );
     }
+    if (activeTab === "production-orders") {
+      return (
+        <Suspense fallback={<LoadingState />}>
+          <ProductionOrdersAnalytics token={token} />
+        </Suspense>
+      );
+    }
     if (loading && !activeData) return <LoadingState />;
     if (error && !activeData) return <ErrorState message={error} onRetry={loadTab} />;
     if (activeTab === "inventory") return <InventoryTab data={activeData} />;
@@ -757,7 +768,7 @@ export default function AnalyticsPage() {
         description="Inventory, production, sales, dealer performance, and decision support in one operational view."
         icon="dashboard"
         actions={
-          activeTab === "products" ? null : (
+          ["products", "production-orders"].includes(activeTab) ? null : (
             <Button variant="secondary" icon="refresh" onClick={loadTab} disabled={loading}>
               Refresh
             </Button>
